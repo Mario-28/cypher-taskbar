@@ -1,0 +1,142 @@
+{
+  "CYPHER_TASKBAR": {
+    "Name": "Cypher Taskbar",
+    "Settings": {
+      "AutoHide": {
+        "Name": "Auto Hide",
+        "Hint": "Automatically hide the taskbar when not hovered."
+      },
+      "SelectedActor": {
+        "Name": "Selected Character",
+        "Hint": "Choose which owned character the taskbar displays."
+      },
+      "Height": {
+        "Name": "Taskbar Height"
+      },
+      "PortraitAnimation": {
+        "Name": "Portrait Animation",
+        "Hint": "Choose a hover animation for the portrait."
+      },
+      "LoadOnlyForPlayers": {
+        "Name": "Load Only For Players",
+        "Hint": "When enabled, the taskbar will not load for the GM. Only players will see it. Requires a page refresh to take effect."
+      }
+    },
+    "NoActor": "No Character",
+    "NoCharacterAssigned": "No character assigned.",
+    "Panels": {
+      "Persona": "Persona",
+      "Skills": "Skills",
+      "Abilities": "Abilities",
+      "Spells": "Spells",
+      "Combat": "Combat",
+      "Equipment": "Equipment",
+      "Close": "Close",
+      "Settings": "Settings",
+      "Categories": "Categories"
+    },
+    "Persona": {
+      "Personality": "Personality",
+      "Arc": "Arc",
+      "AddTrait": "Add personality trait",
+      "MaxTraits": "Maximum of 6 traits reached",
+      "TraitNameRequired": "Trait name is required.",
+      "DeleteTrait": "Delete Personality Trait",
+      "AddArc": "Add Arc",
+      "EditArc": "Edit ARC",
+      "CreateArc": "Create New ARC",
+      "DeleteArc": "Delete ARC",
+      "FocusedArc": "Focused ARC",
+      "NoFocusedArc": "None selected",
+      "OpenDetails": "Open details",
+      "StoryArcEditor": "Story Arc Editor",
+      "Opening": "Opening",
+      "Steps": "Steps",
+      "Climax": "Climax",
+      "Resolution": "Resolution",
+      "AddStep": "Add step",
+      "RemoveStep": "Remove step",
+      "XPPerStep": "2 XP / step",
+      "OpeningXP": "0 XP",
+      "ClimaxXP": "{xp} XP",
+      "ResolutionXP": "1 XP"
+    },
+    "Combat": {
+      "EnterCombat": "Enter Combat",
+      "RollInitiative": "Roll Initiative",
+      "RerollInitiative": "Reroll Initiative",
+      "InCombat": "In Combat",
+      "NotInCombat": "Not In Combat",
+      "Initiative": "Initiative",
+      "StartCombatTitle": "Start Combat",
+      "StartCombatConfirm": "Are you sure you want to start a combat?",
+      "CombatRequestSent": "Combat request sent to the GM.",
+      "CombatRequestDenied": "Combat request denied.",
+      "JoinedCombat": "{name} joined combat.",
+      "AlreadyInCombat": "{name} is already in combat.",
+      "NoActiveCombat": "No active combat encounter.",
+      "NotInCombatWarn": "{name} is not in combat.",
+      "InitiativeRerollTitle": "Initiative Reroll",
+      "InitiativeRerollConfirm": "Are you sure - ask GM for permission to roll again.",
+      "PermissionDeclined": "Declined",
+      "PermissionGranted": "Permission Granted",
+      "CombatPlaceholder": {
+        "Active": "Combat Active",
+        "Ready": "Ready",
+        "Note": "Initiative rolled - awaiting your turn"
+      }
+    },
+    "Skills": {
+      "NoSkills": "No skills found.",
+      "Uncategorized": "Uncategorized",
+      "DropHere": "Drop skills here",
+      "Roll": "Roll {name}",
+      "Specialized": "Specialized",
+      "Trained": "Trained",
+      "Practiced": "Practiced",
+      "Inability": "Inability"
+    },
+    "Abilities": {
+      "NoAbilities": "No abilities found.",
+      "Use": "Use",
+      "DropHere": "Drop abilities here"
+    },
+    "Spells": {
+      "NoSpells": "No spells found. Add abilities/skills to a category named Spell, Spells or Magic.",
+      "Ready": "READY",
+      "Memorize": "Memorize spell",
+      "RemoveReady": "Remove from Ready",
+      "Cast": "Cast {name}",
+      "DropHere": "Drop spells here",
+      "MemorizedEmpty": "Memorized spells appear here."
+    },
+    "Equipment": {
+      "NoEquipment": "No equipment found."
+    },
+    "Notifications": {
+      "CypherAPIUnavailable": "Cypher System API not available.",
+      "RollDialogUnavailable": "All-in-one roll dialog is not available.",
+      "RollFailed": "Could not open {stat} roll dialog.",
+      "RequiresCypherSystem": "Requires the Cypher System."
+    },
+    "PortraitSettings": {
+      "Title": "Portrait Space Settings",
+      "Layout": "Layout",
+      "UpperPanel": "Upper Name Panel",
+      "XP": "XP Circle",
+      "Titles": "Attribute Titles",
+      "Shadow": "Shadow"
+    },
+    "TaskbarSettings": {
+      "Title": "Taskbar Settings"
+    },
+    "General": {
+      "Save": "Save",
+      "Cancel": "Cancel",
+      "Delete": "Delete",
+      "Close": "Close",
+      "Add": "Add",
+      "Edit": "Edit"
+    }
+  }
+}
