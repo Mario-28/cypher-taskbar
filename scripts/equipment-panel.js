@@ -291,20 +291,17 @@ export function applyEquipmentPanel(CypherTaskbar) {
           e.stopPropagation();
           const target = tab.dataset.equipmentTab;
           if (target === "equip") {
-            const isNowOpen = !this._combatFloatingOpen;
-            this._combatFloatingOpen = isNowOpen;
-            tabs.forEach(t => t.classList.remove("active"));
-            tab.classList.toggle("active", isNowOpen);
-            if (isNowOpen) {
+            // Doll can only be opened via the Equip tab; it never closes from tab clicks
+            if (!this._combatFloatingOpen) {
+              this._combatFloatingOpen = true;
               this._openCombatFloatingPanel();
-            } else {
-              this._closeCombatFloatingPanel();
             }
+            tabs.forEach(t => t.classList.remove("active"));
+            tab.classList.add("active");
           } else if (target === "home" || target === "weapon" || target === "armor") {
             this._equipmentSubTab = target;
             tabs.forEach(t => t.classList.remove("active"));
             tab.classList.add("active");
-            this._closeCombatFloatingPanel();
             this._refreshActivePanel();
           }
         };
@@ -1504,8 +1501,16 @@ export function applyEquipmentPanel(CypherTaskbar) {
       const popup = document.createElement("div");
       popup.id = "ct-equipment-settings-popup";
       popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      // Position above the Equipment section button
+      const eqBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="equipment"]');
+      const btnRect = eqBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = `${btnRect.left}px`;
+        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      } else {
+        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      }
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Equipment Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>

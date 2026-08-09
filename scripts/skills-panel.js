@@ -355,8 +355,16 @@ export function applySkillsPanel(CypherTaskbar) {
       const popup = document.createElement("div");
       popup.id = "ct-skills-settings-popup";
       popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      // Position above the Skills section button
+      const skillsBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="skills"]');
+      const btnRect = skillsBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = `${btnRect.left}px`;
+        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      } else {
+        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      }
       popup.style.transform = "none";
       popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Skills Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>

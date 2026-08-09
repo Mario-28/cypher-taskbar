@@ -138,6 +138,9 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "attributeTitleColor", { scope: "client", config: false, type: String, default: "#ffffff" });
   game.settings.register(MODULE_ID, "attributeTitleStrokeColor", { scope: "client", config: false, type: String, default: "#ffffff" });
   game.settings.register(MODULE_ID, "attributeTitleStrokeThickness", { scope: "client", config: false, type: Number, range: { min: 0, max: 4, step: 0.1 }, default: 0.5 });
+  game.settings.register(MODULE_ID, "attributeTitleBoldness", { scope: "client", config: false, type: Number, range: { min: 100, max: 900, step: 100 }, default: 800 });
+  game.settings.register(MODULE_ID, "attributeTitleSize", { scope: "client", config: false, type: Number, range: { min: 70, max: 220, step: 5 }, default: 100 });
+  game.settings.register(MODULE_ID, "attributeTitleSpacing", { scope: "client", config: false, type: Number, range: { min: -2, max: 8, step: 0.5 }, default: 0.5 });
 
   // ── Upper Panel Settings ──
   game.settings.register(MODULE_ID, "upperPanelBgColor", { scope: "client", config: false, type: String, default: "#16121e" });

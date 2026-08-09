@@ -172,7 +172,6 @@ class CypherTaskbar {
             ? `<div class="ct-no-actor"><i class="fas fa-user-slash"></i> No Character</div>`
             : this._buildBarMeta(actor)}
           <button class="ct-btn ct-eye-btn ${(this._gs("portraitAreaCollapsed") ?? false) ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${(this._gs("portraitAreaCollapsed") ?? false) ? 'Show portrait' : 'Hide portrait'}" ${noActor ? 'disabled' : ''}><i class="fas ${(this._gs("portraitAreaCollapsed") ?? false) ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
-          <button class="ct-btn ct-log-btn" id="ct-btn-book" title="Cypher Log"><i class="fas fa-book-open"></i></button>
         </div>
 
         <!-- S2: action buttons -->
@@ -244,6 +243,9 @@ class CypherTaskbar {
     const titleColor = this._gs("attributeTitleColor") ?? "#ffffff";
     const titleStrokeColor = this._gs("attributeTitleStrokeColor") ?? "#ffffff";
     const titleStrokeThickness = this._gs("attributeTitleStrokeThickness") ?? 0.5;
+    const titleBoldness = this._gs("attributeTitleBoldness") ?? 800;
+    const titleSize = this._gs("attributeTitleSize") ?? 100;
+    const titleSpacing = this._gs("attributeTitleSpacing") ?? 0.5;
     const upperPanelBgColor = this._gs("upperPanelBgColor") ?? "#16121e";
     const upperPanelOpacity = this._gs("upperPanelOpacity") ?? 0.9;
     const upperPanelFontColor = this._gs("upperPanelFontColor") ?? "#f0d68a";
@@ -286,7 +288,7 @@ class CypherTaskbar {
       <div class="ct-char-float${portraitAreaCollapsed ? " ct-char-float-collapsed ct-portrait-slide-away" : ""}" id="ct-char-float">
         <div class="ct-float-stack${portraitAreaCollapsed ? " ct-portrait-area-collapsed" : ""}">
           <!-- Stat bars on top -->
-          <div class="ct-float-stats" style="--ct-bars-scale:${barScale/100}; --ct-bars-right-offset:${barOffset}px; --ct-bars-y-offset:${barYOffset}px; --ct-bars-gap:${barGap}px; --ct-bars-top-padding:${barTopPadding}px; --ct-stat-value-color:${valueColor}; --ct-stat-value-scale:${valueSize/100}; --ct-stat-title-color:${titleColor}; --ct-stat-title-stroke:${titleStrokeColor}; --ct-stat-title-stroke-width:${titleStrokeThickness}px; --ct-upper-panel-bg:${hexToRGBA(upperPanelBgColor, upperPanelOpacity)}; --ct-upper-panel-font:${upperPanelFontColor}; --ct-upper-panel-name-scale:${upperPanelNameSize/100}; --ct-upper-panel-x:${upperPanelOffsetX}%; --ct-upper-panel-y:${upperPanelOffsetY}%;">
+          <div class="ct-float-stats" style="--ct-bars-scale:${barScale/100}; --ct-bars-right-offset:${barOffset}px; --ct-bars-y-offset:${barYOffset}px; --ct-bars-gap:${barGap}px; --ct-bars-top-padding:${barTopPadding}px; --ct-stat-value-color:${valueColor}; --ct-stat-value-scale:${valueSize/100}; --ct-stat-title-color:${titleColor}; --ct-stat-title-stroke:${titleStrokeColor}; --ct-stat-title-stroke-width:${titleStrokeThickness}px; --ct-stat-title-boldness:${titleBoldness}; --ct-stat-title-size:${titleSize/100}; --ct-stat-title-spacing:${titleSpacing}px; --ct-upper-panel-bg:${hexToRGBA(upperPanelBgColor, upperPanelOpacity)}; --ct-upper-panel-font:${upperPanelFontColor}; --ct-upper-panel-name-scale:${upperPanelNameSize/100}; --ct-upper-panel-x:${upperPanelOffsetX}%; --ct-upper-panel-y:${upperPanelOffsetY}%;">
             <div class="ct-identity-panel" style="--ct-bars-scale:${upperPanelScale/100};">
               <div class="ct-identity-name-row">
                 <div class="ct-identity-name" title="${actor.name}">${actor.name}</div>
@@ -1156,9 +1158,6 @@ class CypherTaskbar {
     const lockBtn = bar.querySelector("#ct-btn-lock");
     if (lockBtn) lockBtn.onclick = () => this._toggleLock();
 
-    const bookBtn = bar.querySelector("#ct-btn-book");
-    if (bookBtn) bookBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); this._openCypherLogShelf(e.currentTarget); };
-
     bar.querySelectorAll("[data-open-item]").forEach(btn => {
       btn.onclick = (e) => {
         e.preventDefault();
@@ -1286,8 +1285,12 @@ class CypherTaskbar {
         if (document.querySelector("#ct-equipment-settings-popup")) return;
         if (document.querySelector(".ct-popup")) return;
         if (this.element?.contains(e.target)) return;
-        // While combat menu is open, only close equipment via its own close button
-        if (this._combatFloatingOpen) return;
+        // Don't close panel when interacting with the equipment doll
+        if (e.target.closest(".ct-combat-floating-panel")) return;
+        // Don't close PERSONA panel on outside click — only close button
+        if (this.activePanel === "persona") return;
+        // Also don't close if clicking inside any open panel container
+        if (e.target.closest("#ct-panel-container")) return;
         this._closePanel();
       };
       document.addEventListener("click", this._boundDocumentClick);
@@ -1351,33 +1354,38 @@ class CypherTaskbar {
   }
 
   _positionPanelToButton(key, btnEl, container) {
-    if (!container) return;
-    const wrapper = container.querySelector('.ct-equipment-tabs-wrapper');
-    if (!wrapper) return;
-    if (!btnEl || key !== 'equipment') return;
-    // Use position:fixed directly on the wrapper so it sits exactly where we
-    // want it relative to the viewport — no fighting with container layout.
-    const barHeight = this.element?.offsetHeight || 60;
-    wrapper.classList.remove('ct-panel-align-button');
-    wrapper.style.position = 'fixed';
-    wrapper.style.left = '8px';
-    wrapper.style.right = 'auto';
-    wrapper.style.top = 'auto';
-    wrapper.style.bottom = `${barHeight + 4}px`;
-    wrapper.style.margin = '0';
-    wrapper.style.transform = 'none';
-    wrapper.style.zIndex = '9000';
-    wrapper.style.pointerEvents = 'all';
+    if (!container || !btnEl) return;
+    const panel = container.querySelector('.ct-panel');
+    if (!panel) return;
+    const wrapper = panel.closest('.ct-equipment-tabs-wrapper');
+    const btnRect = btnEl.getBoundingClientRect();
+    const targetEl = wrapper || panel;
+    const panelWidth = targetEl.offsetWidth || 320;
+    // Position: bottom-left corner above the button
+    let left = btnRect.left;
+    // Keep on screen
+    if (left + panelWidth > window.innerWidth - 8) {
+      left = Math.max(8, window.innerWidth - panelWidth - 8);
+    }
+    targetEl.style.marginLeft = '0';
+    targetEl.style.left = `${left}px`;
+    targetEl.style.position = 'relative';
+    // Clear panel positioning when wrapper is used so tabs move with the panel
+    if (wrapper) {
+      panel.style.position = '';
+      panel.style.left = '';
+    }
   }
 
   _togglePanel(key, btnEl) {
     const container = this.element?.querySelector("#ct-panel-container");
     if (!container) return;
 
+    // Prevent switching to other panels while equipment doll is open
+    if (this._combatFloatingOpen && key !== "equipment") return;
+
     const isSamePanelOpen = this.activePanel === key && container.classList.contains("ct-panel-open");
     if (isSamePanelOpen) {
-      // While combat is open, only close equipment via its close button
-      if (key === "equipment" && this._combatFloatingOpen) return;
       this._closePanel();
       return;
     }
@@ -1467,20 +1475,18 @@ class CypherTaskbar {
     };
     setTimeout(() => document.addEventListener("click", outsideClick), 50);
 
-    // Position: bottom-left corner above the button
+    // Position centered on screen
     document.body.append(shelf);
-    const btnRect = triggerBtn.getBoundingClientRect();
     const shelfRect = shelf.getBoundingClientRect();
     const gap = 8;
-    let left = btnRect.left;
-    let top = btnRect.top - shelfRect.height - gap;
+    let left = (window.innerWidth - shelfRect.width) / 2;
+    let top = (window.innerHeight - shelfRect.height) / 2;
     // Keep on screen
     if (left + shelfRect.width > window.innerWidth - 10) {
       left = window.innerWidth - shelfRect.width - 10;
     }
-    if (top < 10) {
-      top = btnRect.bottom + gap; // flip to below if not enough space above
-    }
+    if (left < 10) left = 10;
+    if (top < 10) top = 10;
     shelf.style.left = `${left}px`;
     shelf.style.top = `${top}px`;
 
@@ -1950,6 +1956,9 @@ class CypherTaskbar {
     const titleColor = this._gs("attributeTitleColor") ?? "#111111";
     const titleStrokeColor = this._gs("attributeTitleStrokeColor") ?? "#ffffff";
     const titleStrokeThickness = this._gs("attributeTitleStrokeThickness") ?? 0.5;
+    const titleBoldness = this._gs("attributeTitleBoldness") ?? 800;
+    const titleSize = this._gs("attributeTitleSize") ?? 100;
+    const titleSpacing = this._gs("attributeTitleSpacing") ?? 0.5;
     const upperPanelBgColor = this._gs("upperPanelBgColor") ?? "#16121e";
     const upperPanelOpacity = this._gs("upperPanelOpacity") ?? 0.9;
     const upperPanelFontColor = this._gs("upperPanelFontColor") ?? "#f0d68a";
@@ -1959,16 +1968,17 @@ class CypherTaskbar {
     const upperPanelOffsetY = this._gs("upperPanelOffsetY") ?? 0;
     const xpCircleOffsetX = this._gs("xpCircleOffsetX") ?? 0;
     const xpCircleOffsetY = this._gs("xpCircleOffsetY") ?? 0;
+    const portraitSpaceTransparent = this._gs("portraitSpaceTransparent") ?? true;
+    const portraitSpaceOpacity = this._gs("portraitSpaceOpacity") ?? 0.8;
     const portraitRect = this.element.querySelector(".ct-portrait-wrap")?.getBoundingClientRect();
 
     const popup = document.createElement("div");
     popup.id = "ct-portrait-settings-popup";
     popup.classList.add("ct-popup");
-    const desiredLeft = Math.max(8, (portraitRect?.right ?? event.clientX) + 48);
-    const desiredTop = Math.max(8, (portraitRect?.top ?? event.clientY) + 6);
-    popup.style.left = `${desiredLeft}px`;
-    popup.style.top = `${desiredTop}px`;
-    popup.style.transform = 'none';
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
     popup.innerHTML = `
       <div class="ct-popup-header ct-portrait-settings-header">
         <div class="ct-popup-header-icon"><i class="fas fa-user-circle"></i></div>
@@ -1981,6 +1991,7 @@ class CypherTaskbar {
         <button class="ct-popup-tab" data-tab="bars" title="Attribute bars layout & style"><i class="fas fa-bars"></i><span>Attribute Bar</span></button>
         <button class="ct-popup-tab" data-tab="arc" title="Focused arc widget"><i class="fas fa-bullseye"></i><span>Arc</span></button>
         <button class="ct-popup-tab" data-tab="xp" title="XP circle position"><i class="fas fa-star"></i><span>XP Circle</span></button>
+        <button class="ct-popup-tab" data-tab="opacity" title="Portrait space transparency"><i class="fas fa-eye-slash"></i><span>Opacity</span></button>
       </div>
       <div class="ct-popup-body ct-popup-body-compact ct-portrait-settings-body">
         <!-- ═══ PORTRAIT TAB ═══ -->
@@ -2079,9 +2090,18 @@ class CypherTaskbar {
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-font"></i> Titles</div>
             <label>Fill Color <input type="color" id="ps-title-color" value="${titleColor}"></label>
+            <label>Size <span class="ct-val-label" id="ps-title-size-val">${titleSize}%</span>
+              <input type="range" id="ps-title-size" min="70" max="220" step="5" value="${titleSize}">
+            </label>
+            <label>Character Spacing <span class="ct-val-label" id="ps-title-spacing-val">${titleSpacing}px</span>
+              <input type="range" id="ps-title-spacing" min="-2" max="8" step="0.5" value="${titleSpacing}">
+            </label>
             <label>Outline Color <input type="color" id="ps-title-stroke" value="${titleStrokeColor}"></label>
             <label>Outline Thickness <span class="ct-val-label" id="ps-title-stroke-width-val">${titleStrokeThickness}px</span>
               <input type="range" id="ps-title-stroke-width" min="0" max="4" step="0.1" value="${titleStrokeThickness}">
+            </label>
+            <label>Boldness <span class="ct-val-label" id="ps-title-bold-val">${titleBoldness}</span>
+              <input type="range" id="ps-title-bold" min="100" max="900" step="100" value="${titleBoldness}">
             </label>
           </div>
         </div>
@@ -2120,6 +2140,19 @@ class CypherTaskbar {
             <label>Vertical Offset <span class="ct-val-label" id="ps-xp-y-val">${xpCircleOffsetY}%</span>
               <input type="range" id="ps-xp-y" min="-100" max="100" step="1" value="${xpCircleOffsetY}">
             </label>
+          </div>
+        </div>
+        <!-- ═══ OPACITY TAB ═══ -->
+        <div class="ct-popup-pane" data-pane="opacity">
+          <div class="ct-settings-section">
+            <div class="ct-settings-section-title"><i class="fas fa-eye-slash"></i> Portrait Space Opacity</div>
+            <label class="ct-toggle-row">Transparent Portrait Space <input type="checkbox" id="ps-space-transparent" ${portraitSpaceTransparent?"checked":""}></label>
+            <label>Opacity <span class="ct-val-label" id="ps-space-opacity-val">${Math.round(portraitSpaceOpacity*100)}%</span>
+              <input type="range" id="ps-space-opacity" min="0" max="1" step="0.05" value="${portraitSpaceOpacity}">
+            </label>
+            <div class="ct-settings-note" style="font-size:0.72em;color:var(--ct-text-dim);margin-top:4px;">
+              <i class="fas fa-info-circle"></i> Hovering over portrait space always sets opacity to 0%
+            </div>
           </div>
         </div>
       </div>`;
@@ -2195,12 +2228,17 @@ class CypherTaskbar {
         await this._ss("attributeTitleColor", popup.querySelector("#ps-title-color").value);
         await this._ss("attributeTitleStrokeColor", popup.querySelector("#ps-title-stroke").value);
         await this._ss("attributeTitleStrokeThickness", parseFloat(popup.querySelector("#ps-title-stroke-width").value));
+        await this._ss("attributeTitleBoldness", parseInt(popup.querySelector("#ps-title-bold").value));
+        await this._ss("attributeTitleSize", parseInt(popup.querySelector("#ps-title-size").value));
+        await this._ss("attributeTitleSpacing", parseFloat(popup.querySelector("#ps-title-spacing").value));
         await this._ss("portraitShadow", popup.querySelector("#ps-en").checked);
         await this._ss("portraitShadowDirection", popup.querySelector("#ps-dir").value);
         await this._ss("portraitShadowBlur",     parseInt(popup.querySelector("#ps-blur").value));
         await this._ss("portraitShadowColor",    popup.querySelector("#ps-color").value);
         await this._ss("portraitShadowOpacity",  parseFloat(popup.querySelector("#ps-op").value));
         await this._ss("portraitShadowDistance", parseInt(popup.querySelector("#ps-dist").value));
+        await this._ss("portraitSpaceTransparent", popup.querySelector("#ps-space-transparent").checked);
+        await this._ss("portraitSpaceOpacity", parseFloat(popup.querySelector("#ps-space-opacity").value));
         this.refresh();
         console.log(`${MODULE_ID} | Portrait settings applied successfully`);
       } catch (err) {
@@ -2236,9 +2274,14 @@ class CypherTaskbar {
     popup.querySelector("#ps-title-color")?.addEventListener("input",applyDebounced);
     popup.querySelector("#ps-title-stroke")?.addEventListener("input",applyDebounced);
     popup.querySelector("#ps-title-stroke-width")?.addEventListener("input",e=>{popup.querySelector("#ps-title-stroke-width-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ps-title-size")?.addEventListener("input",e=>{popup.querySelector("#ps-title-size-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ps-title-spacing")?.addEventListener("input",e=>{popup.querySelector("#ps-title-spacing-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ps-title-bold")?.addEventListener("input",e=>{popup.querySelector("#ps-title-bold-val").textContent=e.target.value;apply();});
     popup.querySelector("#ps-blur")?.addEventListener("input",e=>{popup.querySelector("#ps-blur-val").textContent=e.target.value+"px";apply();});
     popup.querySelector("#ps-op")?.addEventListener("input",e=>{popup.querySelector("#ps-op-val").textContent=Math.round(e.target.value*100)+"%";apply();});
     popup.querySelector("#ps-dist")?.addEventListener("input",e=>{popup.querySelector("#ps-dist-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ps-space-transparent")?.addEventListener("change",apply);
+    popup.querySelector("#ps-space-opacity")?.addEventListener("input",e=>{popup.querySelector("#ps-space-opacity-val").textContent=Math.round(e.target.value*100)+"%";apply();});
     popup.querySelector("#ps-color")?.addEventListener("input",applyDebounced);
     popup.querySelector("#ps-dir")?.addEventListener("change",apply);
     popup.querySelector("#ps-en")?.addEventListener("change",e=>{popup.querySelector("#ps-shadow-group").classList.toggle("ct-hidden",!e.target.checked);apply();});
@@ -2292,8 +2335,18 @@ class CypherTaskbar {
     const popup = document.createElement("div");
     popup.id = "ct-taskbar-settings-popup";
     popup.classList.add("ct-popup");
-    popup.style.right = "16px";
-    popup.style.bottom = `${window.innerHeight - barRect.top + 8}px`;
+    // Position: right-bottom corner above the Settings button
+    const settingsBtn = this.element?.querySelector("#ct-btn-settings");
+    const btnRect = settingsBtn?.getBoundingClientRect();
+    if (btnRect) {
+      popup.style.right = `${window.innerWidth - btnRect.right}px`;
+      popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      popup.style.left = "auto";
+    } else {
+      popup.style.right = "16px";
+      popup.style.bottom = `${window.innerHeight - barRect.top + 8}px`;
+      popup.style.left = "auto";
+    }
     popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
       <div class="ct-popup-tabs">
@@ -2429,17 +2482,10 @@ class CypherTaskbar {
 
     // Position centered above the stuff button
     const stuffBtn = document.querySelector("#ct-btn-stuff");
-    const btnRect = stuffBtn?.getBoundingClientRect();
-    if (btnRect) {
-      const panelWidth = this._gs("stuffMenuWidthScale") ?? 320;
-      let left = btnRect.left + btnRect.width / 2 - panelWidth / 2;
-      left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
-      popup.style.left = `${left}px`;
-      popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-    } else {
-      popup.style.left = "16px";
-      popup.style.bottom = "80px";
-    }
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
 
     // Apply settings as CSS variables
     this._applyStuffPanelSettings(popup);
@@ -2733,14 +2779,10 @@ class CypherTaskbar {
     popup.className = `ct-popup view-${viewMode}`;
 
     const bookBtn = document.querySelector("#ct-btn-book");
-    const btnRect = bookBtn?.getBoundingClientRect();
-    if (btnRect) {
-      popup.style.left = `${btnRect.left}px`;
-      popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-    } else {
-      popup.style.left = "60px";
-      popup.style.bottom = "80px";
-    }
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
 
     // Apply menu settings
     this._applyBookMenuSettings(popup);
@@ -3071,15 +3113,10 @@ class CypherTaskbar {
     popup.id = "ct-book-settings-popup";
     popup.className = "ct-popup";
 
-    if (bookPanel) {
-      const panelRect = bookPanel.getBoundingClientRect();
-      popup.style.left = `${panelRect.right + 8}px`;
-      popup.style.bottom = `${window.innerHeight - panelRect.bottom}px`;
-    } else {
-      const barRect = this.element.getBoundingClientRect();
-      popup.style.right = "16px";
-      popup.style.bottom = `${window.innerHeight - barRect.top + 8}px`;
-    }
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
 
     popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-cog"></i> Book Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -3581,17 +3618,10 @@ class CypherTaskbar {
       </div>`;
     document.body.appendChild(popup);
 
-    // Position near the triggering button
-    const bar = document.getElementById("cypher-taskbar-bar");
-    const btn = bar?.querySelector(`.ct-mini-btn[data-mini="${key}"]`);
-    const btnRect = btn?.getBoundingClientRect();
-    if (btnRect) {
-      popup.style.left = `${Math.max(4, btnRect.left - 4)}px`;
-      popup.style.bottom = `${window.innerHeight - btnRect.top + 6}px`;
-    } else {
-      popup.style.left = "60px";
-      popup.style.bottom = "80px";
-    }
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
     // Set CSS vars for icon size and padding
     const _calcIconSize = () => {
       popup.style.setProperty("--ct-mini-icon-size", `${itemSize}px`);
@@ -4465,16 +4495,10 @@ class CypherTaskbar {
     popup.id = "ct-stuff-settings-popup";
     popup.className = "ct-popup";
 
-    // Position next to the stuff panel if open, otherwise above taskbar
-    if (stuffPanel) {
-      const panelRect = stuffPanel.getBoundingClientRect();
-      popup.style.left = `${panelRect.right + 8}px`;
-      popup.style.bottom = `${window.innerHeight - panelRect.bottom}px`;
-    } else {
-      const barRect = this.element.getBoundingClientRect();
-      popup.style.right = "16px";
-      popup.style.bottom = `${window.innerHeight - barRect.top + 8}px`;
-    }
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
 
     const tabOptions = tabs.map((t, i) => `<option value="${i}" ${i === state.stuffDefaultTab ? "selected" : ""}>${foundry.utils.escapeHTML(t.name)}</option>`).join('');
 
@@ -4680,6 +4704,9 @@ class CypherTaskbar {
     bar.style.setProperty("--ct-bg",       hexToRGBA(this._gs("bgColor"), this._gs("bgOpacity")));
     bar.style.setProperty("--ct-accent",   this._gs("accentColor"));
     bar.style.setProperty("--ct-portrait-w",`${this._gs("portraitWidth")}px`);
+    const pTransparent = this._gs("portraitSpaceTransparent") ?? true;
+    const pOpacity = this._gs("portraitSpaceOpacity") ?? 0.8;
+    bar.style.setProperty("--ct-portrait-space-opacity", pTransparent ? pOpacity : 1);
     bar.classList.toggle("ct-sections-expanded", this._gs("sectionsExpanded") ?? false);
     bar.style.setProperty("--ct-menu-font-size", (this._gs("menuFontSize") ?? 100) / 100);
     bar.style.setProperty("--ct-menu-font-color", this._gs("menuFontColor") ?? "#e8e8e8");
@@ -4776,17 +4803,26 @@ class CypherTaskbar {
     const actor   = this.actor;
     const noActor = !actor || actor.type !== "pc";
 
-    // Rebuild floating portrait/stats
+    // Rebuild floating portrait/stats — preserve outer element so CSS transitions keep running
     const old = this.element?.querySelector("#ct-char-float");
     if (old) {
       const tmp = document.createElement("div");
       tmp.innerHTML = this._buildFloating(actor, noActor);
       const newFloat = tmp.firstElementChild;
-      old.replaceWith(newFloat);
+      // Preserve slide-away class to keep any ongoing transition alive
+      const hadSlideAway = old.classList.contains("ct-portrait-slide-away");
+      const hadCollapsed = old.classList.contains("ct-char-float-collapsed");
+      // Replace inner HTML only, keeping the outer element (and its transitions)
+      old.innerHTML = newFloat.innerHTML;
+      // Re-apply classes from new build (sync with current setting) while preserving transition class
+      old.className = newFloat.className;
+      if (hadSlideAway) old.classList.add("ct-portrait-slide-away");
+      if (hadCollapsed) old.classList.add("ct-char-float-collapsed");
+
       // Re-bind portrait events
-      newFloat.querySelector(".ct-portrait")?.addEventListener("click",e=>{e.stopPropagation();this.actor?.sheet?.render(true);});
-      newFloat.querySelector(".ct-portrait-wrap")?.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();this._openPortraitSettings(e);});
-      newFloat.querySelectorAll(".ct-stat-bar-wrap[data-pool]").forEach(el => {
+      old.querySelector(".ct-portrait")?.addEventListener("click",e=>{e.stopPropagation();this.actor?.sheet?.render(true);});
+      old.querySelector(".ct-portrait-wrap")?.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();this._openPortraitSettings(e);});
+      old.querySelectorAll(".ct-stat-bar-wrap[data-pool]").forEach(el => {
         el.addEventListener("click", async (e) => {
           e.stopPropagation();
           await this._adjustPool(el.dataset.pool, -1);
@@ -4797,25 +4833,25 @@ class CypherTaskbar {
           await this._adjustPool(el.dataset.pool, 1);
         });
       });
-      newFloat.querySelectorAll(".ct-roll-btn[data-roll-stat]").forEach(el => {
+      old.querySelectorAll(".ct-roll-btn[data-roll-stat]").forEach(el => {
         el.addEventListener("click", async (e) => {
           e.preventDefault();
           e.stopPropagation();
           await this._openStatRoll(el.dataset.rollStat);
         });
       });
-      newFloat.querySelector(".ct-xp-orb")?.addEventListener("click", async (e) => {
+      old.querySelector(".ct-xp-orb")?.addEventListener("click", async (e) => {
         e.preventDefault();
         e.stopPropagation();
         await this._adjustXP(1);
       });
-      newFloat.querySelector(".ct-xp-orb")?.addEventListener("contextmenu", async (e) => {
+      old.querySelector(".ct-xp-orb")?.addEventListener("contextmenu", async (e) => {
         e.preventDefault();
         e.stopPropagation();
         await this._adjustXP(-1);
       });
       // Re-bind dice button events
-      newFloat.querySelectorAll(".ct-dice-btn").forEach(btn => {
+      old.querySelectorAll(".ct-dice-btn").forEach(btn => {
         btn.addEventListener("click", async (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -4832,7 +4868,7 @@ class CypherTaskbar {
         });
       });
       // Re-bind recovery drops
-      newFloat.querySelectorAll(".ct-recovery-drop[data-recovery-index]").forEach(btn => {
+      old.querySelectorAll(".ct-recovery-drop[data-recovery-index]").forEach(btn => {
         btn.addEventListener("click", async (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -4847,15 +4883,17 @@ class CypherTaskbar {
     const s1 = this.element?.querySelector(".ct-section-1");
     const portraitAreaCollapsed = this._gs("portraitAreaCollapsed") ?? false;
     if (s1) {
+      // Preserve externally-injected buttons (e.g., Cypher Log's cl-taskbar-btn)
+      const externalBtn = s1.querySelector("#cl-taskbar-log-btn");
       const collapsedClass = portraitAreaCollapsed ? ' ct-section-1-collapsed' : '';
       s1.className = `ct-section ct-section-1${collapsedClass}`;
       s1.innerHTML = noActor
         ? `<div class="ct-no-actor"><i class="fas fa-user-slash"></i> No Character</div>`
           + `<button class="ct-btn ct-eye-btn ${portraitAreaCollapsed ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${portraitAreaCollapsed ? 'Show portrait' : 'Hide portrait'}" disabled><i class="fas ${portraitAreaCollapsed ? 'fa-eye-slash' : 'fa-eye'}"></i></button>`
-          + `<button class="ct-btn ct-log-btn" id="ct-btn-book" title="Cypher Log" disabled><i class="fas fa-book-open"></i></button>`
         : this._buildBarMeta(actor)
-          + `<button class="ct-btn ct-eye-btn ${portraitAreaCollapsed ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${portraitAreaCollapsed ? 'Show portrait' : 'Hide portrait'}"><i class="fas ${portraitAreaCollapsed ? 'fa-eye-slash' : 'fa-eye'}"></i></button>`
-          + `<button class="ct-btn ct-log-btn" id="ct-btn-book" title="Cypher Log"><i class="fas fa-book-open"></i></button>`;
+          + `<button class="ct-btn ct-eye-btn ${portraitAreaCollapsed ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${portraitAreaCollapsed ? 'Show portrait' : 'Hide portrait'}"><i class="fas ${portraitAreaCollapsed ? 'fa-eye-slash' : 'fa-eye'}"></i></button>`;
+      // Re-insert preserved external button at end of section
+      if (externalBtn) s1.append(externalBtn);
       // Re-bind eye button event
       const newEyeBtn = s1.querySelector("#ct-btn-eye");
       if (newEyeBtn && !noActor) {
@@ -4864,10 +4902,11 @@ class CypherTaskbar {
           e.stopPropagation();
           if (this._portraitToggleBusy) return;
           this._portraitToggleBusy = true;
+          this._suppressRender = true;
           try {
             const collapsed = !!(this._gs("portraitAreaCollapsed") ?? false);
             const newCollapsed = !collapsed;
-            await this._ss("portraitAreaCollapsed", newCollapsed);
+            // Toggle slide animation class FIRST (before save triggers any hook)
             const floatEl = document.querySelector("#ct-char-float");
             if (floatEl) floatEl.classList.toggle("ct-portrait-slide-away", newCollapsed);
             const s1El = this.element?.querySelector(".ct-section-1");
@@ -4876,14 +4915,14 @@ class CypherTaskbar {
             if (icon) icon.className = `fas ${newCollapsed ? 'fa-eye-slash' : 'fa-eye'}`;
             newEyeBtn.classList.toggle("ct-eye-collapsed", newCollapsed);
             newEyeBtn.title = newCollapsed ? "Show portrait" : "Hide portrait";
+            // Save setting LAST (triggers updateActor hook → refresh, but _suppressRender blocks it)
+            await this._ss("portraitAreaCollapsed", newCollapsed);
           } finally {
             this._portraitToggleBusy = false;
+            this._suppressRender = false;
           }
         };
       }
-      // Re-bind book button event (now opens Cypher Log)
-      const bookBtn = s1.querySelector("#ct-btn-book");
-      if (bookBtn) bookBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); this._openCypherLogShelf(e.currentTarget); };
     }
 
     // Rebuild gallery strip (above the bar)

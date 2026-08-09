@@ -286,6 +286,16 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       const popup = document.createElement("div");
       popup.id = "ct-abilities-settings-popup";
       popup.classList.add("ct-popup");
+      // Position above the Abilities section button
+      const abBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="abilities"]');
+      const btnRect = abBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = `${btnRect.left}px`;
+        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      } else {
+        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      }
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Abilities Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -437,8 +447,16 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       const popup = document.createElement("div");
       popup.id = "ct-ability-category-appearance-popup";
       popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      // Position above the Abilities section button
+      const abBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="abilities"]');
+      const btnRect = abBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = `${btnRect.left}px`;
+        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      } else {
+        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      }
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -538,8 +556,16 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       const popup = document.createElement("div");
       popup.id = "ct-ability-category-popup";
       popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      // Position above the Abilities section button
+      const abBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="abilities"]');
+      const btnRect = abBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = `${btnRect.left}px`;
+        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      } else {
+        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      }
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-folder-plus"></i> Ability Categories <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>

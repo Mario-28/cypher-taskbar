@@ -544,9 +544,18 @@ export function applyCombatPanel(CypherTaskbar) {
           `)}
         </div>`;
       document.body.appendChild(popup);
-      const rect = event?.currentTarget?.getBoundingClientRect?.() ?? {left: 200, bottom: 200};
-      popup.style.left = Math.min(Math.max(8, rect.left), window.innerWidth - 460) + "px";
-      popup.style.top = Math.min(rect.bottom + 8, window.innerHeight - 520) + "px";
+      // Position above the Combat section button
+      const combatBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="combat"]');
+      const btnRect = combatBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = Math.min(Math.max(8, btnRect.left), window.innerWidth - 460) + "px";
+        popup.style.bottom = (window.innerHeight - btnRect.top + 8) + "px";
+        popup.style.top = "auto";
+      } else {
+        const rect = event?.currentTarget?.getBoundingClientRect?.() ?? {left: 200, bottom: 200};
+        popup.style.left = Math.min(Math.max(8, rect.left), window.innerWidth - 460) + "px";
+        popup.style.top = Math.min(rect.bottom + 8, window.innerHeight - 520) + "px";
+      }
       popup.querySelector(".ct-popup-close").onclick = () => popup.remove();
       // Draggable header
       const handle = popup.querySelector(".ct-popup-drag-handle");

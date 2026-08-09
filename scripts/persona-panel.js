@@ -475,17 +475,124 @@ export function applyPersonaPanel(CypherTaskbar) {
       this.render();
     },
 
+    _getPersonaExtraUuids(actor, boxKey) {
+      try {
+        const arr = actor.getFlag(MODULE_ID, `personaExtra_${boxKey}`);
+        if (Array.isArray(arr)) return arr;
+        return [];
+      } catch (err) {
+        console.warn(`[${MODULE_ID}] _getPersonaExtraUuids(${boxKey}) error:`, err);
+        return [];
+      }
+    },
+
+    _getPersonaAboutData(actor) {
+      const defaultData = {
+        appearance: { text: "", imageUrl: "" },
+        style: { text: "", imageUrl: "" },
+        usualLife: { text: "", imageUrl: "" },
+        aroundFriends: { text: "", imageUrl: "" },
+        attractionPhysical: { text: "", imageUrl: "" },
+        attractionPersonality: { text: "", imageUrl: "" },
+        repels: { text: "", imageUrl: "" },
+        natureSecrets: { text: "", imageUrl: "" },
+        kinksQuirks: { text: "", imageUrl: "" }
+      };
+      try {
+        const raw = actor?.getFlag(MODULE_ID, 'personaAbout');
+        if (!raw || typeof raw !== 'object') return defaultData;
+        const result = foundry.utils.deepClone(defaultData);
+        for (const key of Object.keys(defaultData)) {
+          if (raw[key] && typeof raw[key] === 'object') {
+            result[key].text = String(raw[key].text ?? "").trim().slice(0, 4000);
+            result[key].imageUrl = String(raw[key].imageUrl ?? "").trim().slice(0, 2048);
+          }
+        }
+        return result;
+      } catch {
+        return defaultData;
+      }
+    },
+
+    _buildPersonaAboutSection(actor) {
+      const data = this._getPersonaAboutData(actor);
+      const sections = [
+        { key: "appearance", label: "APPEARANCE", icon: "fas fa-user" },
+        { key: "style", label: "STYLE", icon: "fas fa-tshirt" },
+        { key: "usualLife", label: "USUAL LIFE", icon: "fas fa-home" },
+        { key: "aroundFriends", label: "AROUND FRIENDS / RELAXED", icon: "fas fa-users" },
+        { key: "attractionPhysical", label: "ATTRACTION (Physical)", icon: "fas fa-heart" },
+        { key: "attractionPersonality", label: "ATTRACTION (Personality)", icon: "fas fa-brain" },
+        { key: "repels", label: "REPELS", icon: "fas fa-ban" },
+        { key: "natureSecrets", label: "NATURE and SECRETS", icon: "fas fa-mask" },
+        { key: "kinksQuirks", label: "KINKS, QUIRKS, STRANGENESS, HABITS, NEEDS", icon: "fas fa-star" }
+      ];
+      return `<div class="ct-persona-about-section">
+        ${sections.map(sec => {
+          const entry = data[sec.key];
+          const hasContent = entry.text || entry.imageUrl;
+          const imageHtml = entry.imageUrl ? `<div class="ct-persona-about-image"><img src="${foundry.utils.escapeHTML(entry.imageUrl)}" alt="" loading="lazy"></div>` : '';
+          const textHtml = entry.text ? `<div class="ct-persona-about-text">${foundry.utils.escapeHTML(entry.text).replace(/\n/g, '<br>')}</div>` : '';
+          return `<div class="ct-persona-about-card${hasContent ? ' has-content' : ''}" data-about-key="${sec.key}">
+            <div class="ct-persona-about-header">
+              <div class="ct-persona-about-title"><i class="${sec.icon}"></i> ${sec.label}</div>
+              <button class="ct-persona-about-edit" data-about-edit="${sec.key}" title="Edit ${sec.label}"><i class="fas fa-pen"></i></button>
+            </div>
+            <div class="ct-persona-about-body">
+              ${hasContent ? `${imageHtml}${textHtml}` : `<div class="ct-persona-about-empty"><i class="fas fa-pen-square"></i> Click edit to add content</div>`}
+            </div>
+          </div>`;
+        }).join("")}
+      </div>`;
+    },
+    _buildPersonaExtraSection(actor) {
+      const boxes = [
+        { key: "type", label: "TYPE", icon: "fas fa-tag" },
+        { key: "foci", label: "FOCI", icon: "fas fa-crosshairs" },
+        { key: "description", label: "DESCRIPTION", icon: "fas fa-align-left" },
+        { key: "ancestry", label: "ANCESTRY", icon: "fas fa-dna" }
+      ];
+      return `<div class="ct-persona-extra-section">
+        ${boxes.map(box => {
+          const uuids = this._getPersonaExtraUuids(actor, box.key);
+          const items = uuids.map((uuid, idx) => {
+            let name = 'Unknown';
+            try {
+              const doc = fromUuidSync(uuid);
+              name = doc?.name || 'Unknown';
+            } catch { name = 'Unknown'; }
+            return `<div class="ct-persona-extra-item" data-extra-idx="${idx}" data-extra-uuid="${uuid}" data-extra-box="${box.key}" title="Open ${foundry.utils.escapeHTML(name)}">
+              <i class="fas fa-book"></i>
+              <span class="ct-persona-extra-name">${foundry.utils.escapeHTML(name)}</span>
+              <button class="ct-persona-extra-remove" data-extra-remove="${idx}" data-extra-box="${box.key}" title="Remove"><i class="fas fa-times"></i></button>
+            </div>`;
+          }).filter(Boolean);
+          return `<div class="ct-persona-extra-box" data-extra-box="${box.key}">
+            <div class="ct-persona-extra-label"><i class="${box.icon}"></i> ${box.label}</div>
+            <div class="ct-persona-extra-list">
+              ${items.length ? items.join("") : `<div class="ct-persona-extra-empty">Drop journals here</div>`}
+            </div>
+          </div>`;
+        }).join("")}
+      </div>`;
+    },
+
     _buildPersonaPanel(actor) {
       const tabs = [
-        { key: "personality", label: "PERSONALITY", icon: "fas fa-masks-theater" },
-        { key: "arc", label: "ARC", icon: "fas fa-route" }
+        { key: "extra", label: "EXTRA", icon: "fas fa-plus-circle", color: "#e8a838" },
+        { key: "about", label: "ABOUT", icon: "fas fa-info-circle", color: "#4ecdc4" },
+        { key: "backstory", label: "BACKSTORY", icon: "fas fa-book-open", color: "#c792ea" },
+        { key: "personality", label: "PERSONALITY", icon: "fas fa-masks-theater", color: "#5c9dff" },
+        { key: "arc", label: "ARC", icon: "fas fa-route", color: "#ff7b5c" }
       ];
       const renderContent = (tab) => {
         if (tab.key === "personality") return this._buildPersonaPersonalitySection(actor);
         if (tab.key === "arc") return this._buildPersonaArcSection(actor);
+        if (tab.key === "extra") return this._buildPersonaExtraSection(actor);
+        if (tab.key === "about") return this._buildPersonaAboutSection(actor);
         return `<div class="ct-persona-empty-state"><div class="ct-persona-empty-title">${tab.label}</div><div class="ct-persona-empty-text">This tab is ready for future content.</div></div>`;
       };
-      return `<div class="ct-panel ct-panel-persona-custom" style="${this._getMenuBackgroundVars("persona")}"><div class="ct-panel-header ct-panel-header-persona-menu"><div class="ct-panel-title-wrap"><i class="fas fa-user-circle"></i> <span class="ct-panel-title-text ct-persona-panel-title-text">Persona</span></div><div class="ct-panel-action-group ct-panel-action-group-persona"><div class="ct-persona-header-tabs" role="tablist" aria-orientation="horizontal">${tabs.map((tab, index) => `<button class="ct-persona-tab ct-persona-tab-header${index === 0 ? ' is-active' : ''}" type="button" role="tab" aria-selected="${index === 0 ? 'true' : 'false'}" data-persona-tab="${tab.key}" title="${tab.label}"><i class="${tab.icon}"></i><span>${tab.label}</span></button>`).join("")}</div><button class="ct-panel-settings-btn" data-persona-close title="Close Persona Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-persona-panel-body"><div class="ct-persona-content-wrap">${tabs.map((tab, index) => `<section class="ct-persona-content${index === 0 ? ' is-active' : ''}" data-persona-content="${tab.key}" role="tabpanel" ${index === 0 ? '' : 'hidden'}>${renderContent(tab)}</section>`).join("")}</div></div></div>`;
+      return `<div class="ct-panel ct-panel-persona-custom" style="${this._getMenuBackgroundVars("persona")}"><div class="ct-panel-header ct-panel-header-persona-menu"><div class="ct-panel-title-wrap"><i class="fas fa-user-circle"></i> <span class="ct-panel-title-text ct-persona-panel-title-text">Persona</span></div><div class="ct-panel-action-group ct-panel-action-group-persona"><div class="ct-persona-header-tabs" role="tablist" aria-orientation="horizontal">${tabs.map((tab, index) => `<button class="ct-persona-tab ct-persona-tab-header ct-persona-tab-${tab.key}${index === 0 ? ' is-active' : ''}" type="button" role="tab" aria-selected="${index === 0 ? 'true' : 'false'}" data-persona-tab="${tab.key}" title="${tab.label}"${tab.color ? ` style="--ct-tab-color:${tab.color}"` : ''}><i class="${tab.icon}"></i><span>${tab.label}</span></button>`).join("")}</div><button class="ct-panel-settings-btn" data-persona-close title="Close Persona Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-persona-panel-body"><div class="ct-persona-content-wrap">${tabs.map((tab, index) => `<section class="ct-persona-content${index === 0 ? ' is-active' : ''}" data-persona-content="${tab.key}" role="tabpanel" ${index === 0 ? '' : 'hidden'}>${renderContent(tab)}</section>`).join("")}</div></div></div>`;
     },
 
     _bindPersonaTabs(root = this.element) {
@@ -638,6 +745,209 @@ export function applyPersonaPanel(CypherTaskbar) {
           this.render();
         });
       });
+
+      // ── EXTRA tab: drag & drop journals ──
+      const extraBoxes = panel.querySelectorAll('.ct-persona-extra-box');
+      extraBoxes.forEach((box) => {
+        box.ondragover = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          box.classList.add('ct-drop-active');
+        };
+        box.ondragleave = (e) => {
+          e.stopPropagation();
+          if (!box.contains(e.relatedTarget)) box.classList.remove('ct-drop-active');
+        };
+        box.ondrop = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          box.classList.remove('ct-drop-active');
+          if (!this.actor) return;
+          const boxKey = box.dataset.extraBox || 'type';
+
+          const dataText = e.dataTransfer.getData('text/plain');
+          let droppedUuid = null;
+          try {
+            const data = JSON.parse(dataText);
+            droppedUuid = data.uuid || data.id || null;
+          } catch { droppedUuid = dataText || null; }
+          if (!droppedUuid) {
+            const entry = game.journal?.get(e.dataTransfer.getData('JournalEntry'));
+            if (entry) droppedUuid = entry.uuid;
+          }
+          if (!droppedUuid) return;
+
+          // Validate it's a journal
+          let docName = '';
+          try {
+            const doc = fromUuidSync(droppedUuid);
+            if (!doc || doc.documentName !== 'JournalEntry') { ui.notifications?.warn?.('Only journal entries can be dropped here.'); return; }
+            docName = doc.name;
+          } catch { ui.notifications?.warn?.('Only journal entries can be dropped here.'); return; }
+
+          // Check for duplicates across ALL boxes
+          const allBoxes = ['type', 'foci', 'description', 'ancestry'];
+          for (const bk of allBoxes) {
+            const arr = this._getPersonaExtraUuids(this.actor, bk);
+            if (arr.includes(droppedUuid)) {
+              ui.notifications?.info?.('That journal is already in the list.');
+              return;
+            }
+          }
+
+          // Save to actor flag (separate flag per box, simple UUID array)
+          const current = this._getPersonaExtraUuids(this.actor, boxKey);
+          const newIdx = current.length;
+          current.push(droppedUuid);
+          try {
+            await this.actor.setFlag(MODULE_ID, `personaExtra_${boxKey}`, current);
+            console.log(`[${MODULE_ID}] Saved journal to personaExtra_${boxKey}:`, current);
+          } catch (err) {
+            console.error(`[${MODULE_ID}] Failed to save journal flag:`, err);
+            ui.notifications?.error?.('Failed to save journal. Check console.');
+            return;
+          }
+
+          // Manually add to DOM
+          const list = box.querySelector('.ct-persona-extra-list');
+          if (list) {
+            const empty = list.querySelector('.ct-persona-extra-empty');
+            if (empty) empty.remove();
+            const item = document.createElement('div');
+            item.className = 'ct-persona-extra-item';
+            item.dataset.extraIdx = String(newIdx);
+            item.dataset.extraUuid = droppedUuid;
+            item.dataset.extraBox = boxKey;
+            item.title = `Open ${foundry.utils.escapeHTML(docName)}`;
+            item.innerHTML = `<i class="fas fa-book"></i><span class="ct-persona-extra-name">${foundry.utils.escapeHTML(docName)}</span><button class="ct-persona-extra-remove" data-extra-remove="${newIdx}" data-extra-box="${boxKey}" title="Remove"><i class="fas fa-times"></i></button>`;
+            item.addEventListener('click', (ev) => {
+              if (ev.target.closest('[data-extra-remove]')) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              fromUuid(droppedUuid).then(d => d?.sheet?.render(true));
+            });
+            const removeBtn = item.querySelector('[data-extra-remove]');
+            if (removeBtn) {
+              removeBtn.addEventListener('click', async (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                if (!this.actor) return;
+                const arr2 = this._getPersonaExtraUuids(this.actor, boxKey);
+                if (newIdx >= 0 && newIdx < arr2.length) {
+                  arr2.splice(newIdx, 1);
+                  await this.actor.setFlag(MODULE_ID, `personaExtra_${boxKey}`, arr2);
+                  item.remove();
+                  if (list.children.length === 0) {
+                    list.innerHTML = '<div class="ct-persona-extra-empty">Drop journals here</div>';
+                  }
+                }
+              });
+            }
+            list.appendChild(item);
+          }
+        };
+      });
+      // Click to open journal (for pre-rendered items)
+      panel.querySelectorAll('[data-extra-uuid]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          if (e.target.closest('[data-extra-remove]')) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const uuid = el.dataset.extraUuid;
+          if (uuid) fromUuid(uuid).then(doc => doc?.sheet?.render(true));
+        });
+      });
+      // Remove journal (for pre-rendered items)
+      panel.querySelectorAll('[data-extra-remove]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!this.actor) return;
+          const idx = Number(btn.dataset.extraRemove);
+          const boxKey = btn.dataset.extraBox;
+          const arr = this._getPersonaExtraUuids(this.actor, boxKey);
+          if (idx >= 0 && idx < arr.length) {
+            arr.splice(idx, 1);
+            await this.actor.setFlag(MODULE_ID, `personaExtra_${boxKey}`, arr);
+            const item = btn.closest('.ct-persona-extra-item');
+            const list = item?.closest('.ct-persona-extra-list');
+            if (item) item.remove();
+            if (list && list.children.length === 0) {
+              list.innerHTML = '<div class="ct-persona-extra-empty">Drop journals here</div>';
+            }
+          }
+        });
+      });
+
+      // ── ABOUT tab: edit sections ──
+      panel.querySelectorAll('[data-about-edit]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this._openPersonaAboutDialog(btn.dataset.aboutEdit);
+        });
+      });
+    },
+
+    async _openPersonaAboutDialog(key) {
+      const actor = this.actor;
+      if (!actor || !key) return;
+      const sectionLabels = {
+        appearance: "APPEARANCE",
+        style: "STYLE",
+        usualLife: "USUAL LIFE",
+        aroundFriends: "AROUND FRIENDS / RELAXED",
+        attractionPhysical: "ATTRACTION (Physical)",
+        attractionPersonality: "ATTRACTION (Personality)",
+        repels: "REPELS",
+        natureSecrets: "NATURE and SECRETS",
+        kinksQuirks: "KINKS, QUIRKS, STRANGENESS, HABITS, NEEDS"
+      };
+      const data = this._getPersonaAboutData(actor);
+      const current = data[key] || { text: "", imageUrl: "" };
+      const label = sectionLabels[key] || key;
+
+      const dialogContent = `
+        <form class="ct-persona-about-form">
+          <div class="form-group">
+            <label>Image URL</label>
+            <input type="url" name="aboutImageUrl" maxlength="2048" value="${foundry.utils.escapeHTML(current.imageUrl || "")}" placeholder="https://example.com/image.webp" />
+          </div>
+          <div class="form-group">
+            <label>Content</label>
+            <textarea name="aboutText" rows="12" maxlength="4000" placeholder="Write about ${foundry.utils.escapeHTML(label)}...">${foundry.utils.escapeHTML(current.text || "")}</textarea>
+            <p class="notes">Up to 4000 characters.</p>
+          </div>
+        </form>`;
+
+      new Dialog({
+        title: `Edit — ${label}`,
+        content: dialogContent,
+        buttons: {
+          save: {
+            icon: '<i class="fas fa-save"></i>',
+            label: 'Save',
+            callback: async (html) => {
+              const root = html?.[0] ?? html;
+              const text = String(root.querySelector('[name="aboutText"]')?.value ?? "").trim().slice(0, 4000);
+              const imageUrl = String(root.querySelector('[name="aboutImageUrl"]')?.value ?? "").trim().slice(0, 2048);
+              const next = this._getPersonaAboutData(actor);
+              next[key] = { text, imageUrl };
+              await actor.setFlag(MODULE_ID, 'personaAbout', next);
+              this.render();
+            }
+          },
+          cancel: {
+            icon: '<i class="fas fa-times"></i>',
+            label: 'Cancel'
+          }
+        },
+        default: 'save',
+        render: (html) => {
+          const root = html?.[0] ?? html;
+          root?.querySelector('[name="aboutText"]')?.focus?.();
+        }
+      }).render(true);
     },
 
     async _openFocusedArcWidgetDialog(actor) {
