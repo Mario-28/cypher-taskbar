@@ -3,6 +3,7 @@
  */
 
 import { MODULE_ID } from "./utils.js";
+import { GlobalTaskbarDefaultsConfig } from "./global-defaults-config.js";
 
 export function registerSettings() {
   // ── Core Settings ──
@@ -334,5 +335,28 @@ function _registerMenuSettings(prefix) {
     name: "Menu Backgrounds",
     hint: "Global background images for all taskbar menus.",
     scope: "world", config: false, type: String, default: "{}"
+  });
+
+  // ── Global Taskbar Defaults ──
+  game.settings.register(MODULE_ID, "globalTaskbarDefaultsActive", {
+    name: "CYPHER_TASKBAR.Settings.GlobalDefaultsActive.Name",
+    hint: "CYPHER_TASKBAR.Settings.GlobalDefaultsActive.Hint",
+    scope: "world", config: true, type: Boolean, default: false,
+    onChange: () => {
+      if (game.cypherTaskbar?.instance) {
+        game.cypherTaskbar.instance.applySettings();
+        game.cypherTaskbar.instance.refresh();
+      }
+    }
+  });
+  game.settings.register(MODULE_ID, "globalTaskbarDefaultsData", {
+    scope: "world", config: false, type: String, default: "{}"
+  });
+  game.settings.registerMenu(MODULE_ID, "globalTaskbarDefaultsMenu", {
+    name: "CYPHER_TASKBAR.Settings.GlobalDefaultsMenu.Name",
+    label: "CYPHER_TASKBAR.Settings.GlobalDefaultsMenu.Label",
+    icon: "fas fa-globe",
+    type: GlobalTaskbarDefaultsConfig,
+    restricted: true
   });
 }

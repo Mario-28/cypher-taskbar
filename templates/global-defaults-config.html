@@ -1,0 +1,41 @@
+<form class="ct-global-defaults-form">
+  <div class="form-group">
+    <label for="ct-global-active">Activate Global Defaults</label>
+    <input type="checkbox" id="ct-global-active" name="active" {{#if active}}checked{{/if}}>
+    <p class="notes">When checked, all actors use these imported defaults unless they override a specific setting.</p>
+  </div>
+
+  <hr>
+
+  <div class="form-group">
+    <label>Import Settings</label>
+    <button type="button" class="ct-import-btn" id="ct-import-global-defaults">
+      <i class="fas fa-file-import"></i> Choose File…
+    </button>
+    <p class="notes">Select a Cypher Taskbar settings JSON file exported from any actor.</p>
+  </div>
+
+  {{#if hasData}}
+  <div class="form-group">
+    <label>Current Defaults</label>
+    <div class="ct-defaults-preview">
+      <pre>{{dataPreview}}</pre>
+    </div>
+  </div>
+  <div class="form-group">
+    <button type="button" class="ct-clear-btn" id="ct-clear-global-defaults">
+      <i class="fas fa-trash"></i> Clear Global Defaults
+    </button>
+  </div>
+  {{else}}
+  <div class="form-group">
+    <p class="notes ct-no-data"><i class="fas fa-info-circle"></i> No global defaults loaded yet.</p>
+  </div>
+  {{/if}}
+
+  <hr>
+
+  <div class="form-group">
+    <p class="notes"><strong>How it works:</strong> Imported settings become the default for all actors. When a player changes a setting in their taskbar, only that changed setting is saved to their character. Everything else continues to use these global defaults.</p>
+  </div>
+</form>

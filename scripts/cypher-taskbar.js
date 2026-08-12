@@ -679,6 +679,31 @@ class CypherTaskbar {
       return;
     }
 
+    // ── 2b. Order enforcement: must spend in sequence ──
+    if (index > 0) {
+      const prevAvailable = arr.slice(0, index).some((v, i) => {
+        const available = v === true || Number(v) > 0;
+        return available;
+      });
+      if (prevAvailable) {
+        // Show fancy snark toast that auto-fades
+        const toast = document.createElement("div");
+        toast.className = "ct-recovery-toast";
+        toast.innerHTML = `
+          <div class="ct-recovery-toast-inner">
+            <i class="fas fa-exclamation-triangle"></i>
+            <span>Seriously! Did you read the rules!</span>
+          </div>`;
+        document.body.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add("ct-show"));
+        setTimeout(() => {
+          toast.classList.remove("ct-show");
+          toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+        }, 3000);
+        return;
+      }
+    }
+
     // ── 3. Spend THIS recovery via Cypher System API or direct update ──
     const spentVal = typeof arr[index] === "boolean" ? false : 0;
     arr[index] = spentVal;
@@ -1129,11 +1154,20 @@ class CypherTaskbar {
         this._suppressNextDocumentClose = true;
         this._togglePanel(btn.dataset.panel, btn);
       };
+      // Right-click icon settings when unlocked
+      btn.oncontextmenu = (e) => {
+        if (!this._gs("menuIconsUnlocked")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        this._openMenuIconSettings(e, btn.dataset.panel);
+      };
       // Make panel buttons drop targets for items from sidebar
       const panel = btn.dataset.panel;
       if (["skills","abilities","equipment"].includes(panel)) {
         this._makePanelButtonDropTarget(btn, panel);
       }
+      // Apply per-icon settings
+      this._applyMenuIconStyles(btn);
     });
 
     // ── Mini category grid buttons (People / Places / Assets / Secrets) ──
@@ -1144,7 +1178,7 @@ class CypherTaskbar {
         e.preventDefault();
         e.stopPropagation();
         const method = miniMap[btn.dataset.mini];
-        if (method && typeof this[method] === "function") this[method]();
+        if (method && typeof this[method] === "function") this[method](btn);
       });
       // Make each mini button a drop target (even when popup is closed)
       this._makeMiniButtonDropTarget(btn, miniKeyToSetting[btn.dataset.mini]);
@@ -1971,14 +2005,28 @@ class CypherTaskbar {
     const portraitSpaceTransparent = this._gs("portraitSpaceTransparent") ?? true;
     const portraitSpaceOpacity = this._gs("portraitSpaceOpacity") ?? 0.8;
     const portraitRect = this.element.querySelector(".ct-portrait-wrap")?.getBoundingClientRect();
+    const lastPortraitTab = this._gs("lastPortraitSettingsTab") || "portrait";
+    const portraitTabs = ["portrait","identity","bars","arc","xp","opacity"];
+    const activePortraitTab = portraitTabs.includes(lastPortraitTab) ? lastPortraitTab : "portrait";
 
     const popup = document.createElement("div");
     popup.id = "ct-portrait-settings-popup";
     popup.classList.add("ct-popup");
-    // Position centered on screen
-    popup.style.left = "50%";
-    popup.style.top = "50%";
-    popup.style.transform = "translate(-50%, -50%)";
+    // Position: use saved position if available, else next to portrait
+    const savedPos = this._gjson("portraitSettingsPos");
+    if (savedPos && typeof savedPos.left === "number" && typeof savedPos.top === "number") {
+      popup.style.left = `${savedPos.left}px`;
+      popup.style.top = `${savedPos.top}px`;
+      popup.style.transform = "none";
+    } else if (portraitRect) {
+      popup.style.left = `${portraitRect.right + 12}px`;
+      popup.style.top = `${portraitRect.top}px`;
+      popup.style.transform = "none";
+    } else {
+      popup.style.left = "50%";
+      popup.style.top = "50%";
+      popup.style.transform = "translate(-50%, -50%)";
+    }
     popup.innerHTML = `
       <div class="ct-popup-header ct-portrait-settings-header">
         <div class="ct-popup-header-icon"><i class="fas fa-user-circle"></i></div>
@@ -1986,16 +2034,16 @@ class CypherTaskbar {
         <button class="ct-popup-close" title="Close"><i class="fas fa-times"></i></button>
       </div>
       <div class="ct-popup-tabs ct-portrait-settings-tabs">
-        <button class="ct-popup-tab is-active" data-tab="portrait" title="Portrait width & shadow"><i class="fas fa-image"></i><span>Portrait</span></button>
-        <button class="ct-popup-tab" data-tab="identity" title="Name panel appearance"><i class="fas fa-id-card"></i><span>Identity</span></button>
-        <button class="ct-popup-tab" data-tab="bars" title="Attribute bars layout & style"><i class="fas fa-bars"></i><span>Attribute Bar</span></button>
-        <button class="ct-popup-tab" data-tab="arc" title="Focused arc widget"><i class="fas fa-bullseye"></i><span>Arc</span></button>
-        <button class="ct-popup-tab" data-tab="xp" title="XP circle position"><i class="fas fa-star"></i><span>XP Circle</span></button>
-        <button class="ct-popup-tab" data-tab="opacity" title="Portrait space transparency"><i class="fas fa-eye-slash"></i><span>Opacity</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="portrait"?" is-active":""}" data-tab="portrait" title="Portrait width & shadow"><i class="fas fa-image"></i><span>Portrait</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="identity"?" is-active":""}" data-tab="identity" title="Name panel appearance"><i class="fas fa-id-card"></i><span>Identity</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="bars"?" is-active":""}" data-tab="bars" title="Attribute bars layout & style"><i class="fas fa-bars"></i><span>Attribute Bar</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="arc"?" is-active":""}" data-tab="arc" title="Focused arc widget"><i class="fas fa-bullseye"></i><span>Arc</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="xp"?" is-active":""}" data-tab="xp" title="XP circle position"><i class="fas fa-star"></i><span>XP Circle</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="opacity"?" is-active":""}" data-tab="opacity" title="Portrait space transparency"><i class="fas fa-eye-slash"></i><span>Opacity</span></button>
       </div>
       <div class="ct-popup-body ct-popup-body-compact ct-portrait-settings-body">
         <!-- ═══ PORTRAIT TAB ═══ -->
-        <div class="ct-popup-pane is-active" data-pane="portrait">
+        <div class="ct-popup-pane${activePortraitTab==="portrait"?" is-active":""}" data-pane="portrait">
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-image"></i> Size</div>
             <label>Portrait Width <span class="ct-val-label" id="ps-w-val">${width}px</span>
@@ -2032,7 +2080,7 @@ class CypherTaskbar {
           </div>
         </div>
         <!-- ═══ IDENTITY TAB ═══ -->
-        <div class="ct-popup-pane" data-pane="identity">
+        <div class="ct-popup-pane${activePortraitTab==="identity"?" is-active":""}" data-pane="identity">
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-palette"></i> Appearance</div>
             <label>Background Color <input type="color" id="ps-upper-bg" value="${upperPanelBgColor}"></label>
@@ -2061,7 +2109,7 @@ class CypherTaskbar {
           </div>
         </div>
         <!-- ═══ ATTRIBUTE BAR TAB ═══ -->
-        <div class="ct-popup-pane" data-pane="bars">
+        <div class="ct-popup-pane${activePortraitTab==="bars"?" is-active":""}" data-pane="bars">
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-ruler-combined"></i> Layout</div>
             <label>Bar Scale <span class="ct-val-label" id="ps-bars-val">${barScale}%</span>
@@ -2106,7 +2154,7 @@ class CypherTaskbar {
           </div>
         </div>
         <!-- ═══ ARC TAB ═══ -->
-        <div class="ct-popup-pane" data-pane="arc">
+        <div class="ct-popup-pane${activePortraitTab==="arc"?" is-active":""}" data-pane="arc">
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-arrows-alt"></i> Position</div>
             <label>Horizontal Offset <span class="ct-val-label" id="ps-arc-x-val">${arcWidgetX}%</span>
@@ -2131,7 +2179,7 @@ class CypherTaskbar {
           </div>
         </div>
         <!-- ═══ XP CIRCLE TAB ═══ -->
-        <div class="ct-popup-pane" data-pane="xp">
+        <div class="ct-popup-pane${activePortraitTab==="xp"?" is-active":""}" data-pane="xp">
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-arrows-alt"></i> Position</div>
             <label>Horizontal Offset <span class="ct-val-label" id="ps-xp-x-val">${xpCircleOffsetX}%</span>
@@ -2143,7 +2191,7 @@ class CypherTaskbar {
           </div>
         </div>
         <!-- ═══ OPACITY TAB ═══ -->
-        <div class="ct-popup-pane" data-pane="opacity">
+        <div class="ct-popup-pane${activePortraitTab==="opacity"?" is-active":""}" data-pane="opacity">
           <div class="ct-settings-section">
             <div class="ct-settings-section-title"><i class="fas fa-eye-slash"></i> Portrait Space Opacity</div>
             <label class="ct-toggle-row">Transparent Portrait Space <input type="checkbox" id="ps-space-transparent" ${portraitSpaceTransparent?"checked":""}></label>
@@ -2167,11 +2215,12 @@ class CypherTaskbar {
     });
 
     popup.querySelectorAll(".ct-popup-tab").forEach(btn => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const tab = btn.dataset.tab;
         console.log(`${MODULE_ID} | Tab clicked:`, tab);
         popup.querySelectorAll(".ct-popup-tab").forEach(el => el.classList.toggle("is-active", el === btn));
         popup.querySelectorAll(".ct-popup-pane").forEach(pane => pane.classList.toggle("is-active", pane.dataset.pane === tab));
+        await this._ss("lastPortraitSettingsTab", tab);
       });
     });
 
@@ -2186,9 +2235,12 @@ class CypherTaskbar {
       popup.style.left = `${left}px`;
       popup.style.top = `${top}px`;
     };
-    const _psOnUp = () => {
+    const _psOnUp = async () => {
       dragState = null;
       document.body.classList.remove("ct-dragging-popup");
+      // Save popup position
+      const rect = popup.getBoundingClientRect();
+      await this._ss("portraitSettingsPos", JSON.stringify({ left: rect.left, top: rect.top }));
     };
     header?.addEventListener("mousedown", (ev) => {
       if (ev.target === closeBtn || closeBtn?.contains(ev.target)) return;
@@ -2347,17 +2399,21 @@ class CypherTaskbar {
       popup.style.bottom = `${window.innerHeight - barRect.top + 8}px`;
       popup.style.left = "auto";
     }
+    const lastTab = this._gs("lastSettingsTab") || "general";
+    const tabs = ["general","sections","fonts","gallery","minimenu","icons"];
+    const activeTab = tabs.includes(lastTab) ? lastTab : "general";
     popup.innerHTML = `
-      <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+      <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <span class="ct-popup-header-actions"><button class="ct-popup-action-btn" id="ts-export" title="Export Settings"><i class="fas fa-file-export"></i></button><button class="ct-popup-action-btn" id="ts-import" title="Import Settings"><i class="fas fa-file-import"></i></button></span><button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
       <div class="ct-popup-tabs">
-        <button class="ct-popup-tab is-active" data-tab="general"><i class="fas fa-sliders-h"></i> General</button>
-        <button class="ct-popup-tab" data-tab="sections"><i class="fas fa-expand"></i> Sections</button>
-        <button class="ct-popup-tab" data-tab="fonts"><i class="fas fa-font"></i> Fonts</button>
-        <button class="ct-popup-tab" data-tab="gallery"><i class="fas fa-images"></i> Gallery Tabs</button>
-        <button class="ct-popup-tab" data-tab="minimenu"><i class="fas fa-th"></i> Mini Menu</button>
+        <button class="ct-popup-tab${activeTab==="general"?" is-active":""}" data-tab="general"><i class="fas fa-sliders-h"></i> General</button>
+        <button class="ct-popup-tab${activeTab==="sections"?" is-active":""}" data-tab="sections"><i class="fas fa-expand"></i> Sections</button>
+        <button class="ct-popup-tab${activeTab==="fonts"?" is-active":""}" data-tab="fonts"><i class="fas fa-font"></i> Fonts</button>
+        <button class="ct-popup-tab${activeTab==="gallery"?" is-active":""}" data-tab="gallery"><i class="fas fa-images"></i> Gallery Tabs</button>
+        <button class="ct-popup-tab${activeTab==="minimenu"?" is-active":""}" data-tab="minimenu"><i class="fas fa-th"></i> Mini Menu</button>
+        <button class="ct-popup-tab${activeTab==="icons"?" is-active":""}" data-tab="icons"><i class="fas fa-icons"></i> Icons</button>
       </div>
       <div class="ct-popup-body">
-        <div class="ct-popup-pane is-active" data-pane="general">
+        <div class="ct-popup-pane${activeTab==="general"?" is-active":""}" data-pane="general">
           ${ownedPCs.length > 1 ? `<label>Character <select id="ts-actor">${ownedPCs.map(a => `<option value="${a.id}"${a.id === selectedActorId ? " selected" : ""}>${foundry.utils.escapeHTML(a.name)}</option>`).join("")}<option value=""${!selectedActorId ? " selected" : ""}>Default</option></select></label>` : ""}
           <label>Height <span class="ct-val-label" id="ts-h-val">${h}px</span><input type="range" id="ts-h" min="50" max="110" step="5" value="${h}"></label>
           <label>Background <input type="color" id="ts-bg" value="${bgC}"></label>
@@ -2365,10 +2421,10 @@ class CypherTaskbar {
           <label>Accent <input type="color" id="ts-acc" value="${acc}"></label>
           <label class="ct-toggle-row">Auto-hide <input type="checkbox" id="ts-ah" ${ah?"checked":""}></label>
         </div>
-        <div class="ct-popup-pane" data-pane="sections">
+        <div class="ct-popup-pane${activeTab==="sections"?" is-active":""}" data-pane="sections">
           <label class="ct-toggle-row">Expand Sections <input type="checkbox" id="ts-sec-exp" ${secExp?"checked":""}></label>
         </div>
-        <div class="ct-popup-pane" data-pane="fonts">
+        <div class="ct-popup-pane${activeTab==="fonts"?" is-active":""}" data-pane="fonts">
           <label>Font Size <span class="ct-val-label" id="ts-mf-size-val">${mfSize}%</span><input type="range" id="ts-mf-size" min="50" max="150" step="5" value="${mfSize}"></label>
           <label>Font Color <input type="color" id="ts-mf-color" value="${mfColor}"></label>
           <label class="ct-toggle-row">Capitalize <input type="checkbox" id="ts-mf-caps" ${mfCaps?"checked":""}></label>
@@ -2380,12 +2436,12 @@ class CypherTaskbar {
             <option value="&quot;Courier New&quot;, monospace"${mfFamily.includes("Courier")?" selected":""}>Courier New</option>
           </select></label>
         </div>
-        <div class="ct-popup-pane" data-pane="gallery">
+        <div class="ct-popup-pane${activeTab==="gallery"?" is-active":""}" data-pane="gallery">
           <label class="ct-toggle-row">Show Gallery Tabs <input type="checkbox" id="ts-gt-enabled" ${gtEnabled?"checked":""}></label>
           <label>Horizontal Offset <span class="ct-val-label" id="ts-gt-off-val">${gtOffset}%</span><input type="range" id="ts-gt-offset" min="0" max="150" step="1" value="${gtOffset}"></label>
           <p class="ct-gallery-settings-hint"><i class="fas fa-info-circle"></i> Gallery tabs from the actor's cypher-gallery-tabs module appear above the taskbar. Use the offset slider to move them left or right.</p>
         </div>
-        <div class="ct-popup-pane" data-pane="minimenu">
+        <div class="ct-popup-pane${activeTab==="minimenu"?" is-active":""}" data-pane="minimenu">
           <label>Display Mode
             <select id="ts-mm-mode">
               <option value="grid"${(this._gs("miniMenuDisplayMode")||"list")==="grid"?" selected":""}>Grid</option>
@@ -2398,13 +2454,24 @@ class CypherTaskbar {
           <label class="ct-toggle-row">Show Title <input type="checkbox" id="ts-mm-title" ${this._gs("miniMenuShowTitle")!==false?"checked":""}></label>
           <label class="ct-toggle-row">Show Description <input type="checkbox" id="ts-mm-desc" ${this._gs("miniMenuShowDescription")!==false?"checked":""}></label>
         </div>
+        <div class="ct-popup-pane${activeTab==="icons"?" is-active":""}" data-pane="icons">
+          <label class="ct-toggle-row">Unlock Menu Icons <input type="checkbox" id="ts-icons-unlocked" ${this._gs("menuIconsUnlocked")?"checked":""}></label>
+          <p class="ct-gallery-settings-hint"><i class="fas fa-info-circle"></i> When unlocked, right-click any menu icon to customize its appearance individually.</p>
+          <div class="ct-popup-subhead">Default Settings (for new / reset icons)</div>
+          <label>Icon Size <span class="ct-val-label" id="ts-icon-size-val">${this._gs("menuIconSize")??100}%</span><input type="range" id="ts-icon-size" min="50" max="200" step="5" value="${this._gs("menuIconSize")??100}"></label>
+          <label>Label Size <span class="ct-val-label" id="ts-label-size-val">${this._gs("menuLabelSize")??100}%</span><input type="range" id="ts-label-size" min="50" max="200" step="5" value="${this._gs("menuLabelSize")??100}"></label>
+          <label>Icon Color <input type="color" id="ts-icon-color" value="${this._gs("menuIconColor")??"#c8a96e"}"></label>
+          <label>Label Color <input type="color" id="ts-label-color" value="${this._gs("menuLabelColor")??"#e8e8e8"}"></label>
+          <label>Background <input type="color" id="ts-icon-bg" value="${this._gs("menuIconBgColor")??"#1a1525"}"></label>
+        </div>
       </div>`;
     document.body.appendChild(popup);
     popup.querySelectorAll(".ct-popup-tab").forEach(btn => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         const tab = btn.dataset.tab;
         popup.querySelectorAll(".ct-popup-tab").forEach(el => el.classList.toggle("is-active", el === btn));
         popup.querySelectorAll(".ct-popup-pane").forEach(pane => pane.classList.toggle("is-active", pane.dataset.pane === tab));
+        await this._ss("lastSettingsTab", tab);
       });
     });
 
@@ -2435,6 +2502,13 @@ class CypherTaskbar {
       await this._ss("miniMenuPadding", parseInt(popup.querySelector("#ts-mm-padding")?.value || 0));
       await this._ss("miniMenuShowTitle", popup.querySelector("#ts-mm-title")?.checked ?? true);
       await this._ss("miniMenuShowDescription", popup.querySelector("#ts-mm-desc")?.checked ?? true);
+      // Icon settings
+      await this._ss("menuIconsUnlocked", popup.querySelector("#ts-icons-unlocked")?.checked ?? false);
+      await this._ss("menuIconSize", parseInt(popup.querySelector("#ts-icon-size")?.value ?? 100));
+      await this._ss("menuLabelSize", parseInt(popup.querySelector("#ts-label-size")?.value ?? 100));
+      await this._ss("menuIconColor", popup.querySelector("#ts-icon-color")?.value ?? "#c8a96e");
+      await this._ss("menuLabelColor", popup.querySelector("#ts-label-color")?.value ?? "#e8e8e8");
+      await this._ss("menuIconBgColor", popup.querySelector("#ts-icon-bg")?.value ?? "#1a1525");
       this._resolveActor();
       this.reposition(); this.applySettings();
       if (newActorId !== (this.actor?.id ?? "")) this.render();
@@ -2446,9 +2520,229 @@ class CypherTaskbar {
     popup.querySelector("#ts-gt-offset")?.addEventListener("input",e=>{popup.querySelector("#ts-gt-off-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ts-mm-size")?.addEventListener("input",e=>{popup.querySelector("#ts-mm-size-val").textContent=e.target.value+"px";apply();});
     popup.querySelector("#ts-mm-padding")?.addEventListener("input",e=>{popup.querySelector("#ts-mm-pad-val").textContent=e.target.value+"px";apply();});
+    // Icon settings listeners
+    popup.querySelector("#ts-icon-size")?.addEventListener("input",e=>{popup.querySelector("#ts-icon-size-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ts-label-size")?.addEventListener("input",e=>{popup.querySelector("#ts-label-size-val").textContent=e.target.value+"%";apply();});
     popup.querySelectorAll("select,input[type=color],input[type=checkbox]").forEach(el=>el.addEventListener("change",apply));
+
+    // ── Export / Import Settings ──
+    popup.querySelector("#ts-export")?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const actor = this.actor;
+      if (!actor) { ui.notifications.warn("No character assigned."); return; }
+      const prefs = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
+
+      const taskbarKeys = [
+        "taskbarHeight","bgColor","bgOpacity","accentColor","locked","autoHide",
+        "portraitWidth","portraitAreaCollapsed","sectionsExpanded",
+        "menuFontSize","menuFontColor","menuFontFamily","menuFontCaps",
+        "miniMenuDisplayMode","miniMenuItemSize","miniMenuPadding",
+        "menuIconSize","menuLabelSize","menuIconColor","menuLabelColor","menuIconBgColor",
+        "menuIconsUnlocked","menuIconSettings",
+        "galleryTabsFontSize","galleryTabsFontColor","galleryTabsIconColor","galleryTabsBackground",
+        "lastSettingsTab"
+      ];
+      const portraitKeys = [
+        "portraitShadowBlur","portraitShadowColor","portraitShadowOpacity",
+        "portraitShadowOffsetX","portraitShadowOffsetY",
+        "upperPanelBgColor","upperPanelOpacity",
+        "namePanelBgColor","namePanelOpacity","namePanelFontSize","namePanelFontColor","namePanelFontFamily",
+        "bar1Color","bar2Color","bar3Color","bar1TextColor","bar2TextColor","bar3TextColor",
+        "arcBarColor","arcBarGlow","arcBarTextColor",
+        "xpCircleColor","xpCircleSize","xpCircleOffsetX","xpCircleOffsetY",
+        "portraitSpaceTransparent","portraitSpaceOpacity",
+        "portraitSettingsPos","lastPortraitSettingsTab"
+      ];
+
+      const taskbarSettings = {};
+      const portraitSettings = {};
+      const otherSettings = {};
+      for (const [k, v] of Object.entries(prefs)) {
+        if (taskbarKeys.includes(k)) taskbarSettings[k] = v;
+        else if (portraitKeys.includes(k)) portraitSettings[k] = v;
+        else otherSettings[k] = v;
+      }
+
+      const exportData = {
+        module: "cypher-taskbar",
+        version: game.modules.get("cypher-taskbar")?.data?.version ?? "unknown",
+        exportedAt: new Date().toISOString(),
+        actorName: actor.name,
+        actorId: actor.id,
+        taskbarSettings,
+        portraitSettings,
+        otherSettings
+      };
+
+      const fileName = `cypher-taskbar-settings-${actor.name?.replace(/[^a-z0-9]/gi, "_") || "actor"}.json`;
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const dataUrl = "data:application/json;charset=utf-8," + encodeURIComponent(jsonStr);
+      const a = document.createElement("a");
+      a.style.position = "absolute";
+      a.style.visibility = "hidden";
+      a.href = dataUrl;
+      a.download = fileName;
+      a.target = "_self";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.dispatchEvent(new MouseEvent("click", { bubbles: false, cancelable: true, view: window }));
+      setTimeout(() => {
+        a.remove();
+      }, 2000);
+      ui.notifications.info(`Settings exported for "${actor.name}". File downloaded.`);
+    });
+
+    popup.querySelector("#ts-import")?.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".json";
+      input.style.display = "none";
+      input.addEventListener("change", async (ev) => {
+        const file = ev.target.files?.[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+
+          const imported = {};
+          if (data.taskbarSettings && typeof data.taskbarSettings === "object") {
+            Object.assign(imported, data.taskbarSettings);
+          }
+          if (data.portraitSettings && typeof data.portraitSettings === "object") {
+            Object.assign(imported, data.portraitSettings);
+          }
+          if (data.otherSettings && typeof data.otherSettings === "object") {
+            Object.assign(imported, data.otherSettings);
+          }
+          if (Object.keys(imported).length === 0 && data.settings && typeof data.settings === "object") {
+            Object.assign(imported, data.settings);
+          }
+          if (Object.keys(imported).length === 0) {
+            ui.notifications.error("Invalid settings file: no recognizable settings section.");
+            return;
+          }
+
+          const actor = this.actor;
+          if (!actor) { ui.notifications.warn("No character assigned."); return; }
+          const current = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
+          const merged = { ...current, ...imported };
+          await actor.setFlag("cypher-taskbar", "taskbarPrefs", merged);
+          this.applySettings();
+          this.refresh();
+          ui.notifications.info(`Settings imported successfully. (${Object.keys(imported).length} settings)`);
+        } catch (err) {
+          console.error(`${MODULE_ID} | Import failed:`, err);
+          ui.notifications.error("Failed to import settings. Check file format.");
+        }
+        input.remove();
+      });
+      document.body.appendChild(input);
+      input.click();
+    });
+
     popup.querySelector(".ct-popup-close").addEventListener("click",()=>popup.remove());
     setTimeout(()=>{ document.addEventListener("click",function h(e){if(!popup.contains(e.target)){popup.remove();document.removeEventListener("click",h);}});},50);
+  }
+
+  _getIconSettings(panelKey) {
+    const all = this._gjson("menuIconSettings", {});
+    const defaults = {
+      iconSize: this._gs("menuIconSize") ?? 100,
+      labelSize: this._gs("menuLabelSize") ?? 100,
+      iconColor: this._gs("menuIconColor") ?? "#c8a96e",
+      labelColor: this._gs("menuLabelColor") ?? "#e8e8e8",
+      bgColor: this._gs("menuIconBgColor") ?? "#1a1525"
+    };
+    return { ...defaults, ...(all[panelKey] || {}) };
+  }
+
+  /** Apply per-icon CSS variables to a menu panel button */
+  _applyMenuIconStyles(btn) {
+    const panel = btn.dataset.panel;
+    if (!panel) return;
+    const isettings = this._getIconSettings(panel);
+    btn.style.setProperty("--ct-menu-icon-size", isettings.iconSize / 100);
+    btn.style.setProperty("--ct-menu-label-size", isettings.labelSize / 100);
+    btn.style.setProperty("--ct-menu-icon-color", isettings.iconColor);
+    btn.style.setProperty("--ct-menu-label-color", isettings.labelColor);
+    btn.style.setProperty("--ct-menu-icon-bg", isettings.bgColor);
+  }
+
+  async _setIconSetting(panelKey, key, value) {
+    const all = this._gjson("menuIconSettings", {});
+    if (!all[panelKey]) all[panelKey] = {};
+    all[panelKey][key] = value;
+    await this._ss("menuIconSettings", JSON.stringify(all));
+  }
+
+  _openMenuIconSettings(e, panelKey) {
+    document.querySelector("#ct-menu-icon-settings-popup")?.remove();
+    const popup = document.createElement("div");
+    popup.id = "ct-menu-icon-settings-popup";
+    popup.classList.add("ct-popup");
+    popup.style.minWidth = "220px";
+
+    // Position above the clicked button
+    const btn = e.currentTarget;
+    const rect = btn?.getBoundingClientRect?.();
+    if (rect) {
+      popup.style.left = `${rect.left + rect.width / 2}px`;
+      popup.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+      popup.style.top = "auto";
+      popup.style.transform = "translateX(-50%)";
+    } else {
+      popup.style.left = `${e.clientX}px`;
+      popup.style.top = `${e.clientY - 10}px`;
+    }
+
+    const s = this._getIconSettings(panelKey);
+    const panelNames = { persona: "Persona", skills: "Skills", abilities: "Abilities", combat: "Combat", equipment: "Equipment", spells: "Spells" };
+
+    popup.innerHTML = `
+      <div class="ct-popup-header"><i class="fas fa-paint-brush"></i> ${panelNames[panelKey] || panelKey} Icon <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+      <div class="ct-popup-body">
+        <label>Icon Size <span class="ct-val-label" id="mi-size-val">${s.iconSize}%</span><input type="range" id="mi-size" min="50" max="200" step="5" value="${s.iconSize}"></label>
+        <label>Label Size <span class="ct-val-label" id="mi-label-val">${s.labelSize}%</span><input type="range" id="mi-label" min="50" max="200" step="5" value="${s.labelSize}"></label>
+        <label>Icon Color <input type="color" id="mi-icon-color" value="${s.iconColor}"></label>
+        <label>Label Color <input type="color" id="mi-label-color" value="${s.labelColor}"></label>
+        <label>Background <input type="color" id="mi-bg" value="${s.bgColor}"></label>
+        <button class="ct-btn" id="mi-reset" style="margin-top:6px;font-size:0.7em;"><i class="fas fa-undo"></i> Reset to Defaults</button>
+      </div>`;
+    document.body.appendChild(popup);
+
+    const apply = async () => {
+      await this._setIconSetting(panelKey, "iconSize", parseInt(popup.querySelector("#mi-size").value));
+      await this._setIconSetting(panelKey, "labelSize", parseInt(popup.querySelector("#mi-label").value));
+      await this._setIconSetting(panelKey, "iconColor", popup.querySelector("#mi-icon-color").value);
+      await this._setIconSetting(panelKey, "labelColor", popup.querySelector("#mi-label-color").value);
+      await this._setIconSetting(panelKey, "bgColor", popup.querySelector("#mi-bg").value);
+      this.applySettings();
+    };
+
+    popup.querySelector("#mi-reset").addEventListener("click", async () => {
+      const all = this._gjson("menuIconSettings", {});
+      delete all[panelKey];
+      await this._ss("menuIconSettings", JSON.stringify(all));
+      this.applySettings();
+      popup.remove();
+    });
+
+    popup.querySelector("#mi-size").addEventListener("input", ev => {
+      popup.querySelector("#mi-size-val").textContent = ev.target.value + "%";
+      apply();
+    });
+    popup.querySelector("#mi-label").addEventListener("input", ev => {
+      popup.querySelector("#mi-label-val").textContent = ev.target.value + "%";
+      apply();
+    });
+    popup.querySelectorAll("input[type=color]").forEach(el => el.addEventListener("change", apply));
+    popup.querySelector(".ct-popup-close").addEventListener("click", () => popup.remove());
+    setTimeout(() => {
+      document.addEventListener("click", function h(ev) {
+        if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener("click", h); }
+      });
+    }, 50);
   }
 
   async _toggleLock() {
@@ -3576,7 +3870,7 @@ class CypherTaskbar {
      onto it to store. Stored per-actor via _gjson / _ss.
      ================================================================ */
 
-  _openMiniContainer(key, title, iconClass, color) {
+  _openMiniContainer(key, title, iconClass, color, sourceBtn) {
     const existing = document.querySelector("#ct-mini-popup");
     // If another mini menu is open, close it and continue opening this one
     if (existing) existing.remove();
@@ -3618,10 +3912,19 @@ class CypherTaskbar {
       </div>`;
     document.body.appendChild(popup);
 
-    // Position centered on screen
-    popup.style.left = "50%";
-    popup.style.top = "50%";
-    popup.style.transform = "translate(-50%, -50%)";
+    // Position above the source button (bottom-left corner of popup at top-left of button)
+    if (sourceBtn) {
+      const rect = sourceBtn.getBoundingClientRect();
+      popup.style.left = `${rect.left}px`;
+      popup.style.bottom = `${window.innerHeight - rect.top + 6}px`;
+      popup.style.top = "auto";
+      popup.style.transform = "none";
+    } else {
+      // Fallback: centered on screen
+      popup.style.left = "50%";
+      popup.style.top = "50%";
+      popup.style.transform = "translate(-50%, -50%)";
+    }
     // Set CSS vars for icon size and padding
     const _calcIconSize = () => {
       popup.style.setProperty("--ct-mini-icon-size", `${itemSize}px`);
@@ -3633,7 +3936,7 @@ class CypherTaskbar {
 
     // —— Close on click outside ——
     const _onDocClick = (e) => {
-      if (!popup.contains(e.target) && !btn?.contains(e.target)) {
+      if (!popup.contains(e.target) && !sourceBtn?.contains(e.target)) {
         popup.remove();
         document.removeEventListener("click", _onDocClick);
       }
@@ -4078,10 +4381,10 @@ class CypherTaskbar {
     }, { width: 420, classes: ["dialog", "ct-journal-edit-dialog"] }).render(true);
   }
 
-  _openPeoplePanel()   { this._openMiniContainer("people",  "PEOPLE",  "fas fa-users", "#8fbc8f"); }
-  _openPlacesPanel()   { this._openMiniContainer("places",  "PLACES",  "fas fa-map-marker-alt", "#c4a86b"); }
-  _openAssetsPanel()   { this._openMiniContainer("assets",  "ASSETS",  "fas fa-coins", "#d4af37"); }
-  _openSecretsPanel()  { this._openMiniContainer("secrets", "SECRETS", "fas fa-user-secret", "#9b59b6"); }
+  _openPeoplePanel(btn)   { this._openMiniContainer("people",  "PEOPLE",  "fas fa-users", "#8fbc8f", btn); }
+  _openPlacesPanel(btn)   { this._openMiniContainer("places",  "PLACES",  "fas fa-map-marker-alt", "#c4a86b", btn); }
+  _openAssetsPanel(btn)   { this._openMiniContainer("assets",  "ASSETS",  "fas fa-coins", "#d4af37", btn); }
+  _openSecretsPanel(btn)  { this._openMiniContainer("secrets", "SECRETS", "fas fa-user-secret", "#9b59b6", btn); }
 
   /**
    * Make a mini-grid button into a drop target.
@@ -4712,6 +5015,12 @@ class CypherTaskbar {
     bar.style.setProperty("--ct-menu-font-color", this._gs("menuFontColor") ?? "#e8e8e8");
     bar.style.setProperty("--ct-menu-font-caps", (this._gs("menuFontCaps") ?? false) ? "uppercase" : "none");
     bar.style.setProperty("--ct-menu-font-family", this._gs("menuFontFamily") ?? "inherit");
+    // Menu icon settings
+    bar.style.setProperty("--ct-menu-icon-size", (this._gs("menuIconSize") ?? 100) / 100);
+    bar.style.setProperty("--ct-menu-label-size", (this._gs("menuLabelSize") ?? 100) / 100);
+    bar.style.setProperty("--ct-menu-icon-color", this._gs("menuIconColor") ?? "var(--ct-accent)");
+    bar.style.setProperty("--ct-menu-label-color", this._gs("menuLabelColor") ?? "var(--ct-text)");
+    bar.style.setProperty("--ct-menu-icon-bg", this._gs("menuIconBgColor") ?? "transparent");
     this._applyLiveStuffButtonSettings({
       stuffBtnIconColor: this._gs("stuffBtnIconColor") ?? "#c8a96e",
       stuffBtnIconSize: this._gs("stuffBtnIconSize") ?? 100,
@@ -4949,10 +5258,19 @@ class CypherTaskbar {
           this._suppressNextDocumentClose = true;
           this._togglePanel(btn.dataset.panel, btn);
         };
+        // Right-click icon settings when unlocked
+        btn.oncontextmenu = (e) => {
+          if (!this._gs("menuIconsUnlocked")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          this._openMenuIconSettings(e, btn.dataset.panel);
+        };
         const panel = btn.dataset.panel;
         if (["skills","abilities","equipment"].includes(panel)) {
           this._makePanelButtonDropTarget(btn, panel);
         }
+        // Apply per-icon settings
+        this._applyMenuIconStyles(btn);
       });
       // Re-bind mini category grid buttons
       const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", assets: "_openAssetsPanel", secrets: "_openSecretsPanel" };
@@ -4962,7 +5280,7 @@ class CypherTaskbar {
           e.preventDefault();
           e.stopPropagation();
           const method = miniMap[btn.dataset.mini];
-          if (method && typeof this[method] === "function") this[method]();
+          if (method && typeof this[method] === "function") this[method](btn);
         });
         this._makeMiniButtonDropTarget(btn, miniKeyToSetting[btn.dataset.mini]);
       });
