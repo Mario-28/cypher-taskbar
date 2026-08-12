@@ -764,15 +764,6 @@
 .ct-btn-active { background: rgba(200,169,110,0.22) !important; border-color: var(--ct-accent) !important; color: var(--ct-accent) !important; }
 .ct-btn-disabled, .ct-btn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
-/* ── Popup header actions ── */
-.ct-popup-header-actions { display: flex; gap: 4px; align-items: center; margin-left: auto; margin-right: 6px; }
-.ct-popup-action-btn {
-  background: rgba(255,255,255,0.08); border: 1px solid var(--ct-border);
-  border-radius: 5px; color: var(--ct-accent); cursor: pointer;
-  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
-  font-size: 0.7em; transition: background 0.2s, border-color 0.2s;
-}
-.ct-popup-action-btn:hover { background: rgba(200,169,110,0.2); border-color: var(--ct-accent); }
 /* ── Stuff Button ── */
 /* ── Stuff Panel ── */
 #ct-stuff-panel .ct-popup-header-actions { display: flex; gap: 4px; align-items: center; }
@@ -9087,80 +9078,4 @@ backdrop-filter: blur(8px);
 @keyframes ct-toast-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
-}
-
-/* ═══════════════════════════════════════
-   Global Defaults Config Dialog
-   ═══════════════════════════════════════ */
-.ct-global-defaults-form {
-  padding: 8px 4px;
-}
-.ct-global-defaults-form .form-group {
-  margin-bottom: 12px;
-}
-.ct-global-defaults-form .form-group label {
-  font-weight: 600;
-  color: #e8d5a3;
-  font-size: 0.95em;
-}
-.ct-global-defaults-form .notes {
-  color: #a09888;
-  font-size: 0.82em;
-  line-height: 1.4;
-}
-.ct-global-defaults-form .notes strong {
-  color: #d4c4a0;
-}
-.ct-global-defaults-form hr {
-  border: none;
-  border-top: 1px solid rgba(200, 169, 110, 0.2);
-  margin: 16px 0;
-}
-.ct-global-defaults-form .ct-import-btn,
-.ct-global-defaults-form .ct-clear-btn {
-  background: linear-gradient(180deg, #2a2520 0%, #1a1714 100%);
-  border: 1px solid rgba(200, 169, 110, 0.35);
-  border-radius: 6px;
-  color: #e8d5a3;
-  padding: 8px 16px;
-  font-size: 0.9em;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.ct-global-defaults-form .ct-import-btn:hover {
-  background: linear-gradient(180deg, #3a3328 0%, #2a2520 100%);
-  border-color: rgba(200, 169, 110, 0.6);
-  box-shadow: 0 0 12px rgba(200, 169, 110, 0.15);
-}
-.ct-global-defaults-form .ct-clear-btn {
-  border-color: rgba(217, 64, 64, 0.4);
-  color: #ffaaaa;
-}
-.ct-global-defaults-form .ct-clear-btn:hover {
-  background: linear-gradient(180deg, #3a2020 0%, #2a1515 100%);
-  border-color: rgba(217, 64, 64, 0.7);
-  box-shadow: 0 0 12px rgba(217, 64, 64, 0.15);
-}
-.ct-global-defaults-form .ct-defaults-preview {
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(200, 169, 110, 0.15);
-  border-radius: 6px;
-  padding: 10px 14px;
-  max-height: 200px;
-  overflow: auto;
-}
-.ct-global-defaults-form .ct-defaults-preview pre {
-  margin: 0;
-  font-size: 0.78em;
-  line-height: 1.5;
-  color: #c8b898;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.ct-global-defaults-form .ct-no-data {
-  color: #887766;
-  font-style: italic;
 }

@@ -1166,8 +1166,6 @@ class CypherTaskbar {
       if (["skills","abilities","equipment"].includes(panel)) {
         this._makePanelButtonDropTarget(btn, panel);
       }
-      // Apply per-icon settings
-      this._applyMenuIconStyles(btn);
     });
 
     // ── Mini category grid buttons (People / Places / Assets / Secrets) ──
@@ -2403,7 +2401,7 @@ class CypherTaskbar {
     const tabs = ["general","sections","fonts","gallery","minimenu","icons"];
     const activeTab = tabs.includes(lastTab) ? lastTab : "general";
     popup.innerHTML = `
-      <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <span class="ct-popup-header-actions"><button class="ct-popup-action-btn" id="ts-export" title="Export Settings"><i class="fas fa-file-export"></i></button><button class="ct-popup-action-btn" id="ts-import" title="Import Settings"><i class="fas fa-file-import"></i></button></span><button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+      <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
       <div class="ct-popup-tabs">
         <button class="ct-popup-tab${activeTab==="general"?" is-active":""}" data-tab="general"><i class="fas fa-sliders-h"></i> General</button>
         <button class="ct-popup-tab${activeTab==="sections"?" is-active":""}" data-tab="sections"><i class="fas fa-expand"></i> Sections</button>
@@ -2524,123 +2522,6 @@ class CypherTaskbar {
     popup.querySelector("#ts-icon-size")?.addEventListener("input",e=>{popup.querySelector("#ts-icon-size-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ts-label-size")?.addEventListener("input",e=>{popup.querySelector("#ts-label-size-val").textContent=e.target.value+"%";apply();});
     popup.querySelectorAll("select,input[type=color],input[type=checkbox]").forEach(el=>el.addEventListener("change",apply));
-
-    // ── Export / Import Settings ──
-    popup.querySelector("#ts-export")?.addEventListener("click", async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const actor = this.actor;
-      if (!actor) { ui.notifications.warn("No character assigned."); return; }
-      const prefs = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
-
-      const taskbarKeys = [
-        "taskbarHeight","bgColor","bgOpacity","accentColor","locked","autoHide",
-        "portraitWidth","portraitAreaCollapsed","sectionsExpanded",
-        "menuFontSize","menuFontColor","menuFontFamily","menuFontCaps",
-        "miniMenuDisplayMode","miniMenuItemSize","miniMenuPadding",
-        "menuIconSize","menuLabelSize","menuIconColor","menuLabelColor","menuIconBgColor",
-        "menuIconsUnlocked","menuIconSettings",
-        "galleryTabsFontSize","galleryTabsFontColor","galleryTabsIconColor","galleryTabsBackground",
-        "lastSettingsTab"
-      ];
-      const portraitKeys = [
-        "portraitShadowBlur","portraitShadowColor","portraitShadowOpacity",
-        "portraitShadowOffsetX","portraitShadowOffsetY",
-        "upperPanelBgColor","upperPanelOpacity",
-        "namePanelBgColor","namePanelOpacity","namePanelFontSize","namePanelFontColor","namePanelFontFamily",
-        "bar1Color","bar2Color","bar3Color","bar1TextColor","bar2TextColor","bar3TextColor",
-        "arcBarColor","arcBarGlow","arcBarTextColor",
-        "xpCircleColor","xpCircleSize","xpCircleOffsetX","xpCircleOffsetY",
-        "portraitSpaceTransparent","portraitSpaceOpacity",
-        "portraitSettingsPos","lastPortraitSettingsTab"
-      ];
-
-      const taskbarSettings = {};
-      const portraitSettings = {};
-      const otherSettings = {};
-      for (const [k, v] of Object.entries(prefs)) {
-        if (taskbarKeys.includes(k)) taskbarSettings[k] = v;
-        else if (portraitKeys.includes(k)) portraitSettings[k] = v;
-        else otherSettings[k] = v;
-      }
-
-      const exportData = {
-        module: "cypher-taskbar",
-        version: game.modules.get("cypher-taskbar")?.data?.version ?? "unknown",
-        exportedAt: new Date().toISOString(),
-        actorName: actor.name,
-        actorId: actor.id,
-        taskbarSettings,
-        portraitSettings,
-        otherSettings
-      };
-
-      const fileName = `cypher-taskbar-settings-${actor.name?.replace(/[^a-z0-9]/gi, "_") || "actor"}.json`;
-      const jsonStr = JSON.stringify(exportData, null, 2);
-      const dataUrl = "data:application/json;charset=utf-8," + encodeURIComponent(jsonStr);
-      const a = document.createElement("a");
-      a.style.position = "absolute";
-      a.style.visibility = "hidden";
-      a.href = dataUrl;
-      a.download = fileName;
-      a.target = "_self";
-      a.rel = "noopener noreferrer";
-      document.body.appendChild(a);
-      a.dispatchEvent(new MouseEvent("click", { bubbles: false, cancelable: true, view: window }));
-      setTimeout(() => {
-        a.remove();
-      }, 2000);
-      ui.notifications.info(`Settings exported for "${actor.name}". File downloaded.`);
-    });
-
-    popup.querySelector("#ts-import")?.addEventListener("click", () => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = ".json";
-      input.style.display = "none";
-      input.addEventListener("change", async (ev) => {
-        const file = ev.target.files?.[0];
-        if (!file) return;
-        try {
-          const text = await file.text();
-          const data = JSON.parse(text);
-
-          const imported = {};
-          if (data.taskbarSettings && typeof data.taskbarSettings === "object") {
-            Object.assign(imported, data.taskbarSettings);
-          }
-          if (data.portraitSettings && typeof data.portraitSettings === "object") {
-            Object.assign(imported, data.portraitSettings);
-          }
-          if (data.otherSettings && typeof data.otherSettings === "object") {
-            Object.assign(imported, data.otherSettings);
-          }
-          if (Object.keys(imported).length === 0 && data.settings && typeof data.settings === "object") {
-            Object.assign(imported, data.settings);
-          }
-          if (Object.keys(imported).length === 0) {
-            ui.notifications.error("Invalid settings file: no recognizable settings section.");
-            return;
-          }
-
-          const actor = this.actor;
-          if (!actor) { ui.notifications.warn("No character assigned."); return; }
-          const current = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
-          const merged = { ...current, ...imported };
-          await actor.setFlag("cypher-taskbar", "taskbarPrefs", merged);
-          this.applySettings();
-          this.refresh();
-          ui.notifications.info(`Settings imported successfully. (${Object.keys(imported).length} settings)`);
-        } catch (err) {
-          console.error(`${MODULE_ID} | Import failed:`, err);
-          ui.notifications.error("Failed to import settings. Check file format.");
-        }
-        input.remove();
-      });
-      document.body.appendChild(input);
-      input.click();
-    });
-
     popup.querySelector(".ct-popup-close").addEventListener("click",()=>popup.remove());
     setTimeout(()=>{ document.addEventListener("click",function h(e){if(!popup.contains(e.target)){popup.remove();document.removeEventListener("click",h);}});},50);
   }
@@ -2655,18 +2536,6 @@ class CypherTaskbar {
       bgColor: this._gs("menuIconBgColor") ?? "#1a1525"
     };
     return { ...defaults, ...(all[panelKey] || {}) };
-  }
-
-  /** Apply per-icon CSS variables to a menu panel button */
-  _applyMenuIconStyles(btn) {
-    const panel = btn.dataset.panel;
-    if (!panel) return;
-    const isettings = this._getIconSettings(panel);
-    btn.style.setProperty("--ct-menu-icon-size", isettings.iconSize / 100);
-    btn.style.setProperty("--ct-menu-label-size", isettings.labelSize / 100);
-    btn.style.setProperty("--ct-menu-icon-color", isettings.iconColor);
-    btn.style.setProperty("--ct-menu-label-color", isettings.labelColor);
-    btn.style.setProperty("--ct-menu-icon-bg", isettings.bgColor);
   }
 
   async _setIconSetting(panelKey, key, value) {
@@ -5270,7 +5139,12 @@ class CypherTaskbar {
           this._makePanelButtonDropTarget(btn, panel);
         }
         // Apply per-icon settings
-        this._applyMenuIconStyles(btn);
+        const isettings = this._getIconSettings(panel);
+        btn.style.setProperty("--ct-menu-icon-size", isettings.iconSize / 100);
+        btn.style.setProperty("--ct-menu-label-size", isettings.labelSize / 100);
+        btn.style.setProperty("--ct-menu-icon-color", isettings.iconColor);
+        btn.style.setProperty("--ct-menu-label-color", isettings.labelColor);
+        btn.style.setProperty("--ct-menu-icon-bg", isettings.bgColor);
       });
       // Re-bind mini category grid buttons
       const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", assets: "_openAssetsPanel", secrets: "_openSecretsPanel" };
