@@ -28,12 +28,16 @@ class CypherTaskbar {
     this._combatSidebarSettings = null;
     this._combatSlotsUnlocked = false;
     this._hideTimeout = null;
+    this._els = null; // DOM element cache
     this._boundEnter = this._onMouseEnter.bind(this);
     this._boundLeave = this._onMouseLeave.bind(this);
     this._resolveActor();
     this._equipmentSubTab = "home"; // home | equip | weapon | armor
     this._combatSidebarSettings = this._loadCombatSettings();
     this._suppressRender = false;
+    this._cashOpPending = 0;
+    this._cashSuppressTimer = null;
+    this._cashPanelLocked = false;
   }
 
   /** Get setting: per-actor preference first, then global fallback */
@@ -79,7 +83,8 @@ class CypherTaskbar {
         abilities: "ct-ab",
         spells: "ct-sp",
         persona: "ct-persona",
-        combat: "ct-combat"
+        combat: "ct-combat",
+        cash: "ct-cash"
       };
       const p = prefixMap[menuKey];
       if (!p) return "";
@@ -88,6 +93,17 @@ class CypherTaskbar {
     } catch (e) {
       console.warn("CypherTaskbar | menuBackgrounds parse error:", e);
       return "";
+    }
+  }
+
+  _getMenuBackgroundValue(menuKey, prop) {
+    try {
+      const raw = game.settings.get(MODULE_ID, "menuBackgrounds");
+      const data = typeof raw === "string" ? JSON.parse(raw || "{}") : (raw || {});
+      const cfg = data[menuKey] || {};
+      return cfg[prop];
+    } catch {
+      return undefined;
     }
   }
 
@@ -125,6 +141,9 @@ class CypherTaskbar {
       document.querySelector(`#${MODULE_ID}-bar`)?.remove();
       document.querySelector(".cgt-panel")?.remove();
 
+      // Ensure actor is resolved before building DOM
+      this._resolveActor();
+
       const bar = document.createElement("div");
       bar.id = `${MODULE_ID}-bar`;
       bar.classList.add("cypher-taskbar");
@@ -138,6 +157,7 @@ class CypherTaskbar {
       }
       this.applySettings();
       this._bindEvents();
+      this._buildElCache(); // Cache frequently accessed DOM elements
       this._bindStatusEffectTooltips();
       bindGalleryStripEvents(this);
       this.updateAutoHide();
@@ -148,9 +168,37 @@ class CypherTaskbar {
       this._adjustCanvasPadding(
         this._gs("locked") || !this._gs("autoHide")
       );
+      // Aggressive re-apply: actor flags may load async, so retry multiple times
+      requestAnimationFrame(() => { if (this.element) this.applySettings(); });
+      setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 50);
+      setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 200);
+      setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 500);
     } catch (err) {
       console.error(`${MODULE_ID} | render() failed:`, err);
     }
+  }
+
+  // Build DOM element cache for frequently accessed elements
+  _buildElCache() {
+    const bar = this.element;
+    if (!bar) return;
+    this._els = {
+      bar,
+      portrait: bar.querySelector(".ct-portrait"),
+      portraitWrap: bar.querySelector(".ct-portrait-wrap"),
+      eyeBtn: bar.querySelector("#ct-btn-eye"),
+      xpOrb: bar.querySelector(".ct-xp-orb"),
+      lockBtn: bar.querySelector("#ct-btn-lock"),
+      settingsBtn: bar.querySelector("#ct-btn-settings"),
+      section1: bar.querySelector(".ct-section-1"),
+      section2: bar.querySelector(".ct-section-2"),
+      statBars: () => bar.querySelectorAll(".ct-stat-bar-wrap[data-pool]"),
+      rollBtns: () => bar.querySelectorAll(".ct-roll-btn[data-roll-stat]"),
+      diceBtns: () => bar.querySelectorAll(".ct-dice-btn"),
+      recoveryDrops: () => bar.querySelectorAll(".ct-recovery-drop[data-recovery-index]"),
+      panelBtns: () => bar.querySelectorAll(".ct-btn[data-panel]"),
+      miniBtns: () => bar.querySelectorAll(".ct-mini-btn[data-mini]"),
+    };
   }
 
   _buildHTML() {
@@ -562,6 +610,17 @@ class CypherTaskbar {
                 title="${b.label}" ${noActor?"disabled":""}>
           <i class="${b.icon}"></i><span>${b.label}</span>
         </button>`).join("")}
+      <!-- Cash & Values + Assets stacked buttons -->
+      <div class="ct-btn-stack" title="Valuables">
+        <button class="ct-btn${noActor?" ct-btn-disabled":""}" data-panel="cash"
+                title="Cash & Values" ${noActor?"disabled":""}>
+          <i class="fas fa-coins"></i>
+        </button>
+        <button class="ct-btn${noActor?" ct-btn-disabled":""}" data-panel="assets"
+                title="Assets" ${noActor?"disabled":""}>
+          <i class="fas fa-landmark"></i>
+        </button>
+      </div>
       <!-- Compact 2x2 category grid -->
       <div class="ct-mini-grid" title="Quick category menus">
         <button class="ct-mini-btn" data-mini="people" title="People"><i class="fas fa-users"></i></button>
@@ -745,6 +804,8 @@ class CypherTaskbar {
         </div>
       </div>`;
     const s = document.createElement("style"); s.id = "ct-recdlg-style";
+    // Remove old style if exists (prevent accumulation)
+    document.getElementById("ct-recdlg-style")?.remove();
     s.textContent = `
       @keyframes ct-recglow { 0%,100%{opacity:0.35;transform:translate(-50%,-50%) scale(1)}50%{opacity:0.65;transform:translate(-50%,-50%) scale(1.1)} }
       @keyframes ct-reconfetti { from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)} }
@@ -1166,6 +1227,8 @@ class CypherTaskbar {
       if (["skills","abilities","equipment"].includes(panel)) {
         this._makePanelButtonDropTarget(btn, panel);
       }
+      // Apply per-icon settings
+      this._applyMenuIconStyles(btn);
     });
 
     // ── Mini category grid buttons (People / Places / Assets / Secrets) ──
@@ -1422,6 +1485,11 @@ class CypherTaskbar {
       return;
     }
 
+    // Close current panel (force if locked, since we're switching)
+    if (this.activePanel) this._closePanel(true);
+
+    if (key === "cash") this._cashPanelLocked = true;
+
     this.activePanel = key;
     this.element?.querySelectorAll(".ct-btn").forEach(b => b.classList.remove("ct-btn-active"));
     btnEl?.classList.add("ct-btn-active");
@@ -1431,9 +1499,11 @@ class CypherTaskbar {
     this._positionPanelToButton(key, btnEl, container);
     this._bindPanelEvents();
     this._bindPersonaTabs(this.element);
+    this._suppressNextDocumentClose = true;
   }
 
-  _closePanel() {
+  _closePanel(force = false) {
+    if (!force && this.activePanel === "cash" && this._cashPanelLocked) return;
     this._suppressNextDocumentClose = false;
     this._hideSkillTooltip();
     this.activePanel = null;
@@ -1605,6 +1675,21 @@ class CypherTaskbar {
       this._closePanel();
     };
 
+    const cashCloseBtn = bar.querySelector("[data-cash-close]");
+    if (cashCloseBtn) cashCloseBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._cashPanelLocked = false;
+      this._closePanel(true);
+    };
+
+    const assetsCloseBtn = bar.querySelector("[data-assets-close]");
+    if (assetsCloseBtn) assetsCloseBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._closePanel();
+    };
+
     this._bindEquipmentRowEvents(bar);
     this._bindEquipmentDnD(bar);
     this._bindEquipmentTabs(bar);
@@ -1743,6 +1828,712 @@ class CypherTaskbar {
     });
 
     if (this.activePanel === "spells") this._bindSpellsPanelEvents(bar);
+    this._bindCashPanelEvents(bar);
+    this._bindAssetsPanelEvents(bar);
+  }
+
+  _bindCashPanelEvents(bar) {
+    if (!bar) return;
+    const actor = this.actor;
+    if (!actor) return;
+
+    // Helper to save money without triggering panel flicker
+    const _saveMoney = async (money) => {
+      if (this._cashSuppressTimer) {
+        clearTimeout(this._cashSuppressTimer);
+        this._cashSuppressTimer = null;
+      }
+      this._cashOpPending = (this._cashOpPending || 0) + 1;
+      this._suppressRender = true;
+      try {
+        await actor.setFlag(MODULE_ID, "cashMoney", money);
+        // Sync with Cypher System actor sheet Equipment tab currency
+        const currency = foundry.utils.duplicate(actor.system?.equipment?.currency ?? {});
+        currency.active = true;
+        currency.numberCategories = 4;
+        currency.labelCategory1 = "CP";
+        currency.labelCategory2 = "SP";
+        currency.labelCategory3 = "GP";
+        currency.labelCategory4 = "PP";
+        currency.quantity1 = money.cp ?? 0;
+        currency.quantity2 = money.sp ?? 0;
+        currency.quantity3 = money.gp ?? 0;
+        currency.quantity4 = money.pp ?? 0;
+        await actor.update({ "system.equipment.currency": currency });
+      } finally {
+        this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
+        if (this._cashOpPending <= 0) {
+          this._cashOpPending = 0;
+          this._cashSuppressTimer = setTimeout(() => {
+            this._suppressRender = false;
+            this._cashSuppressTimer = null;
+          }, 600);
+        }
+      }
+    };
+
+    // ── Money +/- buttons ──
+    bar.querySelectorAll("[data-cash-plus]").forEach(btn => {
+      btn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const coin = btn.dataset.cashPlus;
+        const input = bar.querySelector(`#ct-cash-${coin}`);
+        if (!input) return;
+        const current = parseInt(input.value) || 0;
+        const next = current + 1;
+        input.value = next;
+        const money = actor.getFlag(MODULE_ID, "cashMoney") ?? { cp: 0, sp: 0, gp: 0, pp: 0 };
+        money[coin] = next;
+        await _saveMoney(money);
+      };
+    });
+    bar.querySelectorAll("[data-cash-minus]").forEach(btn => {
+      btn.onclick = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const coin = btn.dataset.cashMinus;
+        const input = bar.querySelector(`#ct-cash-${coin}`);
+        if (!input) return;
+        const current = parseInt(input.value) || 0;
+        const next = Math.max(0, current - 1);
+        input.value = next;
+        const money = actor.getFlag(MODULE_ID, "cashMoney") ?? { cp: 0, sp: 0, gp: 0, pp: 0 };
+        money[coin] = next;
+        await _saveMoney(money);
+      };
+    });
+
+    // ── Money input direct edit ──
+    ["cp","sp","gp","pp"].forEach(coin => {
+      const input = bar.querySelector(`#ct-cash-${coin}`);
+      if (!input) return;
+      input.addEventListener("change", async () => {
+        const val = Math.max(0, parseInt(input.value) || 0);
+        input.value = val;
+        const money = actor.getFlag(MODULE_ID, "cashMoney") ?? { cp: 0, sp: 0, gp: 0, pp: 0 };
+        money[coin] = val;
+        await _saveMoney(money);
+      });
+    });
+
+    // ── Spend button ──
+    const spendBtn = bar.querySelector("[data-cash-spend]");
+    if (spendBtn) {
+      spendBtn.onclick = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        this._showSpendDialog(actor);
+      };
+    }
+
+    // ── Valuables drop zone ──
+    const dropzone = bar.querySelector("[data-cash-dropzone]");
+    if (dropzone && actor) {
+      dropzone.ondragover = (e) => {
+        e.preventDefault();
+        dropzone.classList.add("ct-cash-drop-active");
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      };
+      dropzone.ondragleave = (e) => {
+        if (!dropzone.contains(e.relatedTarget)) dropzone.classList.remove("ct-cash-drop-active");
+      };
+      dropzone.ondrop = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove("ct-cash-drop-active");
+
+        let data;
+        try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch { data = {}; }
+
+        let item = null;
+
+        // Try to resolve from UUID (sidebar drop)
+        if (data.uuid) {
+          try { item = await fromUuid(data.uuid); } catch { /* ignore */ }
+        }
+        // Try to resolve from world item ID (sidebar drop)
+        if (!item && data.id) {
+          item = game.items.get(data.id);
+        }
+        // If text/plain is just an item ID, it's from within the actor
+        if (!item && data && !data.uuid && !data.id && typeof e.dataTransfer.getData("text/plain") === "string") {
+          const rawId = e.dataTransfer.getData("text/plain").trim();
+          if (rawId) item = actor.items.get(rawId);
+        }
+
+        if (!item) { ui.notifications.warn("Item not found."); return; }
+
+        // If item is from sidebar, add to actor first
+        let actorItem = actor.items.find(i => i.name === item.name && i.type === item.type);
+        if (!actorItem && item.uuid && !item.actor) {
+          // Item from sidebar - add to actor
+          try {
+            const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
+            delete itemData._id;
+            const created = await actor.createEmbeddedDocuments("Item", [itemData]);
+            if (created && created.length) actorItem = created[0];
+          } catch (err) {
+            ui.notifications.error("Failed to add item to actor.");
+            return;
+          }
+        }
+        if (!actorItem) actorItem = item;
+
+        // Add to valuables list
+        const valuables = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
+        if (valuables.includes(actorItem.id)) {
+          ui.notifications.info(`"${actorItem.name}" is already in valuables.`);
+          return;
+        }
+        valuables.push(actorItem.id);
+        this._suppressRender = true;
+        try {
+          await actor.setFlag(MODULE_ID, "cashValuables", valuables);
+        } finally {
+          this._suppressRender = false;
+        }
+        ui.notifications.info(`"${actorItem.name}" added to valuables.`);
+
+        // Refresh panel
+        if (this.activePanel === "cash") {
+          this._togglePanel("cash", this.element?.querySelector('.ct-btn[data-panel="cash"]'));
+        }
+      };
+    }
+
+    // ── Valuables hover tooltip + context menu ──
+    bar.querySelectorAll("[data-cash-valuable]").forEach(el => {
+      el.onmouseenter = () => {
+        if (document.querySelector(".ct-cash-ctx-menu")) return;
+        const name = el.dataset.tt || "";
+        const desc = el.dataset.ttDesc || "";
+        if (!name) return;
+        let tooltip = document.querySelector("#ct-cash-tooltip");
+        if (tooltip) tooltip.remove();
+        tooltip = document.createElement("div");
+        tooltip.id = "ct-cash-tooltip";
+        tooltip.className = "ct-cash-tooltip";
+        tooltip.innerHTML = `<div class="ct-cash-tt-header">${foundry.utils.escapeHTML(name)}</div>${desc ? `<div class="ct-cash-tt-desc">${foundry.utils.escapeHTML(desc)}</div>` : ""}`;
+        document.body.appendChild(tooltip);
+        const rect = el.getBoundingClientRect();
+        let left = rect.left + rect.width / 2 - 100;
+        let top = rect.top - tooltip.offsetHeight - 8;
+        if (left < 8) left = 8;
+        if (left + 200 > window.innerWidth) left = window.innerWidth - 208;
+        if (top < 8) top = rect.bottom + 8;
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+      };
+      el.onmouseleave = () => {
+        const tooltip = document.querySelector("#ct-cash-tooltip");
+        if (tooltip) tooltip.remove();
+      };
+      el.onclick = (e) => {
+        e.stopPropagation();
+        const itemId = el.dataset.cashValuable;
+        const item = this.actor?.items.get(itemId);
+        if (item?.sheet) item.sheet.render(true);
+      };
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._showCashValuableContextMenu(el, e.clientX, e.clientY);
+      };
+    });
+  }
+
+  _showCashValuableContextMenu(el, x, y) {
+    document.querySelectorAll(".ct-cash-ctx-menu").forEach(m => m.remove());
+    const itemId = el.dataset.cashValuable;
+    const item = this.actor?.items.get(itemId);
+    if (!item) return;
+
+    const menu = document.createElement("div");
+    menu.className = "ct-cash-ctx-menu";
+    menu.innerHTML = `
+      <button class="ct-cash-ctx-item" data-action="use"><i class="fas fa-hand-sparkles"></i> USE</button>
+      <button class="ct-cash-ctx-item" data-action="expend"><i class="fas fa-fire"></i> EXPEND</button>
+      <button class="ct-cash-ctx-item" data-action="delete"><i class="fas fa-trash"></i> DELETE</button>
+    `;
+    document.body.appendChild(menu);
+
+    // Position
+    const rect = menu.getBoundingClientRect();
+    let left = x;
+    let top = y;
+    if (left + rect.width > window.innerWidth - 8) left = window.innerWidth - rect.width - 8;
+    if (top + rect.height > window.innerHeight - 8) top = window.innerHeight - rect.height - 8;
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+
+    // Actions
+    menu.querySelectorAll("[data-action]").forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        menu.remove();
+        const action = btn.dataset.action;
+        if (action === "use") {
+          await this._useCashValuable(item);
+        } else if (action === "expend") {
+          await this._expendCashValuable(item);
+        } else if (action === "delete") {
+          await this._deleteCashValuable(item);
+        }
+      };
+    });
+
+    // Close on outside click
+    const closeHandler = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener("click", closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener("click", closeHandler), 0);
+  }
+
+  async _useCashValuable(item) {
+    const actor = this.actor;
+    if (!actor) return;
+    const gmUsers = game.users.filter(u => u.isGM && u.active);
+    if (!gmUsers.length) {
+      ui.notifications.warn("No GM is currently online.");
+      return;
+    }
+    const whisperTargets = gmUsers.map(u => u.id);
+    const content = `
+      <div class="ct-cash-use-card">
+        <p><strong>${foundry.utils.escapeHTML(actor.name)}</strong> is using <strong>${foundry.utils.escapeHTML(item.name)}</strong></p>
+        <div class="ct-cash-use-actions">
+          <button class="ct-cash-use-btn expend" data-cash-action="expend" data-actor-id="${actor.id}" data-item-id="${item.id}"><i class="fas fa-fire"></i> EXPEND</button>
+          <button class="ct-cash-use-btn keep" data-cash-action="keep" data-actor-id="${actor.id}" data-item-id="${item.id}"><i class="fas fa-check"></i> OK</button>
+        </div>
+      </div>`;
+    await ChatMessage.create({
+      content,
+      whisper: whisperTargets,
+      speaker: ChatMessage.getSpeaker({ actor })
+    });
+  }
+
+  async _expendCashValuable(item) {
+    const actor = this.actor;
+    if (!actor) return;
+    await this._deleteCashValuable(item);
+    const gmUsers = game.users.filter(u => u.isGM && u.active);
+    if (gmUsers.length) {
+      await ChatMessage.create({
+        content: `<p><strong>${foundry.utils.escapeHTML(actor.name)}</strong> has expended <strong>${foundry.utils.escapeHTML(item.name)}</strong>.</p>`,
+        whisper: gmUsers.map(u => u.id),
+        speaker: ChatMessage.getSpeaker({ actor })
+      });
+    }
+  }
+
+  async _deleteCashValuable(item) {
+    const actor = this.actor;
+    if (!actor) return;
+    // Remove from cashValuables flag
+    const valuables = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
+    const filtered = valuables.filter(id => id !== item.id);
+
+    if (this._cashSuppressTimer) {
+      clearTimeout(this._cashSuppressTimer);
+      this._cashSuppressTimer = null;
+    }
+    this._cashOpPending = (this._cashOpPending || 0) + 1;
+    this._suppressRender = true;
+
+    try {
+      await actor.setFlag(MODULE_ID, "cashValuables", filtered);
+      // Delete item from actor
+      await actor.deleteEmbeddedDocuments("Item", [item.id]);
+    } catch (err) {
+      console.error("CypherTaskbar | deleteCashValuable error:", err);
+    } finally {
+      this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
+      if (this._cashOpPending <= 0) {
+        this._cashOpPending = 0;
+        this._cashSuppressTimer = setTimeout(() => {
+          this._suppressRender = false;
+          this._cashSuppressTimer = null;
+        }, 600);
+      }
+    }
+
+    ui.notifications.info(`"${item.name}" deleted.`);
+
+    // Remove item from DOM to keep panel open without full rebuild flicker
+    if (this.activePanel === "cash") {
+      const itemEl = this.element?.querySelector(`[data-cash-valuable="${item.id}"]`);
+      if (itemEl) {
+        itemEl.remove();
+        // If grid is now empty, show empty message
+        const grid = this.element?.querySelector("[data-cash-dropzone]");
+        if (grid && !grid.querySelector("[data-cash-valuable]")) {
+          grid.innerHTML = `<div class="ct-cash-valuables-empty"><i class="fas fa-hand-holding"></i><span>Drop valuable items here</span></div>`;
+        }
+      }
+    }
+  }
+
+  _showSpendDialog(actor) {
+    if (!actor) return;
+    // Close existing spend dialog
+    const existing = document.querySelector(".ct-spend-dialog");
+    if (existing) existing.remove();
+
+    // Force Cash & Values panel open
+    if (this.activePanel !== "cash") {
+      const cashBtn = this.element?.querySelector('.ct-btn[data-panel="cash"]');
+      if (cashBtn) this._togglePanel("cash", cashBtn);
+    }
+
+    const dialog = document.createElement("div");
+    dialog.className = "ct-spend-dialog";
+    dialog.innerHTML = `
+      <div class="ct-spend-dialog-header"><i class="fas fa-hand-holding-usd"></i> SPEND CASH</div>
+      <div class="ct-spend-dialog-body">
+        <div class="ct-spend-buttons">
+          ${[1,3,5,10,30,50,100,300,500].map(v => `<button type="button" class="ct-spend-value-btn" data-value="${v}">${v}</button>`).join("")}
+        </div>
+        <div class="ct-spend-denom">
+          <label class="ct-spend-denom-label ct-spend-denom-cp"><input type="radio" name="ct-spend-denom" value="cp"> CP</label>
+          <label class="ct-spend-denom-label ct-spend-denom-sp"><input type="radio" name="ct-spend-denom" value="sp" checked> SP</label>
+          <label class="ct-spend-denom-label ct-spend-denom-gp"><input type="radio" name="ct-spend-denom" value="gp"> GP</label>
+          <label class="ct-spend-denom-label ct-spend-denom-pp"><input type="radio" name="ct-spend-denom" value="pp"> PP</label>
+        </div>
+        <div class="ct-spend-total-row">
+          <span class="ct-spend-total-label">TOTAL</span>
+          <span class="ct-spend-total-value" id="ct-spend-total">0</span>
+        </div>
+        <div class="ct-spend-error" id="ct-spend-error"></div>
+        <div class="ct-spend-actions">
+          <button type="button" class="ct-spend-action-btn ct-spend-confirm" id="ct-spend-btn"><i class="fas fa-check"></i> SPEND</button>
+          <button type="button" class="ct-spend-action-btn ct-spend-cancel" id="ct-spend-cancel"><i class="fas fa-times"></i> CANCEL</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    // Position near the Cash & Values panel if open
+    const cashPanel = this.element?.querySelector(".ct-panel-cash");
+    if (cashPanel) {
+      const rect = cashPanel.getBoundingClientRect();
+      dialog.style.left = `${rect.right + 8}px`;
+      dialog.style.top = `${rect.top}px`;
+    } else {
+      dialog.style.left = "50%";
+      dialog.style.top = "50%";
+      dialog.style.transform = "translate(-50%, -50%)";
+    }
+
+    let total = 0;
+    const totalEl = dialog.querySelector("#ct-spend-total");
+
+    // Value buttons
+    dialog.querySelectorAll(".ct-spend-value-btn").forEach(btn => {
+      btn.onclick = () => {
+        total += parseInt(btn.dataset.value);
+        totalEl.textContent = total;
+      };
+    });
+
+    // Cancel
+    dialog.querySelector("#ct-spend-cancel").onclick = () => dialog.remove();
+
+    // Spend
+    dialog.querySelector("#ct-spend-btn").onclick = async () => {
+      if (total <= 0) { dialog.remove(); return; }
+      const denom = dialog.querySelector('input[name="ct-spend-denom"]:checked')?.value || "sp";
+      const money = actor.getFlag(MODULE_ID, "cashMoney") ?? { cp: 0, sp: 0, gp: 0, pp: 0 };
+      const current = money[denom] ?? 0;
+      if (current < total) {
+        const errEl = dialog.querySelector("#ct-spend-error");
+        if (errEl) {
+          errEl.innerHTML = `<i class="fas fa-crown"></i> Check again. You are not so rich! or you missed the color of coins...`;
+          errEl.classList.add("is-visible");
+          setTimeout(() => errEl.classList.remove("is-visible"), 2500);
+        }
+        return;
+      }
+      money[denom] = current - total;
+      // Save using same suppression helper pattern
+      if (this._cashSuppressTimer) {
+        clearTimeout(this._cashSuppressTimer);
+        this._cashSuppressTimer = null;
+      }
+      this._cashOpPending = (this._cashOpPending || 0) + 1;
+      this._suppressRender = true;
+      try {
+        await actor.setFlag(MODULE_ID, "cashMoney", money);
+        const currency = foundry.utils.duplicate(actor.system?.equipment?.currency ?? {});
+        currency.active = true;
+        currency.numberCategories = 4;
+        currency.labelCategory1 = "CP";
+        currency.labelCategory2 = "SP";
+        currency.labelCategory3 = "GP";
+        currency.labelCategory4 = "PP";
+        currency.quantity1 = money.cp ?? 0;
+        currency.quantity2 = money.sp ?? 0;
+        currency.quantity3 = money.gp ?? 0;
+        currency.quantity4 = money.pp ?? 0;
+        await actor.update({ "system.equipment.currency": currency });
+      } finally {
+        this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
+        if (this._cashOpPending <= 0) {
+          this._cashOpPending = 0;
+          this._cashSuppressTimer = setTimeout(() => {
+            this._suppressRender = false;
+            this._cashSuppressTimer = null;
+          }, 600);
+        }
+      }
+      // Update input in the cash panel without full rebuild
+      const input = this.element?.querySelector(`#ct-cash-${denom}`);
+      if (input) input.value = money[denom];
+      dialog.remove();
+      ui.notifications.info(`Spent ${total} ${denom.toUpperCase()}.`);
+    };
+
+    // Close on outside click
+    const outsideClick = (e) => {
+      if (!dialog.contains(e.target)) {
+        dialog.remove();
+        document.removeEventListener("mousedown", outsideClick);
+      }
+    };
+    setTimeout(() => document.addEventListener("mousedown", outsideClick), 10);
+  }
+
+  _bindAssetsPanelEvents(bar) {
+    if (!bar) return;
+    const actor = this.actor;
+    if (!actor) return;
+
+    // Helper to save assets without triggering panel flicker
+    const _saveAssets = async (assetIds) => {
+      if (this._cashSuppressTimer) {
+        clearTimeout(this._cashSuppressTimer);
+        this._cashSuppressTimer = null;
+      }
+      this._cashOpPending = (this._cashOpPending || 0) + 1;
+      this._suppressRender = true;
+      try {
+        await actor.setFlag(MODULE_ID, "assetsItems", assetIds);
+      } finally {
+        this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
+        if (this._cashOpPending <= 0) {
+          this._cashOpPending = 0;
+          this._cashSuppressTimer = setTimeout(() => {
+            this._suppressRender = false;
+            this._cashSuppressTimer = null;
+          }, 600);
+        }
+      }
+    };
+
+    // ── Assets drop zone (GM only) ──
+    const dropzone = bar.querySelector("[data-assets-dropzone]");
+    if (dropzone && actor && game.user.isGM) {
+      dropzone.ondragover = (e) => {
+        e.preventDefault();
+        dropzone.classList.add("ct-assets-drop-active");
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      };
+      dropzone.ondragleave = (e) => {
+        if (!dropzone.contains(e.relatedTarget)) dropzone.classList.remove("ct-assets-drop-active");
+      };
+      dropzone.ondrop = async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove("ct-assets-drop-active");
+
+        let data;
+        try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch { data = {}; }
+
+        let item = null;
+        if (data.uuid) {
+          try { item = await fromUuid(data.uuid); } catch { /* ignore */ }
+        }
+        if (!item && data.id) {
+          item = game.items.get(data.id);
+        }
+        if (!item && data && !data.uuid && !data.id && typeof e.dataTransfer.getData("text/plain") === "string") {
+          const rawId = e.dataTransfer.getData("text/plain").trim();
+          if (rawId) item = actor.items.get(rawId);
+        }
+
+        if (!item) { ui.notifications.warn("Item not found."); return; }
+
+        let actorItem = actor.items.find(i => i.name === item.name && i.type === item.type);
+        if (!actorItem && item.uuid && !item.actor) {
+          try {
+            const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
+            delete itemData._id;
+            const created = await actor.createEmbeddedDocuments("Item", [itemData]);
+            if (created && created.length) actorItem = created[0];
+          } catch (err) {
+            ui.notifications.error("Failed to add item to actor.");
+            return;
+          }
+        }
+        if (!actorItem) actorItem = item;
+
+        const assets = actor.getFlag(MODULE_ID, "assetsItems") ?? [];
+        if (assets.includes(actorItem.id)) {
+          ui.notifications.info(`"${actorItem.name}" is already in assets.`);
+          return;
+        }
+        assets.push(actorItem.id);
+        await _saveAssets(assets);
+        ui.notifications.info(`"${actorItem.name}" added to assets.`);
+
+        // Append to DOM to keep panel open
+        if (this.activePanel === "assets") {
+          const grid = this.element?.querySelector("[data-assets-dropzone]");
+          const empty = grid?.querySelector(".ct-assets-empty");
+          if (empty) empty.remove();
+          if (grid) {
+            const card = document.createElement("div");
+            card.className = "ct-assets-card";
+            card.dataset.assetsItem = actorItem.id;
+            card.dataset.tt = foundry.utils.escapeHTML(actorItem.name);
+            card.dataset.ttDesc = foundry.utils.escapeHTML(actorItem.system?.description || "");
+            card.innerHTML = `<img src="${actorItem.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">`;
+            grid.append(card);
+            // Re-bind events on new element
+            this._bindAssetsCardEvents(card);
+          }
+        }
+      };
+    }
+
+    // ── Existing asset cards ──
+    bar.querySelectorAll("[data-assets-item]").forEach(el => this._bindAssetsCardEvents(el));
+  }
+
+  _bindAssetsCardEvents(el) {
+    if (!el) return;
+    el.onmouseenter = () => {
+      if (document.querySelector(".ct-assets-ctx-menu")) return;
+      const name = el.dataset.tt || "";
+      const desc = el.dataset.ttDesc || "";
+      if (!name) return;
+      let tooltip = document.querySelector("#ct-assets-tooltip");
+      if (tooltip) tooltip.remove();
+      tooltip = document.createElement("div");
+      tooltip.id = "ct-assets-tooltip";
+      tooltip.className = "ct-cash-tooltip";
+      tooltip.innerHTML = `<div class="ct-cash-tt-header">${foundry.utils.escapeHTML(name)}</div>${desc ? `<div class="ct-cash-tt-desc">${foundry.utils.escapeHTML(desc)}</div>` : ""}`;
+      document.body.appendChild(tooltip);
+      const rect = el.getBoundingClientRect();
+      let left = rect.left + rect.width / 2 - 100;
+      let top = rect.top - tooltip.offsetHeight - 8;
+      if (left < 8) left = 8;
+      if (left + 200 > window.innerWidth) left = window.innerWidth - 208;
+      if (top < 8) top = rect.bottom + 8;
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    };
+    el.onmouseleave = () => {
+      const tooltip = document.querySelector("#ct-assets-tooltip");
+      if (tooltip) tooltip.remove();
+    };
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const itemId = el.dataset.assetsItem;
+      const item = this.actor?.items.get(itemId);
+      if (item?.sheet) item.sheet.render(true);
+    };
+    el.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._showAssetsContextMenu(el, e.clientX, e.clientY);
+    };
+  }
+
+  _showAssetsContextMenu(el, x, y) {
+    document.querySelectorAll(".ct-assets-ctx-menu").forEach(m => m.remove());
+    const itemId = el.dataset.assetsItem;
+    const item = this.actor?.items.get(itemId);
+    if (!item) return;
+
+    const menu = document.createElement("div");
+    menu.className = "ct-cash-ctx-menu ct-assets-ctx-menu";
+    menu.innerHTML = `
+      <button class="ct-cash-ctx-item" data-action="open"><i class="fas fa-external-link-alt"></i> OPEN SHEET</button>
+      <button class="ct-cash-ctx-item" data-action="delete"><i class="fas fa-trash"></i> REMOVE</button>
+    `;
+    document.body.appendChild(menu);
+
+    const rect = menu.getBoundingClientRect();
+    let left = x;
+    let top = y;
+    if (left + rect.width > window.innerWidth - 8) left = window.innerWidth - rect.width - 8;
+    if (top + rect.height > window.innerHeight - 8) top = window.innerHeight - rect.height - 8;
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+
+    menu.querySelectorAll("[data-action]").forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        menu.remove();
+        const action = btn.dataset.action;
+        if (action === "open") {
+          if (item.sheet) item.sheet.render(true);
+        } else if (action === "delete") {
+          await this._removeAsset(item);
+        }
+      };
+    });
+
+    const closeHandler = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener("click", closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener("click", closeHandler), 0);
+  }
+
+  async _removeAsset(item) {
+    const actor = this.actor;
+    if (!actor) return;
+    const assets = actor.getFlag(MODULE_ID, "assetsItems") ?? [];
+    const filtered = assets.filter(id => id !== item.id);
+
+    if (this._cashSuppressTimer) {
+      clearTimeout(this._cashSuppressTimer);
+      this._cashSuppressTimer = null;
+    }
+    this._cashOpPending = (this._cashOpPending || 0) + 1;
+    this._suppressRender = true;
+
+    try {
+      await actor.setFlag(MODULE_ID, "assetsItems", filtered);
+    } catch (err) {
+      console.error("CypherTaskbar | removeAsset error:", err);
+    } finally {
+      this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
+      if (this._cashOpPending <= 0) {
+        this._cashOpPending = 0;
+        this._cashSuppressTimer = setTimeout(() => {
+          this._suppressRender = false;
+          this._cashSuppressTimer = null;
+        }, 600);
+      }
+    }
+
+    ui.notifications.info(`"${item.name}" removed from assets.`);
+
+    // Remove from DOM to keep panel open
+    if (this.activePanel === "assets") {
+      const itemEl = this.element?.querySelector(`[data-assets-item="${item.id}"]`);
+      if (itemEl) {
+        itemEl.remove();
+        const grid = this.element?.querySelector("[data-assets-dropzone]");
+        if (grid && !grid.querySelector("[data-assets-item]")) {
+          grid.innerHTML = `<div class="ct-assets-empty"><i class="fas fa-landmark"></i><span>Drop assets here</span></div>`;
+        }
+      }
+    }
   }
 
   _buildPanel(key) {
@@ -1795,6 +2586,8 @@ class CypherTaskbar {
         return `<div class="ct-panel ct-panel-combat" style="${this._getMenuBackgroundVars("combat")}"><div class="ct-panel-header ct-panel-header-combat-menu"><div class="ct-panel-title-wrap"><i class="fas fa-sword"></i> <span>Combat</span></div><div class="ct-panel-action-group"><button class="ct-panel-settings-btn" data-combat-close title="Close Combat Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-panel-body">${h}</div></div>`;
       }
       case "equipment": return this._buildEquipmentPanel(actor);
+      case "cash": return this._buildCashPanel(actor);
+      case "assets": return this._buildAssetsPanel(actor);
     }
     return "";
   }
@@ -1815,6 +2608,157 @@ class CypherTaskbar {
 
   _equipTypeIcon(type) {
     return ({artifact:"fas fa-gem",cypher:"fas fa-flask",oddity:"fas fa-question-circle",material:"fas fa-cube",ammo:"fas fa-crosshairs",equipment:"fas fa-box"})[type]??"fas fa-box";
+  }
+
+  _isCashItem(item) {
+    const name = (item.name || "").toLowerCase();
+    const cashKeywords = ["shin","coin","credit","money","cash","gold","silver","copper","gem","jewel","ring","necklace","currency","wealth","fund"];
+    if (cashKeywords.some(kw => name.includes(kw))) return true;
+    const price = item.system?.basic?.price ?? item.system?.price ?? item.system?.cost ?? item.system?.value ?? null;
+    if (price !== null && price !== "" && price !== undefined) return true;
+    return false;
+  }
+
+  _buildCashPanel(actor) {
+    // Read money from actor flag, falling back to Cypher System actor sheet currency
+    let money = actor.getFlag(MODULE_ID, "cashMoney");
+    if (!money) {
+      const sysCur = actor.system?.equipment?.currency;
+      if (sysCur?.active) {
+        money = {
+          cp: sysCur.quantity1 ?? 0,
+          sp: sysCur.quantity2 ?? 0,
+          gp: sysCur.quantity3 ?? 0,
+          pp: sysCur.quantity4 ?? 0
+        };
+      } else {
+        money = { cp: 0, sp: 0, gp: 0, pp: 0 };
+      }
+    }
+    const { cp = 0, sp = 0, gp = 0, pp = 0 } = money;
+
+    // Get carriable valuables
+    const valuableIds = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
+    const valuables = valuableIds
+      .map(id => actor.items.get(id))
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    // Clean up missing items from the list
+    if (valuables.length !== valuableIds.length) {
+      const validIds = valuables.map(i => i.id);
+      actor.setFlag(MODULE_ID, "cashValuables", validIds);
+    }
+
+    const moneyRow = `
+      <div class="ct-cash-money-section">
+        <div class="ct-cash-section-title"><i class="fas fa-coins"></i> MONEY</div>
+        <div class="ct-cash-money-row">
+          <div class="ct-cash-coin">
+            <label class="ct-cash-coin-label">CP</label>
+            <input type="number" class="ct-cash-input" id="ct-cash-cp" value="${cp}" min="0">
+            <div class="ct-cash-coin-btns">
+              <button type="button" class="ct-cash-coin-btn" data-cash-minus="cp" title="-1"><i class="fas fa-minus"></i></button>
+              <button type="button" class="ct-cash-coin-btn" data-cash-plus="cp" title="+1"><i class="fas fa-plus"></i></button>
+            </div>
+          </div>
+          <div class="ct-cash-coin">
+            <label class="ct-cash-coin-label">SP</label>
+            <input type="number" class="ct-cash-input" id="ct-cash-sp" value="${sp}" min="0">
+            <div class="ct-cash-coin-btns">
+              <button type="button" class="ct-cash-coin-btn" data-cash-minus="sp" title="-1"><i class="fas fa-minus"></i></button>
+              <button type="button" class="ct-cash-coin-btn" data-cash-plus="sp" title="+1"><i class="fas fa-plus"></i></button>
+            </div>
+          </div>
+          <div class="ct-cash-coin">
+            <label class="ct-cash-coin-label">GP</label>
+            <input type="number" class="ct-cash-input" id="ct-cash-gp" value="${gp}" min="0">
+            <div class="ct-cash-coin-btns">
+              <button type="button" class="ct-cash-coin-btn" data-cash-minus="gp" title="-1"><i class="fas fa-minus"></i></button>
+              <button type="button" class="ct-cash-coin-btn" data-cash-plus="gp" title="+1"><i class="fas fa-plus"></i></button>
+            </div>
+          </div>
+          <div class="ct-cash-coin">
+            <label class="ct-cash-coin-label">PP</label>
+            <input type="number" class="ct-cash-input" id="ct-cash-pp" value="${pp}" min="0">
+            <div class="ct-cash-coin-btns">
+              <button type="button" class="ct-cash-coin-btn" data-cash-minus="pp" title="-1"><i class="fas fa-minus"></i></button>
+              <button type="button" class="ct-cash-coin-btn" data-cash-plus="pp" title="+1"><i class="fas fa-plus"></i></button>
+            </div>
+          </div>
+          <button type="button" class="ct-cash-spend-btn" data-cash-spend title="Spend Cash"><i class="fas fa-hand-holding-usd"></i></button>
+        </div>
+      </div>`;
+
+    const valuablesGrid = valuables.length
+      ? valuables.map(i => `
+        <div class="ct-cash-valuable-item" data-cash-valuable="${i.id}" data-tt="${foundry.utils.escapeHTML(i.name)}" data-tt-desc="${foundry.utils.escapeHTML(i.system?.description || '')}">
+          <img src="${i.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
+        </div>`).join("")
+      : `<div class="ct-cash-valuables-empty"><i class="fas fa-hand-holding"></i><span>Drop valuable items here</span></div>`;
+
+    const valuablesSection = `
+      <div class="ct-cash-valuables-section">
+        <div class="ct-cash-section-title"><i class="fas fa-gem"></i> CARRIABLE VALUES</div>
+        <div class="ct-cash-valuables-grid" data-cash-dropzone>
+          ${valuablesGrid}
+        </div>
+      </div>`;
+
+    return `<div class="ct-panel ct-panel-cash" style="${this._getMenuBackgroundVars("cash")}">
+      <div class="ct-panel-header ct-panel-header-cash-menu">
+        <div class="ct-panel-title-wrap"><i class="fas fa-coins"></i> <span>Cash & Values</span></div>
+        <div class="ct-panel-action-group">
+          <button class="ct-panel-settings-btn" data-cash-close title="Close Cash Menu"><i class="fas fa-times"></i></button>
+        </div>
+      </div>
+      <div class="ct-panel-body ct-cash-body">
+        ${moneyRow}
+        ${valuablesSection}
+      </div>
+    </div>`;
+  }
+
+  _buildAssetsPanel(actor) {
+    const assetIds = actor.getFlag(MODULE_ID, "assetsItems") ?? [];
+    const assets = assetIds
+      .map(id => actor.items.get(id))
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    // Clean up missing items
+    if (assets.length !== assetIds.length) {
+      const validIds = assets.map(i => i.id);
+      actor.setFlag(MODULE_ID, "assetsItems", validIds);
+    }
+
+    const emptyMsg = game.user?.isGM
+      ? `<div class="ct-assets-empty"><i class="fas fa-landmark"></i><span>Drop assets here</span></div>`
+      : `<div class="ct-assets-empty"><i class="fas fa-landmark"></i><span>No assets</span></div>`;
+
+    const assetsGrid = assets.length
+      ? assets.map(i => `
+        <div class="ct-assets-card" data-assets-item="${i.id}" data-tt="${foundry.utils.escapeHTML(i.name)}" data-tt-desc="${foundry.utils.escapeHTML(i.system?.description || '')}">
+          <img src="${i.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
+        </div>`).join("")
+      : emptyMsg;
+
+    return `<div class="ct-panel ct-panel-assets" style="${this._getMenuBackgroundVars("assets")}">
+      <div class="ct-panel-header ct-panel-header-assets-menu">
+        <div class="ct-panel-title-wrap"><i class="fas fa-landmark"></i> <span>Assets</span></div>
+        <div class="ct-panel-action-group">
+          <button class="ct-panel-settings-btn" data-assets-close title="Close Assets Menu"><i class="fas fa-times"></i></button>
+        </div>
+      </div>
+      <div class="ct-panel-body ct-assets-body">
+        <div class="ct-assets-section">
+          <div class="ct-cash-section-title"><i class="fas fa-building"></i> ASSETS</div>
+          <div class="ct-assets-grid" data-assets-dropzone>
+            ${assetsGrid}
+          </div>
+        </div>
+      </div>
+    </div>`;
   }
 
   /* ─── Window filter: only game content (actors, items, journals, images) ─── */
@@ -1962,7 +2906,7 @@ class CypherTaskbar {
   }
 
   _openPortraitSettings(event) {
-    console.log(`${MODULE_ID} | _openPortraitSettings called`, {actor: this.actor?.name, hasElement: !!this.element, event: event?.type});
+    if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | _openPortraitSettings called`, {actor: this.actor?.name, hasElement: !!this.element, event: event?.type});
     document.querySelector("#ct-portrait-settings-popup")?.remove();
     if (!this.actor) { console.warn(`${MODULE_ID} | _openPortraitSettings: no actor`); return; }
     const blur  = this._gs("portraitShadowBlur");
@@ -2203,7 +3147,7 @@ class CypherTaskbar {
         </div>
       </div>`;
     document.body.appendChild(popup);
-    console.log(`${MODULE_ID} | Portrait settings popup appended`, {popupInDOM: !!document.querySelector("#ct-portrait-settings-popup")});
+    if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings popup appended`, {popupInDOM: !!document.querySelector("#ct-portrait-settings-popup")});
     requestAnimationFrame(() => {
       const rect = popup.getBoundingClientRect();
       const left = Math.min(Math.max(8, desiredLeft), Math.max(8, window.innerWidth - rect.width - 8));
@@ -2215,7 +3159,7 @@ class CypherTaskbar {
     popup.querySelectorAll(".ct-popup-tab").forEach(btn => {
       btn.addEventListener("click", async () => {
         const tab = btn.dataset.tab;
-        console.log(`${MODULE_ID} | Tab clicked:`, tab);
+        if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Tab clicked:`, tab);
         popup.querySelectorAll(".ct-popup-tab").forEach(el => el.classList.toggle("is-active", el === btn));
         popup.querySelectorAll(".ct-popup-pane").forEach(pane => pane.classList.toggle("is-active", pane.dataset.pane === tab));
         await this._ss("lastPortraitSettingsTab", tab);
@@ -2290,7 +3234,7 @@ class CypherTaskbar {
         await this._ss("portraitSpaceTransparent", popup.querySelector("#ps-space-transparent").checked);
         await this._ss("portraitSpaceOpacity", parseFloat(popup.querySelector("#ps-space-opacity").value));
         this.refresh();
-        console.log(`${MODULE_ID} | Portrait settings applied successfully`);
+        if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings applied successfully`);
       } catch (err) {
         console.error(`${MODULE_ID} | apply() failed:`, err);
       }
@@ -2398,10 +3342,10 @@ class CypherTaskbar {
       popup.style.left = "auto";
     }
     const lastTab = this._gs("lastSettingsTab") || "general";
-    const tabs = ["general","sections","fonts","gallery","minimenu","icons"];
+    const tabs = ["general","sections","fonts","gallery","minimenu","icons","cash"];
     const activeTab = tabs.includes(lastTab) ? lastTab : "general";
     popup.innerHTML = `
-      <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+      <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <span class="ct-popup-header-actions"><button class="ct-popup-action-btn" id="ts-export" title="Export Settings"><i class="fas fa-file-export"></i></button><button class="ct-popup-action-btn" id="ts-import" title="Import Settings"><i class="fas fa-file-import"></i></button></span><button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
       <div class="ct-popup-tabs">
         <button class="ct-popup-tab${activeTab==="general"?" is-active":""}" data-tab="general"><i class="fas fa-sliders-h"></i> General</button>
         <button class="ct-popup-tab${activeTab==="sections"?" is-active":""}" data-tab="sections"><i class="fas fa-expand"></i> Sections</button>
@@ -2409,6 +3353,7 @@ class CypherTaskbar {
         <button class="ct-popup-tab${activeTab==="gallery"?" is-active":""}" data-tab="gallery"><i class="fas fa-images"></i> Gallery Tabs</button>
         <button class="ct-popup-tab${activeTab==="minimenu"?" is-active":""}" data-tab="minimenu"><i class="fas fa-th"></i> Mini Menu</button>
         <button class="ct-popup-tab${activeTab==="icons"?" is-active":""}" data-tab="icons"><i class="fas fa-icons"></i> Icons</button>
+        <button class="ct-popup-tab${activeTab==="cash"?" is-active":""}" data-tab="cash"><i class="fas fa-coins"></i> Cash & Values</button>
       </div>
       <div class="ct-popup-body">
         <div class="ct-popup-pane${activeTab==="general"?" is-active":""}" data-pane="general">
@@ -2449,6 +3394,8 @@ class CypherTaskbar {
           </label>
           <label>Item Size <span class="ct-val-label" id="ts-mm-size-val">${this._gs("miniMenuItemSize")||32}px</span><input type="range" id="ts-mm-size" min="8" max="256" step="8" value="${this._gs("miniMenuItemSize")||32}"></label>
           <label>Item Padding <span class="ct-val-label" id="ts-mm-pad-val">${this._gs("miniMenuPadding")||0}px</span><input type="range" id="ts-mm-padding" min="0" max="20" step="1" value="${this._gs("miniMenuPadding")||0}"></label>
+          <label>Space Left <span class="ct-val-label" id="ts-mm-sl-val">${this._gs("miniMenuSpaceLeft")??2}px</span><input type="range" id="ts-mm-sl" min="0" max="50" step="1" value="${this._gs("miniMenuSpaceLeft")??2}"></label>
+          <label>Space Right <span class="ct-val-label" id="ts-mm-sr-val">${this._gs("miniMenuSpaceRight")??0}px</span><input type="range" id="ts-mm-sr" min="0" max="50" step="1" value="${this._gs("miniMenuSpaceRight")??0}"></label>
           <label class="ct-toggle-row">Show Title <input type="checkbox" id="ts-mm-title" ${this._gs("miniMenuShowTitle")!==false?"checked":""}></label>
           <label class="ct-toggle-row">Show Description <input type="checkbox" id="ts-mm-desc" ${this._gs("miniMenuShowDescription")!==false?"checked":""}></label>
         </div>
@@ -2461,6 +3408,36 @@ class CypherTaskbar {
           <label>Icon Color <input type="color" id="ts-icon-color" value="${this._gs("menuIconColor")??"#c8a96e"}"></label>
           <label>Label Color <input type="color" id="ts-label-color" value="${this._gs("menuLabelColor")??"#e8e8e8"}"></label>
           <label>Background <input type="color" id="ts-icon-bg" value="${this._gs("menuIconBgColor")??"#1a1525"}"></label>
+        </div>
+        <div class="ct-popup-pane${activeTab==="cash"?" is-active":""}" data-pane="cash">
+          <div class="ct-popup-subhead">Cash & Values Panel Background</div>
+          <label>Image <input type="text" id="ts-cash-bg-image" value="${this._getMenuBackgroundValue("cash", "image")}" placeholder="URL or path..."></label>
+          <label>Fit
+            <select id="ts-cash-bg-fit">
+              <option value="cover" ${this._getMenuBackgroundValue("cash", "fit") === "cover" ? "selected" : ""}>Cover</option>
+              <option value="contain" ${this._getMenuBackgroundValue("cash", "fit") === "contain" ? "selected" : ""}>Contain</option>
+              <option value="fit" ${this._getMenuBackgroundValue("cash", "fit") === "fit" ? "selected" : ""}>Stretch</option>
+              <option value="fit-vertical" ${this._getMenuBackgroundValue("cash", "fit") === "fit-vertical" ? "selected" : ""}>Fit Vertical</option>
+              <option value="fit-horizontal" ${this._getMenuBackgroundValue("cash", "fit") === "fit-horizontal" ? "selected" : ""}>Fit Horizontal</option>
+            </select>
+          </label>
+          <label>Alignment
+            <select id="ts-cash-bg-align">
+              <option value="center" ${this._getMenuBackgroundValue("cash", "align") === "center" ? "selected" : ""}>Center</option>
+              <option value="top" ${this._getMenuBackgroundValue("cash", "align") === "top" ? "selected" : ""}>Top</option>
+              <option value="bottom" ${this._getMenuBackgroundValue("cash", "align") === "bottom" ? "selected" : ""}>Bottom</option>
+              <option value="left" ${this._getMenuBackgroundValue("cash", "align") === "left" ? "selected" : ""}>Left</option>
+              <option value="right" ${this._getMenuBackgroundValue("cash", "align") === "right" ? "selected" : ""}>Right</option>
+              <option value="top left" ${this._getMenuBackgroundValue("cash", "align") === "top left" ? "selected" : ""}>Top Left</option>
+              <option value="top right" ${this._getMenuBackgroundValue("cash", "align") === "top right" ? "selected" : ""}>Top Right</option>
+              <option value="bottom left" ${this._getMenuBackgroundValue("cash", "align") === "bottom left" ? "selected" : ""}>Bottom Left</option>
+              <option value="bottom right" ${this._getMenuBackgroundValue("cash", "align") === "bottom right" ? "selected" : ""}>Bottom Right</option>
+            </select>
+          </label>
+          <label>Opacity <span class="ct-val-label" id="ts-cash-bg-op-val">${Math.round((this._getMenuBackgroundValue("cash", "opacity") ?? 0.2) * 100)}%</span><input type="range" id="ts-cash-bg-op" min="0" max="1" step="0.05" value="${this._getMenuBackgroundValue("cash", "opacity") ?? 0.2}"></label>
+          <div class="ct-popup-subhead">Cash & Assets Button Spacing</div>
+          <label>Space Left <span class="ct-val-label" id="ts-cash-sl-val">${this._gs("cashStackSpaceLeft") ?? 0}px</span><input type="range" id="ts-cash-sl" min="0" max="50" step="1" value="${this._gs("cashStackSpaceLeft") ?? 0}"></label>
+          <label>Space Right <span class="ct-val-label" id="ts-cash-sr-val">${this._gs("cashStackSpaceRight") ?? 0}px</span><input type="range" id="ts-cash-sr" min="0" max="50" step="1" value="${this._gs("cashStackSpaceRight") ?? 0}"></label>
         </div>
       </div>`;
     document.body.appendChild(popup);
@@ -2498,6 +3475,8 @@ class CypherTaskbar {
       await this._ss("miniMenuDisplayMode", popup.querySelector("#ts-mm-mode")?.value || "list");
       await this._ss("miniMenuItemSize", parseInt(popup.querySelector("#ts-mm-size")?.value || 32));
       await this._ss("miniMenuPadding", parseInt(popup.querySelector("#ts-mm-padding")?.value || 0));
+      await this._ss("miniMenuSpaceLeft", parseInt(popup.querySelector("#ts-mm-sl")?.value ?? 2));
+      await this._ss("miniMenuSpaceRight", parseInt(popup.querySelector("#ts-mm-sr")?.value ?? 0));
       await this._ss("miniMenuShowTitle", popup.querySelector("#ts-mm-title")?.checked ?? true);
       await this._ss("miniMenuShowDescription", popup.querySelector("#ts-mm-desc")?.checked ?? true);
       // Icon settings
@@ -2507,6 +3486,25 @@ class CypherTaskbar {
       await this._ss("menuIconColor", popup.querySelector("#ts-icon-color")?.value ?? "#c8a96e");
       await this._ss("menuLabelColor", popup.querySelector("#ts-label-color")?.value ?? "#e8e8e8");
       await this._ss("menuIconBgColor", popup.querySelector("#ts-icon-bg")?.value ?? "#1a1525");
+      // Cash & Values background settings
+      const cashBgImage = popup.querySelector("#ts-cash-bg-image")?.value?.trim() || "";
+      const cashBgFit = popup.querySelector("#ts-cash-bg-fit")?.value || "cover";
+      const cashBgAlign = popup.querySelector("#ts-cash-bg-align")?.value || "center";
+      const cashBgOp = parseFloat(popup.querySelector("#ts-cash-bg-op")?.value ?? 0.2);
+      let menuBgs = {};
+      try {
+        const raw = game.settings.get(MODULE_ID, "menuBackgrounds");
+        menuBgs = typeof raw === "string" ? JSON.parse(raw || "{}") : (raw || {});
+      } catch { menuBgs = {}; }
+      if (cashBgImage) {
+        menuBgs.cash = { image: cashBgImage, fit: cashBgFit, align: cashBgAlign, opacity: cashBgOp };
+      } else {
+        delete menuBgs.cash;
+      }
+      await game.settings.set(MODULE_ID, "menuBackgrounds", JSON.stringify(menuBgs));
+      // Cash & Assets button spacing
+      await this._ss("cashStackSpaceLeft", parseInt(popup.querySelector("#ts-cash-sl")?.value ?? 0));
+      await this._ss("cashStackSpaceRight", parseInt(popup.querySelector("#ts-cash-sr")?.value ?? 0));
       this._resolveActor();
       this.reposition(); this.applySettings();
       if (newActorId !== (this.actor?.id ?? "")) this.render();
@@ -2518,10 +3516,136 @@ class CypherTaskbar {
     popup.querySelector("#ts-gt-offset")?.addEventListener("input",e=>{popup.querySelector("#ts-gt-off-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ts-mm-size")?.addEventListener("input",e=>{popup.querySelector("#ts-mm-size-val").textContent=e.target.value+"px";apply();});
     popup.querySelector("#ts-mm-padding")?.addEventListener("input",e=>{popup.querySelector("#ts-mm-pad-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ts-mm-sl")?.addEventListener("input",e=>{popup.querySelector("#ts-mm-sl-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ts-mm-sr")?.addEventListener("input",e=>{popup.querySelector("#ts-mm-sr-val").textContent=e.target.value+"px";apply();});
     // Icon settings listeners
     popup.querySelector("#ts-icon-size")?.addEventListener("input",e=>{popup.querySelector("#ts-icon-size-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ts-label-size")?.addEventListener("input",e=>{popup.querySelector("#ts-label-size-val").textContent=e.target.value+"%";apply();});
+    // Cash & Values background listeners
+    popup.querySelector("#ts-cash-bg-op")?.addEventListener("input",e=>{popup.querySelector("#ts-cash-bg-op-val").textContent=Math.round(e.target.value*100)+"%";apply();});
+    // Cash & Assets button spacing listeners
+    popup.querySelector("#ts-cash-sl")?.addEventListener("input",e=>{popup.querySelector("#ts-cash-sl-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ts-cash-sr")?.addEventListener("input",e=>{popup.querySelector("#ts-cash-sr-val").textContent=e.target.value+"px";apply();});
+    popup.querySelectorAll("#ts-cash-bg-image,#ts-cash-bg-fit,#ts-cash-bg-align").forEach(el=>el?.addEventListener("change",apply));
     popup.querySelectorAll("select,input[type=color],input[type=checkbox]").forEach(el=>el.addEventListener("change",apply));
+
+    // ── Export / Import Settings ──
+    popup.querySelector("#ts-export")?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const actor = this.actor;
+      if (!actor) { ui.notifications.warn("No character assigned."); return; }
+      const prefs = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
+
+      const taskbarKeys = [
+        "taskbarHeight","bgColor","bgOpacity","accentColor","locked","autoHide",
+        "portraitWidth","portraitAreaCollapsed","sectionsExpanded",
+        "menuFontSize","menuFontColor","menuFontFamily","menuFontCaps",
+        "miniMenuDisplayMode","miniMenuItemSize","miniMenuPadding",
+        "miniMenuSpaceLeft","miniMenuSpaceRight",
+        "menuIconSize","menuLabelSize","menuIconColor","menuLabelColor","menuIconBgColor",
+        "menuIconsUnlocked","menuIconSettings",
+        "galleryTabsFontSize","galleryTabsFontColor","galleryTabsIconColor","galleryTabsBackground",
+        "lastSettingsTab"
+      ];
+      const portraitKeys = [
+        "portraitShadowBlur","portraitShadowColor","portraitShadowOpacity",
+        "portraitShadowOffsetX","portraitShadowOffsetY",
+        "upperPanelBgColor","upperPanelOpacity",
+        "namePanelBgColor","namePanelOpacity","namePanelFontSize","namePanelFontColor","namePanelFontFamily",
+        "bar1Color","bar2Color","bar3Color","bar1TextColor","bar2TextColor","bar3TextColor",
+        "arcBarColor","arcBarGlow","arcBarTextColor",
+        "xpCircleColor","xpCircleSize","xpCircleOffsetX","xpCircleOffsetY",
+        "portraitSpaceTransparent","portraitSpaceOpacity",
+        "portraitSettingsPos","lastPortraitSettingsTab"
+      ];
+
+      const taskbarSettings = {};
+      const portraitSettings = {};
+      const otherSettings = {};
+      for (const [k, v] of Object.entries(prefs)) {
+        if (taskbarKeys.includes(k)) taskbarSettings[k] = v;
+        else if (portraitKeys.includes(k)) portraitSettings[k] = v;
+        else otherSettings[k] = v;
+      }
+
+      const exportData = {
+        module: "cypher-taskbar",
+        version: game.modules.get("cypher-taskbar")?.data?.version ?? "unknown",
+        exportedAt: new Date().toISOString(),
+        actorName: actor.name,
+        actorId: actor.id,
+        taskbarSettings,
+        portraitSettings,
+        otherSettings
+      };
+
+      const fileName = `cypher-taskbar-settings-${actor.name?.replace(/[^a-z0-9]/gi, "_") || "actor"}.json`;
+      const jsonStr = JSON.stringify(exportData, null, 2);
+      const dataUrl = "data:application/json;charset=utf-8," + encodeURIComponent(jsonStr);
+      const a = document.createElement("a");
+      a.style.position = "absolute";
+      a.style.visibility = "hidden";
+      a.href = dataUrl;
+      a.download = fileName;
+      a.target = "_self";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.dispatchEvent(new MouseEvent("click", { bubbles: false, cancelable: true, view: window }));
+      setTimeout(() => {
+        a.remove();
+      }, 2000);
+      ui.notifications.info(`Settings exported for "${actor.name}". File downloaded.`);
+    });
+
+    popup.querySelector("#ts-import")?.addEventListener("click", () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".json";
+      input.style.display = "none";
+      input.addEventListener("change", async (ev) => {
+        const file = ev.target.files?.[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+
+          const imported = {};
+          if (data.taskbarSettings && typeof data.taskbarSettings === "object") {
+            Object.assign(imported, data.taskbarSettings);
+          }
+          if (data.portraitSettings && typeof data.portraitSettings === "object") {
+            Object.assign(imported, data.portraitSettings);
+          }
+          if (data.otherSettings && typeof data.otherSettings === "object") {
+            Object.assign(imported, data.otherSettings);
+          }
+          if (Object.keys(imported).length === 0 && data.settings && typeof data.settings === "object") {
+            Object.assign(imported, data.settings);
+          }
+          if (Object.keys(imported).length === 0) {
+            ui.notifications.error("Invalid settings file: no recognizable settings section.");
+            return;
+          }
+
+          const actor = this.actor;
+          if (!actor) { ui.notifications.warn("No character assigned."); return; }
+          const current = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
+          const merged = { ...current, ...imported };
+          await actor.setFlag("cypher-taskbar", "taskbarPrefs", merged);
+          this.applySettings();
+          this.refresh();
+          ui.notifications.info(`Settings imported successfully. (${Object.keys(imported).length} settings)`);
+        } catch (err) {
+          console.error(`${MODULE_ID} | Import failed:`, err);
+          ui.notifications.error("Failed to import settings. Check file format.");
+        }
+        input.remove();
+      });
+      document.body.appendChild(input);
+      input.click();
+    });
+
     popup.querySelector(".ct-popup-close").addEventListener("click",()=>popup.remove());
     setTimeout(()=>{ document.addEventListener("click",function h(e){if(!popup.contains(e.target)){popup.remove();document.removeEventListener("click",h);}});},50);
   }
@@ -2536,6 +3660,18 @@ class CypherTaskbar {
       bgColor: this._gs("menuIconBgColor") ?? "#1a1525"
     };
     return { ...defaults, ...(all[panelKey] || {}) };
+  }
+
+  /** Apply per-icon CSS variables to a menu panel button */
+  _applyMenuIconStyles(btn) {
+    const panel = btn.dataset.panel;
+    if (!panel) return;
+    const isettings = this._getIconSettings(panel);
+    btn.style.setProperty("--ct-menu-icon-size", isettings.iconSize / 100);
+    btn.style.setProperty("--ct-menu-label-size", isettings.labelSize / 100);
+    btn.style.setProperty("--ct-menu-icon-color", isettings.iconColor);
+    btn.style.setProperty("--ct-menu-label-color", isettings.labelColor);
+    btn.style.setProperty("--ct-menu-icon-bg", isettings.bgColor);
   }
 
   async _setIconSetting(panelKey, key, value) {
@@ -2587,6 +3723,9 @@ class CypherTaskbar {
       await this._setIconSetting(panelKey, "labelColor", popup.querySelector("#mi-label-color").value);
       await this._setIconSetting(panelKey, "bgColor", popup.querySelector("#mi-bg").value);
       this.applySettings();
+      // Re-apply to the specific button that was right-clicked
+      const btn = this.element?.querySelector(`.ct-btn[data-panel="${panelKey}"]`);
+      if (btn) this._applyMenuIconStyles(btn);
     };
 
     popup.querySelector("#mi-reset").addEventListener("click", async () => {
@@ -2594,6 +3733,9 @@ class CypherTaskbar {
       delete all[panelKey];
       await this._ss("menuIconSettings", JSON.stringify(all));
       this.applySettings();
+      // Re-apply to the specific button (now using global defaults)
+      const btn = this.element?.querySelector(`.ct-btn[data-panel="${panelKey}"]`);
+      if (btn) this._applyMenuIconStyles(btn);
       popup.remove();
     });
 
@@ -4884,6 +6026,12 @@ class CypherTaskbar {
     bar.style.setProperty("--ct-menu-font-color", this._gs("menuFontColor") ?? "#e8e8e8");
     bar.style.setProperty("--ct-menu-font-caps", (this._gs("menuFontCaps") ?? false) ? "uppercase" : "none");
     bar.style.setProperty("--ct-menu-font-family", this._gs("menuFontFamily") ?? "inherit");
+    // Mini menu spacing
+    bar.style.setProperty("--ct-mini-space-left", `${this._gs("miniMenuSpaceLeft") ?? 2}px`);
+    bar.style.setProperty("--ct-mini-space-right", `${this._gs("miniMenuSpaceRight") ?? 0}px`);
+    // Cash & Assets button spacing
+    bar.style.setProperty("--ct-cash-stack-space-left", `${this._gs("cashStackSpaceLeft") ?? 0}px`);
+    bar.style.setProperty("--ct-cash-stack-space-right", `${this._gs("cashStackSpaceRight") ?? 0}px`);
     // Menu icon settings
     bar.style.setProperty("--ct-menu-icon-size", (this._gs("menuIconSize") ?? 100) / 100);
     bar.style.setProperty("--ct-menu-label-size", (this._gs("menuLabelSize") ?? 100) / 100);
@@ -4910,6 +6058,8 @@ class CypherTaskbar {
       bookBtnIconVPos: this._gs("bookBtnIconVPos") ?? "center",
       bookBtnIconOffset: this._gs("bookBtnIconOffset") ?? 0
     });
+    // Apply per-icon overrides to all panel buttons
+    bar.querySelectorAll(".ct-btn[data-panel]").forEach(btn => this._applyMenuIconStyles(btn));
   }
 
   reposition() {
@@ -5139,12 +6289,7 @@ class CypherTaskbar {
           this._makePanelButtonDropTarget(btn, panel);
         }
         // Apply per-icon settings
-        const isettings = this._getIconSettings(panel);
-        btn.style.setProperty("--ct-menu-icon-size", isettings.iconSize / 100);
-        btn.style.setProperty("--ct-menu-label-size", isettings.labelSize / 100);
-        btn.style.setProperty("--ct-menu-icon-color", isettings.iconColor);
-        btn.style.setProperty("--ct-menu-label-color", isettings.labelColor);
-        btn.style.setProperty("--ct-menu-icon-bg", isettings.bgColor);
+        this._applyMenuIconStyles(btn);
       });
       // Re-bind mini category grid buttons
       const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", assets: "_openAssetsPanel", secrets: "_openSecretsPanel" };
@@ -5170,6 +6315,8 @@ class CypherTaskbar {
     }
 
     this.applySettings();
+    // Re-apply settings after a short delay to catch any async actor flag loading
+    setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 100);
   }
 
   _getItemStat(item) {
@@ -6491,7 +7638,7 @@ Hooks.once("init", () => {
       restricted: true
     });
   } else {
-    console.log(`${MODULE_ID} | FormApplication not available (Foundry v14+) — settings menu skipped, backgrounds accessible from taskbar UI`);
+    if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | FormApplication not available (Foundry v14+) — settings menu skipped, backgrounds accessible from taskbar UI`);
   }
 });
 
@@ -6502,7 +7649,7 @@ Hooks.once("ready", () => {
       return;
     }
     if (game.user?.isGM && game.settings.get(MODULE_ID, "loadOnlyForPlayers")) {
-      console.log(`${MODULE_ID} | Load Only For Players is enabled — GM taskbar disabled.`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Load Only For Players is enabled — GM taskbar disabled.`);
       return;
     }
 
@@ -6510,12 +7657,12 @@ Hooks.once("ready", () => {
     migrateActorPreferences();
 
     const modVer = game.modules.get(MODULE_ID)?.version ?? "?";
-    console.log(`${MODULE_ID} | v${modVer} loaded | Cypher System ${game.system.version || '?'}`);
+    if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | v${modVer} loaded | Cypher System ${game.system.version || '?'}`);
     
     try {
       CypherTaskbar.instance = new CypherTaskbar();
       window.CypherTaskbar = CypherTaskbar;
-      console.log(`${MODULE_ID} | CypherTaskbar instance created`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | CypherTaskbar instance created`);
     } catch (err) {
       console.error(`${MODULE_ID} | Failed to create CypherTaskbar instance:`, err);
       return;
@@ -6523,7 +7670,7 @@ Hooks.once("ready", () => {
     
     try {
       CypherTaskbar.instance.render();
-      console.log(`${MODULE_ID} | CypherTaskbar rendered successfully`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | CypherTaskbar rendered successfully`);
     } catch (err) {
       console.error(`${MODULE_ID} | Failed to render CypherTaskbar:`, err);
     }
@@ -6646,6 +7793,8 @@ Hooks.once("ready", () => {
   if (hideMacro && hotbar) hotbar.style.display = "none";
   const style = document.createElement("style");
   style.id = "ct-global-ui";
+  // Remove old global UI styles if they exist (prevent accumulation on re-init)
+  document.getElementById("ct-global-ui")?.remove();
   style.textContent = `
     #hotbar { transition: display 0.2s; }
     #sidebar,
@@ -6675,22 +7824,46 @@ Hooks.once("ready", () => {
 
 Hooks.on("disableModule", (module) => {
   if (module.id !== MODULE_ID) return;
+  // Clear all timers to prevent leaks
+  if (CypherTaskbar.instance) {
+    clearInterval(CypherTaskbar.instance._trayInterval);
+    clearTimeout(CypherTaskbar.instance._skillTooltipTimer);
+    clearTimeout(CypherTaskbar.instance._hideTimeout);
+  }
   document.querySelector(`#${MODULE_ID}-bar`)?.remove();
   document.querySelectorAll(".ct-popup").forEach(p => p.remove());
   CypherTaskbar.instance = null;
 });
 
-// Actor/Item/Combat hooks
+// Actor/Item/Combat hooks — debounced to prevent refresh storms
+let _debouncedRefresh = null;
+function _getDebouncedRefresh(tb) {
+  if (!_debouncedRefresh) {
+    _debouncedRefresh = foundry.utils.debounce(() => {
+      CypherTaskbar.instance?.refresh();
+      _debouncedRefresh = null;
+    }, 50);
+  }
+  return _debouncedRefresh;
+}
+
 Hooks.on("updateActor", (actor) => { 
   const tb = CypherTaskbar.instance; 
+  if (tb?._suppressRender) return;
   if (tb?.actor?.id === actor.id) { 
-    tb.actor = actor; // Use the freshly updated actor directly to ensure sync
-    tb.refresh(); 
+    tb.actor = actor;
+    _getDebouncedRefresh(tb)();
   } 
 });
-Hooks.on("createItem", (item) => { if (CypherTaskbar.instance?.actor?.id === item.parent?.id) CypherTaskbar.instance.refresh(); });
-Hooks.on("updateItem", (item) => { if (CypherTaskbar.instance?.actor?.id === item.parent?.id) CypherTaskbar.instance.refresh(); });
-Hooks.on("deleteItem", (item) => { if (CypherTaskbar.instance?.actor?.id === item.parent?.id) CypherTaskbar.instance.refresh(); });
+Hooks.on("createItem", (item) => { 
+  if (CypherTaskbar.instance?.actor?.id === item.parent?.id) _getDebouncedRefresh()(); 
+});
+Hooks.on("updateItem", (item) => { 
+  if (CypherTaskbar.instance?.actor?.id === item.parent?.id) _getDebouncedRefresh()(); 
+});
+Hooks.on("deleteItem", (item) => { 
+  if (CypherTaskbar.instance?.actor?.id === item.parent?.id) _getDebouncedRefresh()(); 
+});
 Hooks.on("createActiveEffect", (effect) => { if (CypherTaskbar.instance?.actor?.id === effect.parent?.id) CypherTaskbar.instance._refreshStatusEffects(); });
 Hooks.on("updateActiveEffect", (effect) => { if (CypherTaskbar.instance?.actor?.id === effect.parent?.id) CypherTaskbar.instance._refreshStatusEffects(); });
 Hooks.on("deleteActiveEffect", (effect) => { if (CypherTaskbar.instance?.actor?.id === effect.parent?.id) CypherTaskbar.instance._refreshStatusEffects(); });
@@ -6724,3 +7897,49 @@ Hooks.on("updateCombatant", () => CypherTaskbar.instance?.refresh());
 Hooks.on("deleteCombatant", () => CypherTaskbar.instance?.refresh());
 Hooks.on("updateCombat", () => CypherTaskbar.instance?.refresh());
 Hooks.on("deleteCombat", () => CypherTaskbar.instance?.refresh());
+
+// ── Cash & Values: GM interaction with USE chat cards ──
+Hooks.on("renderChatMessage", (message, html) => {
+  html.find("[data-cash-action]").on("click", async (ev) => {
+    ev.preventDefault();
+    const btn = ev.currentTarget;
+    const action = btn.dataset.cashAction;
+    const actorId = btn.dataset.actorId;
+    const itemId = btn.dataset.itemId;
+    if (!actorId || !itemId) return;
+
+    const actor = game.actors.get(actorId);
+    if (!actor) { ui.notifications.warn("Actor not found."); return; }
+    const item = actor.items.get(itemId);
+    if (!item) { ui.notifications.info("Item already deleted."); return; }
+
+    if (action === "expend") {
+      // Remove from cashValuables flag
+      const valuables = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
+      const filtered = valuables.filter(id => id !== itemId);
+      await actor.setFlag(MODULE_ID, "cashValuables", filtered);
+      // Delete item from actor
+      await actor.deleteEmbeddedDocuments("Item", [itemId]);
+      ui.notifications.info(`"${item.name}" expended and removed from ${actor.name}.`);
+      // Disable buttons in this message
+      const card = btn.closest(".ct-cash-use-card");
+      if (card) {
+        card.querySelectorAll(".ct-cash-use-btn").forEach(b => {
+          b.disabled = true;
+          b.style.opacity = "0.5";
+        });
+        card.insertAdjacentHTML("beforeend", `<div style="margin-top:6px;color:#c8a96e;font-weight:700;"><i class="fas fa-check-circle"></i> Item expended.</div>`);
+      }
+    } else if (action === "keep") {
+      // Just acknowledge — item stays
+      const card = btn.closest(".ct-cash-use-card");
+      if (card) {
+        card.querySelectorAll(".ct-cash-use-btn").forEach(b => {
+          b.disabled = true;
+          b.style.opacity = "0.5";
+        });
+        card.insertAdjacentHTML("beforeend", `<div style="margin-top:6px;color:#7ecf7e;font-weight:700;"><i class="fas fa-check-circle"></i> Item kept.</div>`);
+      }
+    }
+  });
+});

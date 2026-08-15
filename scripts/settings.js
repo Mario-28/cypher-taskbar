@@ -3,6 +3,7 @@
  */
 
 import { MODULE_ID } from "./utils.js";
+import { GlobalTaskbarDefaultsConfig } from "./global-defaults-config.js";
 
 export function registerSettings() {
   // ── Core Settings ──
@@ -214,6 +215,21 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "combatActionIconPadding", { scope: "client", config: false, type: Number, range: { min: 0, max: 20, step: 1 }, default: 3 });
   game.settings.register(MODULE_ID, "combatActionIconMargin", { scope: "client", config: false, type: Number, range: { min: 0, max: 20, step: 1 }, default: 4 });
 
+  game.settings.register(MODULE_ID, "miniMenuSpaceLeft", {
+    name: "CYPHER_TASKBAR.Settings.MiniMenu.SpaceLeft.Name",
+    hint: "CYPHER_TASKBAR.Settings.MiniMenu.SpaceLeft.Hint",
+    scope: "client", config: false, type: Number,
+    range: { min: 0, max: 50, step: 1 }, default: 2,
+    onChange: () => { /* live update */ }
+  });
+  game.settings.register(MODULE_ID, "miniMenuSpaceRight", {
+    name: "CYPHER_TASKBAR.Settings.MiniMenu.SpaceRight.Name",
+    hint: "CYPHER_TASKBAR.Settings.MiniMenu.SpaceRight.Hint",
+    scope: "client", config: false, type: Number,
+    range: { min: 0, max: 50, step: 1 }, default: 0,
+    onChange: () => { /* live update */ }
+  });
+
   console.log(`${MODULE_ID} | Settings registered`);
 
   // ── Mini Menu Settings ──
@@ -335,4 +351,29 @@ function _registerMenuSettings(prefix) {
     hint: "Global background images for all taskbar menus.",
     scope: "world", config: false, type: String, default: "{}"
   });
+
+  // ── Global Taskbar Defaults ──
+  game.settings.register(MODULE_ID, "globalTaskbarDefaultsActive", {
+    name: "CYPHER_TASKBAR.Settings.GlobalDefaultsActive.Name",
+    hint: "CYPHER_TASKBAR.Settings.GlobalDefaultsActive.Hint",
+    scope: "world", config: true, type: Boolean, default: false,
+    onChange: () => {
+      if (game.cypherTaskbar?.instance) {
+        game.cypherTaskbar.instance.applySettings();
+        game.cypherTaskbar.instance.refresh();
+      }
+    }
+  });
+  game.settings.register(MODULE_ID, "globalTaskbarDefaultsData", {
+    scope: "world", config: false, type: String, default: "{}"
+  });
+  if (GlobalTaskbarDefaultsConfig) {
+    game.settings.registerMenu(MODULE_ID, "globalTaskbarDefaultsMenu", {
+      name: "CYPHER_TASKBAR.Settings.GlobalDefaultsMenu.Name",
+      label: "CYPHER_TASKBAR.Settings.GlobalDefaultsMenu.Label",
+      icon: "fas fa-globe",
+      type: GlobalTaskbarDefaultsConfig,
+      restricted: true
+    });
+  }
 }

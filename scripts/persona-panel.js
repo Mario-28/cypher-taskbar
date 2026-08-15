@@ -488,7 +488,7 @@ export function applyPersonaPanel(CypherTaskbar) {
 
     _getPersonaAboutData(actor) {
       const defaultData = {
-        appearance: { text: "", imageUrl: "" },
+        appearance: { text: "", imageUrl: "", age: "", gender: "", width: "", height: "", ancestry: "", skin: "", hair: "", eyes: "", body: "" },
         style: { text: "", imageUrl: "" },
         usualLife: { text: "", imageUrl: "" },
         aroundFriends: { text: "", imageUrl: "" },
@@ -506,6 +506,17 @@ export function applyPersonaPanel(CypherTaskbar) {
           if (raw[key] && typeof raw[key] === 'object') {
             result[key].text = String(raw[key].text ?? "").trim().slice(0, 4000);
             result[key].imageUrl = String(raw[key].imageUrl ?? "").trim().slice(0, 2048);
+            if (key === "appearance") {
+              result[key].age = String(raw[key].age ?? "").trim().slice(0, 50);
+              result[key].gender = String(raw[key].gender ?? "").trim().slice(0, 50);
+              result[key].width = String(raw[key].width ?? "").trim().slice(0, 50);
+              result[key].height = String(raw[key].height ?? "").trim().slice(0, 50);
+              result[key].ancestry = String(raw[key].ancestry ?? "").trim().slice(0, 50);
+              result[key].skin = String(raw[key].skin ?? "").trim().slice(0, 50);
+              result[key].hair = String(raw[key].hair ?? "").trim().slice(0, 50);
+              result[key].eyes = String(raw[key].eyes ?? "").trim().slice(0, 50);
+              result[key].body = String(raw[key].body ?? "").trim().slice(0, 50);
+            }
           }
         }
         return result;
@@ -530,6 +541,40 @@ export function applyPersonaPanel(CypherTaskbar) {
       return `<div class="ct-persona-about-section">
         ${sections.map(sec => {
           const entry = data[sec.key];
+          if (sec.key === "appearance") {
+            const fields = [
+              { key: "age", label: "AGE" },
+              { key: "gender", label: "GENDER" },
+              { key: "width", label: "WIDTH" },
+              { key: "height", label: "HEIGHT" },
+              { key: "ancestry", label: "ANCESTRY" },
+              { key: "skin", label: "SKIN" },
+              { key: "hair", label: "HAIR" },
+              { key: "eyes", label: "EYES" },
+              { key: "body", label: "BODY" }
+            ];
+            const hasAnyField = fields.some(f => entry[f.key]);
+            const hasContent = entry.text || entry.imageUrl || hasAnyField;
+            const imageHtml = entry.imageUrl ? `<div class="ct-persona-about-image"><img src="${foundry.utils.escapeHTML(entry.imageUrl)}" alt="" loading="lazy"></div>` : '';
+            const textHtml = entry.text ? `<div class="ct-persona-about-text">${foundry.utils.escapeHTML(entry.text).replace(/\n/g, '<br>')}</div>` : '';
+            const tableHtml = hasAnyField ? `<div class="ct-persona-appearance-table-wrap">
+              <table class="ct-persona-appearance-table">
+                <tbody>
+                  ${fields.map(f => entry[f.key] ? `<tr><td class="ct-apt-label">${f.label}</td><td class="ct-apt-value">${foundry.utils.escapeHTML(entry[f.key])}</td></tr>` : '').join('')}
+                </tbody>
+              </table>
+            </div>` : '';
+            return `<div class="ct-persona-about-card${hasContent ? ' has-content' : ''}" data-about-key="${sec.key}">
+              <div class="ct-persona-about-header">
+                <div class="ct-persona-about-title"><i class="${sec.icon}"></i> ${sec.label}</div>
+                <button class="ct-persona-about-edit" data-about-edit="${sec.key}" title="Edit ${sec.label}"><i class="fas fa-pen"></i></button>
+              </div>
+              <div class="ct-persona-about-body">
+                ${tableHtml}${imageHtml}${textHtml}
+                ${!hasContent ? `<div class="ct-persona-about-empty"><i class="fas fa-pen-square"></i> Click edit to add content</div>` : ''}
+              </div>
+            </div>`;
+          }
           const hasContent = entry.text || entry.imageUrl;
           const imageHtml = entry.imageUrl ? `<div class="ct-persona-about-image"><img src="${foundry.utils.escapeHTML(entry.imageUrl)}" alt="" loading="lazy"></div>` : '';
           const textHtml = entry.text ? `<div class="ct-persona-about-text">${foundry.utils.escapeHTML(entry.text).replace(/\n/g, '<br>')}</div>` : '';
@@ -907,12 +952,30 @@ export function applyPersonaPanel(CypherTaskbar) {
       const current = data[key] || { text: "", imageUrl: "" };
       const label = sectionLabels[key] || key;
 
+      const appearanceFieldsHtml = key === "appearance" ? `
+        <div class="form-group">
+          <label>Appearance Details</label>
+          <div class="ct-persona-appearance-fields">
+            <div class="form-group"><label>AGE</label><input type="text" name="aboutAge" maxlength="50" value="${foundry.utils.escapeHTML(current.age || "")}" placeholder="e.g. 24" /></div>
+            <div class="form-group"><label>GENDER</label><input type="text" name="aboutGender" maxlength="50" value="${foundry.utils.escapeHTML(current.gender || "")}" placeholder="e.g. Female" /></div>
+            <div class="form-group"><label>WIDTH</label><input type="text" name="aboutWidth" maxlength="50" value="${foundry.utils.escapeHTML(current.width || "")}" placeholder="e.g. 65 kg" /></div>
+            <div class="form-group"><label>HEIGHT</label><input type="text" name="aboutHeight" maxlength="50" value="${foundry.utils.escapeHTML(current.height || "")}" placeholder="e.g. 170 cm" /></div>
+            <div class="form-group"><label>ANCESTRY</label><input type="text" name="aboutAncestry" maxlength="50" value="${foundry.utils.escapeHTML(current.ancestry || "")}" placeholder="e.g. Human" /></div>
+            <div class="form-group"><label>SKIN</label><input type="text" name="aboutSkin" maxlength="50" value="${foundry.utils.escapeHTML(current.skin || "")}" placeholder="e.g. Fair" /></div>
+            <div class="form-group"><label>HAIR</label><input type="text" name="aboutHair" maxlength="50" value="${foundry.utils.escapeHTML(current.hair || "")}" placeholder="e.g. Blonde" /></div>
+            <div class="form-group"><label>EYES</label><input type="text" name="aboutEyes" maxlength="50" value="${foundry.utils.escapeHTML(current.eyes || "")}" placeholder="e.g. Blue" /></div>
+            <div class="form-group"><label>BODY</label><input type="text" name="aboutBody" maxlength="50" value="${foundry.utils.escapeHTML(current.body || "")}" placeholder="e.g. Athletic" /></div>
+          </div>
+        </div>
+      ` : '';
+
       const dialogContent = `
         <form class="ct-persona-about-form">
           <div class="form-group">
             <label>Image URL</label>
             <input type="url" name="aboutImageUrl" maxlength="2048" value="${foundry.utils.escapeHTML(current.imageUrl || "")}" placeholder="https://example.com/image.webp" />
           </div>
+          ${appearanceFieldsHtml}
           <div class="form-group">
             <label>Content</label>
             <textarea name="aboutText" rows="12" maxlength="4000" placeholder="Write about ${foundry.utils.escapeHTML(label)}...">${foundry.utils.escapeHTML(current.text || "")}</textarea>
@@ -933,6 +996,17 @@ export function applyPersonaPanel(CypherTaskbar) {
               const imageUrl = String(root.querySelector('[name="aboutImageUrl"]')?.value ?? "").trim().slice(0, 2048);
               const next = this._getPersonaAboutData(actor);
               next[key] = { text, imageUrl };
+              if (key === "appearance") {
+                next[key].age = String(root.querySelector('[name="aboutAge"]')?.value ?? "").trim().slice(0, 50);
+                next[key].gender = String(root.querySelector('[name="aboutGender"]')?.value ?? "").trim().slice(0, 50);
+                next[key].width = String(root.querySelector('[name="aboutWidth"]')?.value ?? "").trim().slice(0, 50);
+                next[key].height = String(root.querySelector('[name="aboutHeight"]')?.value ?? "").trim().slice(0, 50);
+                next[key].ancestry = String(root.querySelector('[name="aboutAncestry"]')?.value ?? "").trim().slice(0, 50);
+                next[key].skin = String(root.querySelector('[name="aboutSkin"]')?.value ?? "").trim().slice(0, 50);
+                next[key].hair = String(root.querySelector('[name="aboutHair"]')?.value ?? "").trim().slice(0, 50);
+                next[key].eyes = String(root.querySelector('[name="aboutEyes"]')?.value ?? "").trim().slice(0, 50);
+                next[key].body = String(root.querySelector('[name="aboutBody"]')?.value ?? "").trim().slice(0, 50);
+              }
               await actor.setFlag(MODULE_ID, 'personaAbout', next);
               this.render();
             }

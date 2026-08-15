@@ -189,11 +189,27 @@ const FLAG_SCOPE = MODULE_ID;
 const PREF_KEY = "taskbarPrefs";
 
 export function getActorPref(actorId, key, fallback = null) {
-  if (!actorId) return fallback;
-  const actor = game.actors?.get(actorId);
-  if (!actor) return fallback;
-  const prefs = actor.getFlag(FLAG_SCOPE, PREF_KEY) ?? {};
-  return prefs[key] ?? fallback;
+  // 1. Check actor-specific override
+  if (actorId) {
+    const actor = game.actors?.get(actorId);
+    if (actor) {
+      const prefs = actor.getFlag(FLAG_SCOPE, PREF_KEY) ?? {};
+      if (prefs[key] !== undefined) return prefs[key];
+    }
+  }
+
+  // 2. Check global defaults (if active)
+  try {
+    const globalActive = game.settings?.get?.(MODULE_ID, "globalTaskbarDefaultsActive");
+    if (globalActive) {
+      const globalDefaults = readJSONSetting("globalTaskbarDefaultsData", {});
+      if (globalDefaults[key] !== undefined) return globalDefaults[key];
+    }
+  } catch {
+    /* settings not ready yet */
+  }
+
+  return fallback;
 }
 
 export async function setActorPref(actorId, key, value) {

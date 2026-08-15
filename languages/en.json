@@ -20,6 +20,14 @@
       "LoadOnlyForPlayers": {
         "Name": "Load Only For Players",
         "Hint": "When enabled, the taskbar will not load for the GM. Only players will see it. Requires a page refresh to take effect."
+      },
+      "GlobalDefaultsActive": {
+        "Name": "Use Global Defaults",
+        "Hint": "When enabled, all actors use the GM-imported global defaults unless they override a specific setting."
+      },
+      "GlobalDefaultsMenu": {
+        "Name": "Global Taskbar Defaults",
+        "Label": "Configure Defaults"
       }
     },
     "NoActor": "No Character",
