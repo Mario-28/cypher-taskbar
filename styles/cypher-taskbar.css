@@ -2818,9 +2818,86 @@ align-self: stretch;
   color: #4ecdc4;
   background: rgba(78,205,196,0.12);
 }
+
+/* ── Help button + actions row ── */
+.ct-persona-about-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ct-persona-about-help {
+  background: none;
+  border: none;
+  color: rgba(226,237,255,0.45);
+  cursor: help;
+  font-size: 0.78em;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.ct-persona-about-help:hover,
+.ct-persona-about-help:focus-visible {
+  color: #e2bc7a;
+  background: rgba(226, 188, 122, 0.15);
+}
+
+/* ── Fancy Tooltip ── */
+.ct-persona-tooltip {
+  position: absolute;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  max-width: 320px;
+  min-width: 220px;
+}
+
+.ct-persona-tooltip.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.ct-persona-tooltip-text {
+  padding: 14px 18px;
+  border-radius: 16px;
+  font-size: 0.82rem;
+  line-height: 1.65;
+  color: #fff8ee;
+  background:
+    radial-gradient(circle at top left, rgba(255, 223, 154, 0.18), transparent 40%),
+    radial-gradient(circle at bottom right, rgba(90, 60, 20, 0.35), transparent 50%),
+    linear-gradient(145deg, rgba(42, 26, 12, 0.92) 0%, rgba(28, 16, 8, 0.94) 100%);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid rgba(226, 188, 122, 0.22);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 240, 213, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.ct-persona-tooltip-arrow {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: linear-gradient(145deg, rgba(42, 26, 12, 0.92) 0%, rgba(28, 16, 8, 0.94) 100%);
+  border-right: 1px solid rgba(226, 188, 122, 0.22);
+  border-bottom: 1px solid rgba(226, 188, 122, 0.22);
+  box-shadow: 2px 2px 4px rgba(0,0,0,0.15);
+}
+
 .ct-persona-about-body {
   padding: 10px 12px;
   min-height: 40px;
+  overflow: hidden;
 }
 .ct-persona-about-image {
   margin-bottom: 8px;
@@ -2851,9 +2928,131 @@ align-self: stretch;
   gap: 6px;
 }
 
+/* ── Backstory Section ── */
+.ct-persona-backstory-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.ct-persona-backstory-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0,0,0,0.18);
+  border-bottom: 1px solid rgba(199, 146, 234, 0.12);
+}
+.ct-persona-backstory-title {
+  font-size: 0.78em;
+  font-weight: 600;
+  color: #c792ea;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ct-persona-backstory-title i {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.ct-persona-backstory-edit {
+  background: none;
+  border: none;
+  color: rgba(226,237,255,0.50);
+  cursor: pointer;
+  font-size: 0.8em;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+.ct-persona-backstory-edit:hover {
+  color: #c792ea;
+  background: rgba(199, 146, 234, 0.12);
+}
+.ct-persona-backstory-body {
+  padding: 14px 16px;
+  min-height: 120px;
+  overflow: hidden;
+}
+.ct-persona-backstory-image {
+  margin-bottom: 12px;
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 280px;
+}
+.ct-persona-backstory-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ct-persona-backstory-text {
+  font-size: 0.85em;
+  line-height: 1.65;
+  color: rgba(237,244,255,0.90);
+  white-space: pre-wrap;
+}
+.ct-persona-backstory-empty {
+  color: rgba(226,237,255,0.35);
+  font-size: 0.78em;
+  text-align: center;
+  padding: 24px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* ── Reputation Section ── */
+.ct-persona-reputation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.ct-persona-reputation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0,0,0,0.18);
+  border-bottom: 1px solid rgba(218, 165, 32, 0.12);
+}
+.ct-persona-reputation-title {
+  font-size: 0.78em;
+  font-weight: 600;
+  color: #daa520;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ct-persona-reputation-title i {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+.ct-persona-reputation-body {
+  padding: 14px 16px;
+  min-height: 120px;
+  overflow: hidden;
+}
+.ct-persona-reputation-empty {
+  color: rgba(226,237,255,0.35);
+  font-size: 0.78em;
+  text-align: center;
+  padding: 24px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 /* ── Appearance Table ── */
 .ct-persona-appearance-table-wrap {
-  margin-bottom: 10px;
+  float: right;
+  margin-left: 12px;
+  margin-bottom: 8px;
   width: 30%;
   min-width: 160px;
 }
@@ -4245,6 +4444,278 @@ align-self: stretch;
   }
 }
 
+/* ═══════════════════════════════════════════
+   Arc View Dialog — Read-only fancy display
+   ═══════════════════════════════════════════ */
+.app.ct-persona-arc-view-dialog-app {
+  border-radius: 24px !important;
+  overflow: hidden;
+  border: 1px solid rgba(171, 129, 63, 0.30) !important;
+  box-shadow: 0 26px 70px rgba(20, 11, 4, 0.40), 0 0 0 1px rgba(255, 240, 213, 0.22) !important;
+}
+
+.app.ct-persona-arc-view-dialog-app .window-header {
+  background: linear-gradient(180deg, rgba(48, 28, 11, 0.96) 0%, rgba(30, 18, 8, 0.98) 100%) !important;
+  border-bottom: 1px solid rgba(214, 171, 96, 0.25) !important;
+}
+
+.app.ct-persona-arc-view-dialog-app .window-content {
+  padding: 0 !important;
+  background: linear-gradient(180deg, rgba(248, 240, 226, 0.98) 0%, rgba(240, 228, 205, 0.99) 100%) !important;
+}
+
+.ct-persona-arc-view {
+  min-height: 0;
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(143, 104, 39, 0.45) rgba(255, 255, 255, 0.2);
+  position: relative;
+}
+
+.ct-persona-arc-view::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center center;
+  opacity: 0.12;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ct-persona-arc-view-hero {
+  position: relative;
+  z-index: 1;
+  padding: 22px 24px 18px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 223, 154, 0.30), transparent 34%),
+    linear-gradient(135deg, rgba(52, 31, 13, 0.98) 0%, rgba(20, 13, 6, 0.98) 100%);
+  border-bottom: 1px solid rgba(214, 171, 96, 0.18);
+}
+
+.ct-persona-arc-view-kicker {
+  font-size: 0.68em;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(236, 195, 118, 0.75);
+  margin-bottom: 6px;
+}
+
+.ct-persona-arc-view-title {
+  font-size: 1.35em;
+  font-weight: 700;
+  color: #f3d59f;
+  text-shadow: 0 2px 8px rgba(30, 18, 6, 0.45);
+  margin-bottom: 10px;
+  line-height: 1.3;
+}
+
+.ct-persona-arc-view-title i {
+  color: #e8a838;
+  margin-right: 8px;
+}
+
+.ct-persona-arc-view-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-bottom: 10px;
+}
+
+.ct-arc-view-meta-item {
+  font-size: 0.78em;
+  color: rgba(236, 210, 165, 0.72);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ct-arc-view-meta-item i {
+  color: rgba(236, 195, 118, 0.65);
+  font-size: 0.9em;
+}
+
+.ct-arc-view-progress {
+  position: relative;
+  height: 18px;
+  background: rgba(20, 13, 6, 0.50);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(214, 171, 96, 0.15);
+}
+
+.ct-arc-view-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, rgba(232, 168, 56, 0.85) 0%, rgba(243, 213, 159, 0.75) 100%);
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ct-arc-view-progress span {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68em;
+  font-weight: 700;
+  color: #f3d59f;
+  text-shadow: 0 1px 3px rgba(20, 11, 4, 0.60);
+  letter-spacing: 0.05em;
+}
+
+.ct-persona-arc-view-body {
+  position: relative;
+  z-index: 1;
+  padding: 18px 22px 22px;
+  background:
+    radial-gradient(circle at top right, rgba(236, 195, 118, 0.16), transparent 34%),
+    radial-gradient(circle at bottom left, rgba(134, 94, 47, 0.1), transparent 40%),
+    linear-gradient(180deg, rgba(248, 240, 226, 0.98) 0%, rgba(240, 228, 205, 0.99) 100%);
+}
+
+.ct-arc-view-section {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(143, 104, 39, 0.10);
+}
+
+.ct-arc-view-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.ct-arc-view-section-title {
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8f6827;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ct-arc-view-section-title i {
+  color: #b8860b;
+  font-size: 1.1em;
+}
+
+.ct-arc-view-section-title em {
+  font-style: normal;
+  color: rgba(143, 104, 39, 0.55);
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.ct-arc-view-section-text {
+  font-size: 0.85em;
+  line-height: 1.65;
+  color: rgba(66, 48, 18, 0.88);
+  padding-left: 2px;
+}
+
+.ct-arc-view-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ct-arc-view-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(143, 104, 39, 0.12);
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+
+.ct-arc-view-step.is-done {
+  background: rgba(180, 220, 160, 0.25);
+  border-color: rgba(100, 160, 80, 0.22);
+}
+
+.ct-arc-view-step-num {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(143, 104, 39, 0.85) 0%, rgba(100, 72, 28, 0.90) 100%);
+  color: #f3d59f;
+  font-size: 0.72em;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+.ct-arc-view-step.is-done .ct-arc-view-step-num {
+  background: linear-gradient(135deg, rgba(100, 160, 80, 0.85) 0%, rgba(80, 140, 60, 0.90) 100%);
+  color: #e8f5d8;
+}
+
+.ct-arc-view-step-text {
+  flex: 1;
+  font-size: 0.82em;
+  line-height: 1.55;
+  color: rgba(66, 48, 18, 0.85);
+  padding-top: 3px;
+}
+
+.ct-arc-view-step.is-done .ct-arc-view-step-text {
+  color: rgba(80, 120, 60, 0.78);
+  text-decoration: line-through;
+  text-decoration-color: rgba(100, 160, 80, 0.35);
+}
+
+.ct-arc-view-step-badge {
+  flex: 0 0 auto;
+  color: #64a050;
+  font-size: 0.9em;
+  padding-top: 3px;
+}
+
+.ct-arc-view-empty {
+  color: rgba(143, 104, 39, 0.45);
+  font-size: 0.8em;
+  text-align: center;
+  padding: 24px 8px;
+  font-style: italic;
+}
+
+.ct-arc-view-empty i {
+  color: rgba(143, 104, 39, 0.35);
+  margin-right: 6px;
+}
+
+@media (max-width: 640px) {
+  .app.ct-persona-arc-view-dialog-app .window-content {
+    padding: 0 !important;
+  }
+
+  .ct-persona-arc-view {
+    max-height: calc(100vh - 120px);
+  }
+
+  .ct-persona-arc-view-hero {
+    padding: 16px 18px 14px;
+  }
+
+  .ct-persona-arc-view-title {
+    font-size: 1.15em;
+  }
+
+  .ct-persona-arc-view-body {
+    padding: 14px 16px 18px;
+  }
+}
 
 .ct-persona-arc-title-row {
   display: flex;
@@ -4354,6 +4825,350 @@ align-self: stretch;
   .ct-persona-arc-toolbar {
     align-items: flex-start;
   }
+
+[... 5405 more lines in file. Use offset=4365 to continue.]
+
+
+/* ═══════════════════════════════════════════
+   FANCY ABOUT DIALOG  —  V1 + V2 compatible
+   ═══════════════════════════════════════════ */
+
+/* ── V1 dialog wrapper (.app.window-app) ── */
+#ui-windows .app.window-app.ct-persona-about-dialog-app,
+.app.window-app.ct-persona-about-dialog-app {
+  border-radius: 24px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(171, 129, 63, 0.24) !important;
+  box-shadow: 0 26px 70px rgba(20, 11, 4, 0.35), 0 0 0 1px rgba(255, 240, 213, 0.18) !important;
+}
+
+/* ── V2 dialog wrapper (.application) ── */
+#ui-windows .application.dialog.ct-persona-about-dialog-app,
+.application.dialog.ct-persona-about-dialog-app {
+  border-radius: 24px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(171, 129, 63, 0.24) !important;
+  box-shadow: 0 26px 70px rgba(20, 11, 4, 0.35), 0 0 0 1px rgba(255, 240, 213, 0.18) !important;
+}
+
+/* ── Header (V1) ── */
+#ui-windows .app.window-app.ct-persona-about-dialog-app .window-header,
+.app.window-app.ct-persona-about-dialog-app .window-header {
+  background: linear-gradient(180deg, rgba(48, 28, 11, 0.96) 0%, rgba(30, 18, 8, 0.98) 100%) !important;
+  border-bottom: 1px solid rgba(214, 171, 96, 0.2) !important;
+}
+
+#ui-windows .app.window-app.ct-persona-about-dialog-app .window-header .window-title,
+.app.window-app.ct-persona-about-dialog-app .window-header .window-title {
+  color: #e2bc7a !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+}
+
+/* ── Header (V2) ── */
+#ui-windows .application.dialog.ct-persona-about-dialog-app .window-header,
+.application.dialog.ct-persona-about-dialog-app .window-header {
+  background: linear-gradient(180deg, rgba(48, 28, 11, 0.96) 0%, rgba(30, 18, 8, 0.98) 100%) !important;
+  border-bottom: 1px solid rgba(214, 171, 96, 0.2) !important;
+}
+
+#ui-windows .application.dialog.ct-persona-about-dialog-app .window-header .window-title,
+.application.dialog.ct-persona-about-dialog-app .window-header .window-title {
+  color: #e2bc7a !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+}
+
+/* ── Content (V1) ── */
+#ui-windows .app.window-app.ct-persona-about-dialog-app .window-content,
+.app.window-app.ct-persona-about-dialog-app .window-content {
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+/* ── Content (V2) ── */
+#ui-windows .application.dialog.ct-persona-about-dialog-app .window-content,
+.application.dialog.ct-persona-about-dialog-app .window-content {
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+.ct-persona-about-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: #111111;
+  min-height: 0;
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+  padding: 16px;
+  padding-right: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(143, 104, 39, 0.45) rgba(255, 255, 255, 0.2);
+  /* Glassmorphism background on the form itself */
+  background:
+    radial-gradient(circle at top right, rgba(236, 195, 118, 0.16), transparent 34%),
+    radial-gradient(circle at bottom left, rgba(134, 94, 47, 0.1), transparent 40%),
+    linear-gradient(180deg, rgba(248, 240, 226, 0.92) 0%, rgba(240, 228, 205, 0.94) 100%) !important;
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 8px 32px rgba(20, 11, 4, 0.18);
+}
+
+.ct-persona-about-dialog::-webkit-scrollbar {
+  width: 10px;
+}
+
+.ct-persona-about-dialog::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+}
+
+.ct-persona-about-dialog::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(167, 121, 41, 0.75) 0%, rgba(112, 79, 28, 0.78) 100%);
+  border-radius: 999px;
+}
+
+.ct-persona-about-dialog-hero {
+  position: relative;
+  overflow: hidden;
+  padding: 18px 20px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 223, 154, 0.28), transparent 34%),
+    linear-gradient(135deg, rgba(52, 31, 13, 0.98) 0%, rgba(20, 13, 6, 0.98) 100%);
+  border-radius: 16px;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+}
+
+.ct-persona-about-dialog-hero::after {
+  content: "";
+  position: absolute;
+  inset: auto -18% -38% auto;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 215, 134, 0.24) 0%, rgba(255, 215, 134, 0.08) 40%, transparent 72%);
+  pointer-events: none;
+}
+
+.ct-persona-about-dialog-hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ct-persona-about-dialog-kicker {
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #e2bc7a;
+}
+
+.ct-persona-about-dialog-title {
+  margin-top: 8px;
+  font-size: 1.18rem;
+  font-weight: 800;
+  color: #fff5e1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ct-persona-about-dialog-title i {
+  font-size: 1rem;
+  color: #e2bc7a;
+}
+
+.ct-abt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  background-blend-mode: luminosity;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 4px 16px rgba(20, 11, 4, 0.08);
+  flex-shrink: 0;
+  align-items: stretch;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.ct-abt-field.ct-abt-field-full {
+  width: 100%;
+  max-width: 100%;
+}
+
+.ct-abt-field.ct-abt-field-full textarea {
+  width: 100% !important;
+  min-width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.ct-abt-field span {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7a5318;
+}
+
+.ct-abt-field input,
+.ct-abt-field textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(143, 104, 39, 0.24);
+  background: rgba(255, 252, 247, 0.96);
+  color: #111111;
+  padding: 10px 12px;
+  box-shadow: inset 0 1px 2px rgba(61, 34, 8, 0.08);
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.ct-abt-field textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.ct-abt-field input::placeholder,
+.ct-abt-field textarea::placeholder {
+  color: rgba(90, 70, 40, 0.45);
+}
+
+.ct-abt-field input:focus,
+.ct-abt-field textarea:focus {
+  border-color: rgba(143, 104, 39, 0.55);
+  box-shadow: inset 0 1px 2px rgba(61, 34, 8, 0.08), 0 0 0 3px rgba(200, 169, 110, 0.15);
+  outline: none;
+}
+
+.ct-abt-field em {
+  font-style: normal;
+  font-size: 0.78rem;
+  color: #5c5c5c;
+}
+
+/* Appearance fields inside fancy dialog */
+.ct-persona-about-dialog .ct-persona-appearance-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ct-persona-about-dialog .ct-persona-appearance-fields .form-group {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ct-persona-about-dialog .ct-persona-appearance-fields .form-group label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7a5318;
+}
+
+.ct-persona-about-dialog .ct-persona-appearance-fields .form-group input {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(143, 104, 39, 0.24);
+  background: rgba(255, 252, 247, 0.96);
+  color: #111111;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  box-shadow: inset 0 1px 2px rgba(61, 34, 8, 0.08);
+}
+
+.ct-persona-about-dialog .ct-persona-appearance-fields .form-group input:focus {
+  border-color: rgba(143, 104, 39, 0.55);
+  box-shadow: inset 0 1px 2px rgba(61, 34, 8, 0.08), 0 0 0 3px rgba(200, 169, 110, 0.15);
+  outline: none;
+}
+
+/* ── Buttons (V1 + V2) ── */
+#ui-windows .app.window-app.ct-persona-about-dialog-app .dialog-buttons,
+.app.window-app.ct-persona-about-dialog-app .dialog-buttons,
+#ui-windows .application.dialog.ct-persona-about-dialog-app .dialog-buttons,
+.application.dialog.ct-persona-about-dialog-app .dialog-buttons {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 250, 241, 0.92);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(143, 104, 39, 0.16);
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+#ui-windows .app.window-app.ct-persona-about-dialog-app .dialog-buttons button,
+.app.window-app.ct-persona-about-dialog-app .dialog-buttons button,
+#ui-windows .application.dialog.ct-persona-about-dialog-app .dialog-buttons button,
+.application.dialog.ct-persona-about-dialog-app .dialog-buttons button {
+  min-height: 38px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+#ui-windows .app.window-app.ct-persona-about-dialog-app .dialog-buttons .dialog-button.save,
+.app.window-app.ct-persona-about-dialog-app .dialog-buttons .dialog-button.save,
+#ui-windows .application.dialog.ct-persona-about-dialog-app .dialog-buttons .dialog-button.save,
+.application.dialog.ct-persona-about-dialog-app .dialog-buttons .dialog-button.save {
+  background: linear-gradient(180deg, rgba(90, 60, 20, 0.96) 0%, rgba(54, 36, 12, 0.98) 100%) !important;
+  color: #fff7ea !important;
+  border: 1px solid rgba(255, 229, 179, 0.18) !important;
+}
+
+#ui-windows .app.window-app.ct-persona-about-dialog-app .dialog-buttons .dialog-button.cancel,
+.app.window-app.ct-persona-about-dialog-app .dialog-buttons .dialog-button.cancel,
+#ui-windows .application.dialog.ct-persona-about-dialog-app .dialog-buttons .dialog-button.cancel,
+.application.dialog.ct-persona-about-dialog-app .dialog-buttons .dialog-button.cancel {
+  background: rgba(255, 255, 255, 0.76) !important;
+  color: #111111 !important;
+  border: 1px solid rgba(143, 104, 39, 0.16) !important;
+}
+
+@media (max-width: 640px) {
+  #ui-windows .app.window-app.ct-persona-about-dialog-app .window-content,
+  .app.window-app.ct-persona-about-dialog-app .window-content,
+  #ui-windows .application.dialog.ct-persona-about-dialog-app .window-content,
+  .application.dialog.ct-persona-about-dialog-app .window-content {
+    padding: 12px !important;
+  }
+
+  .ct-persona-about-dialog {
+    max-height: calc(100vh - 120px);
+  }
+
+  #ui-windows .app.window-app.ct-persona-about-dialog-app .dialog-buttons,
+  .app.window-app.ct-persona-about-dialog-app .dialog-buttons,
+  #ui-windows .application.dialog.ct-persona-about-dialog-app .dialog-buttons,
+  .application.dialog.ct-persona-about-dialog-app .dialog-buttons {
+    flex-wrap: wrap;
+  }
+
+  .ct-persona-about-dialog .ct-persona-appearance-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .ct-persona-about-dialog .ct-persona-appearance-fields {
+    grid-template-columns: 1fr;
+  }
+}
 
   .ct-persona-arc-jump {
     max-width: 120px;

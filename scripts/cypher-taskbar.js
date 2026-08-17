@@ -2239,13 +2239,36 @@ class CypherTaskbar {
     // Cancel
     dialog.querySelector("#ct-spend-cancel").onclick = () => dialog.remove();
 
+    // ── Currency conversion helper ──
+    // Rates: 1 PP = 10 GP = 100 SP = 1000 CP
+    const _CASH_RATES = { cp: 1, sp: 10, gp: 100, pp: 1000 };
+    const _CASH_DENOMS = ['pp', 'gp', 'sp', 'cp']; // highest to lowest
+
+    const _convertMoneyToCp = (money) => {
+      return _CASH_DENOMS.reduce((sum, d) => sum + ((money[d] || 0) * _CASH_RATES[d]), 0);
+    };
+
+    const _convertCpToMoney = (cpTotal) => {
+      const result = { cp: 0, sp: 0, gp: 0, pp: 0 };
+      let remaining = cpTotal;
+      for (const d of _CASH_DENOMS) {
+        result[d] = Math.floor(remaining / _CASH_RATES[d]);
+        remaining -= result[d] * _CASH_RATES[d];
+      }
+      return result;
+    };
+
+    const _formatDenom = (amt, denom) => `${amt} ${denom.toUpperCase()}`;
+
     // Spend
     dialog.querySelector("#ct-spend-btn").onclick = async () => {
       if (total <= 0) { dialog.remove(); return; }
       const denom = dialog.querySelector('input[name="ct-spend-denom"]:checked')?.value || "sp";
-      const money = actor.getFlag(MODULE_ID, "cashMoney") ?? { cp: 0, sp: 0, gp: 0, pp: 0 };
-      const current = money[denom] ?? 0;
-      if (current < total) {
+      const money = foundry.utils.deepClone(actor.getFlag(MODULE_ID, "cashMoney") ?? { cp: 0, sp: 0, gp: 0, pp: 0 });
+      const costCp = total * _CASH_RATES[denom];
+      const totalCp = _convertMoneyToCp(money);
+
+      if (totalCp < costCp) {
         const errEl = dialog.querySelector("#ct-spend-error");
         if (errEl) {
           errEl.innerHTML = `<i class="fas fa-crown"></i> Check again. You are not so rich! or you missed the color of coins...`;
@@ -2254,8 +2277,23 @@ class CypherTaskbar {
         }
         return;
       }
-      money[denom] = current - total;
-      // Save using same suppression helper pattern
+
+      // Calculate what was actually deducted (for the notification)
+      const before = foundry.utils.deepClone(money);
+      const after = _convertCpToMoney(totalCp - costCp);
+
+      // Build spend description showing conversion
+      let spendDesc = _formatDenom(total, denom);
+      const actualDeducted = [];
+      for (const d of _CASH_DENOMS) {
+        const diff = (before[d] || 0) - (after[d] || 0);
+        if (diff > 0) actualDeducted.push(_formatDenom(diff, d));
+      }
+      if (actualDeducted.length > 0 && !(actualDeducted.length === 1 && actualDeducted[0] === spendDesc)) {
+        spendDesc += ` (${actualDeducted.join(', ')} deducted)`;
+      }
+
+      // Save
       if (this._cashSuppressTimer) {
         clearTimeout(this._cashSuppressTimer);
         this._cashSuppressTimer = null;
@@ -2263,7 +2301,7 @@ class CypherTaskbar {
       this._cashOpPending = (this._cashOpPending || 0) + 1;
       this._suppressRender = true;
       try {
-        await actor.setFlag(MODULE_ID, "cashMoney", money);
+        await actor.setFlag(MODULE_ID, "cashMoney", after);
         const currency = foundry.utils.duplicate(actor.system?.equipment?.currency ?? {});
         currency.active = true;
         currency.numberCategories = 4;
@@ -2271,10 +2309,10 @@ class CypherTaskbar {
         currency.labelCategory2 = "SP";
         currency.labelCategory3 = "GP";
         currency.labelCategory4 = "PP";
-        currency.quantity1 = money.cp ?? 0;
-        currency.quantity2 = money.sp ?? 0;
-        currency.quantity3 = money.gp ?? 0;
-        currency.quantity4 = money.pp ?? 0;
+        currency.quantity1 = after.cp ?? 0;
+        currency.quantity2 = after.sp ?? 0;
+        currency.quantity3 = after.gp ?? 0;
+        currency.quantity4 = after.pp ?? 0;
         await actor.update({ "system.equipment.currency": currency });
       } finally {
         this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
@@ -2286,11 +2324,13 @@ class CypherTaskbar {
           }, 600);
         }
       }
-      // Update input in the cash panel without full rebuild
-      const input = this.element?.querySelector(`#ct-cash-${denom}`);
-      if (input) input.value = money[denom];
+      // Update all inputs in the cash panel
+      for (const d of _CASH_DENOMS) {
+        const input = this.element?.querySelector(`#ct-cash-${d}`);
+        if (input) input.value = after[d] ?? 0;
+      }
       dialog.remove();
-      ui.notifications.info(`Spent ${total} ${denom.toUpperCase()}.`);
+      ui.notifications.info(`Spent ${spendDesc}.`);
     };
 
     // Close on outside click

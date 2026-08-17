@@ -2,7 +2,7 @@
   "id": "cypher-taskbar",
   "title": "Cypher Taskbar",
   "description": "Adds a sleek, automated, and highly customizable bar to the Foundry VTT HUD for tracking Character Pools, Experience, and more in the Cypher System. Supports automated character sheet integration, pop-out widgets, and GM tools for approval workflows.",
-  "version": "4.0.67",
+  "version": "4.0.81",
   "type": "module",
   "compatibility": {
     "minimum": "14",

@@ -1,5 +1,94 @@
 import { MODULE_ID } from "./utils.js";
 
+/* ═══════════════════════════════════════════
+   Fancy Dialog Helper — V2 when available,
+   V1 fallback with suppressed warning
+   ═══════════════════════════════════════════ */
+function _silenceV1Warn(fn) {
+  const orig = foundry.utils?.logCompatibilityWarning;
+  if (orig) foundry.utils.logCompatibilityWarning = () => {};
+  try { return fn(); } finally { if (orig) foundry.utils.logCompatibilityWarning = orig; }
+}
+
+function _openFancyDialog({ title, content, classes = [], buttons = {}, defaultButton = null, render = null, close = null }) {
+  const allClasses = ['ct-persona-about-dialog-app', ...classes];
+
+  // ── Foundry v14+ : DialogV2 ──
+  if (foundry.applications?.api?.DialogV2) {
+    const okBtn = buttons.save || buttons.ok;
+    const cancelBtn = buttons.cancel;
+    const v2Buttons = [];
+    if (okBtn) {
+      v2Buttons.push({
+        action: 'save',
+        label: okBtn.label || 'Save',
+        icon: okBtn.icon || 'fas fa-save',
+        default: defaultButton === 'save',
+        callback: async (event, button, dialog) => {
+          if (okBtn.callback) {
+            const root = dialog.element?.querySelector('.window-content') || dialog.element;
+            await okBtn.callback(root);
+          }
+        }
+      });
+    }
+    if (cancelBtn) {
+      v2Buttons.push({
+        action: 'cancel',
+        label: cancelBtn.label || 'Cancel',
+        icon: cancelBtn.icon || 'fas fa-times',
+        default: defaultButton === 'cancel'
+      });
+    }
+    const dlg = new foundry.applications.api.DialogV2({
+      window: {
+        title: title || '',
+        icon: 'fas fa-pen',
+        classes: allClasses
+      },
+      content: content,
+      modal: false,
+      rejectClose: false,
+      buttons: v2Buttons
+    });
+    dlg.render(true);
+    if (render) {
+      window.setTimeout(() => {
+        const root = dlg.element?.querySelector('.window-content') || dlg.element;
+        if (root) render(root, dlg.element);
+      }, 50);
+    }
+    return dlg;
+  }
+
+  // ── Foundry v13 / legacy V1 Dialog (suppress deprecation noise) ──
+  return _silenceV1Warn(() => {
+    const dlg = new Dialog({
+      title,
+      content,
+      classes: allClasses,
+      buttons,
+      default: defaultButton,
+      render: (html) => {
+        const root = html?.[0] ?? html;
+        let app = root?.closest('.app');
+        if (!app) app = root?.closest('.window-app');
+        if (app) {
+          app.classList.add('ct-persona-about-dialog-app');
+          app.style.width = 'min(720px, calc(100vw - 32px))';
+          app.style.maxWidth = 'calc(100vw - 32px)';
+          app.style.height = 'auto';
+          app.style.maxHeight = 'calc(100vh - 32px)';
+        }
+        if (render) render(root, app);
+      },
+      close
+    });
+    dlg.render(true);
+    return dlg;
+  });
+}
+
 export function applyPersonaPanel(CypherTaskbar) {
   Object.assign(CypherTaskbar.prototype, {
 
@@ -164,15 +253,15 @@ export function applyPersonaPanel(CypherTaskbar) {
         return true;
       };
 
-      const dlg = new Dialog({
+      _openFancyDialog({
         title,
         content: dialogContent,
+        classes: [],
         buttons: {
           save: {
             icon: '<i class="fas fa-save"></i>',
             label: 'Save',
-            callback: async (html) => {
-              const root = html?.[0] ?? html;
+            callback: async (root) => {
               await saveFromRoot(root);
             }
           },
@@ -181,13 +270,11 @@ export function applyPersonaPanel(CypherTaskbar) {
             label: 'Cancel'
           }
         },
-        default: 'save',
-        render: (html) => {
-          const root = html?.[0] ?? html;
+        defaultButton: 'save',
+        render: (root) => {
           root?.querySelector('[name="traitName"]')?.focus?.();
         }
       });
-      dlg.render(true);
     },
 
     async _deletePersonaTrait(index) {
@@ -198,24 +285,26 @@ export function applyPersonaPanel(CypherTaskbar) {
 
       const traitName = traits[index]?.name || `Trait ${index + 1}`;
       const confirmed = await new Promise((resolve) => {
-        new Dialog({
-          title: 'Delete Personality Trait',
-          content: `<p>Delete <strong>${foundry.utils.escapeHTML(traitName)}</strong>?</p>`,
-          buttons: {
-            yes: {
-              icon: '<i class="fas fa-trash"></i>',
-              label: 'Delete',
-              callback: () => resolve(true)
+        _silenceV1Warn(() => {
+          new Dialog({
+            title: 'Delete Personality Trait',
+            content: `<p>Delete <strong>${foundry.utils.escapeHTML(traitName)}</strong>?</p>`,
+            buttons: {
+              yes: {
+                icon: '<i class="fas fa-trash"></i>',
+                label: 'Delete',
+                callback: () => resolve(true)
+              },
+              no: {
+                icon: '<i class="fas fa-times"></i>',
+                label: 'Cancel',
+                callback: () => resolve(false)
+              }
             },
-            no: {
-              icon: '<i class="fas fa-times"></i>',
-              label: 'Cancel',
-              callback: () => resolve(false)
-            }
-          },
-          default: 'no',
-          close: () => resolve(false)
-        }).render(true);
+            default: 'no',
+            close: () => resolve(false)
+          }).render(true);
+        });
       });
 
       if (!confirmed) return;
@@ -452,6 +541,92 @@ export function applyPersonaPanel(CypherTaskbar) {
       }).render(true);
     },
 
+    async _openPersonaArcViewDialog(index) {
+      const actor = this.actor;
+      if (!actor) return;
+      const arcs = this._getPersonaArcs(actor);
+      if (!Number.isInteger(index) || index < 0 || index >= arcs.length) return;
+      const arc = arcs[index];
+      const title = String(arc.title || `Arc ${index + 1}`).trim();
+
+      const totalSteps = arc.steps?.length || 0;
+      const doneSteps = arc.steps?.filter(s => s.done).length || 0;
+      const stepProgress = totalSteps > 0 ? Math.round((doneSteps / totalSteps) * 100) : 0;
+      const xpTotal = (doneSteps * 2) + (arc.climaxXp || 4) + 1;
+
+      const stepsHtml = arc.steps?.length
+        ? arc.steps.map((step, i) => `
+          <div class="ct-arc-view-step${step.done ? ' is-done' : ''}">
+            <div class="ct-arc-view-step-num">${i + 1}</div>
+            <div class="ct-arc-view-step-text">${foundry.utils.escapeHTML(step.text || '').replace(/\n/g, '<br>')}</div>
+            ${step.done ? '<div class="ct-arc-view-step-badge"><i class="fas fa-check"></i></div>' : ''}
+          </div>`).join('')
+        : `<div class="ct-arc-view-empty">No steps defined yet.</div>`;
+
+      const imageStyle = arc.imageUrl
+        ? `background-image:url('${foundry.utils.escapeHTML(arc.imageUrl)}');background-size:${arc.imageFit || 'cover'};background-position:${arc.imagePosition || 'center center'};opacity:${(Number(arc.imageOpacity) || 28) / 100};`
+        : '';
+
+      const content = `
+        <div class="ct-persona-arc-view" style="${imageStyle}">
+          <div class="ct-persona-arc-view-hero">
+            <div class="ct-persona-arc-view-kicker">Story Arc</div>
+            <div class="ct-persona-arc-view-title"><i class="fas fa-route"></i> ${foundry.utils.escapeHTML(title)}</div>
+            <div class="ct-persona-arc-view-meta">
+              <span class="ct-arc-view-meta-item"><i class="fas fa-shoe-prints"></i> ${totalSteps} steps</span>
+              <span class="ct-arc-view-meta-item"><i class="fas fa-check-circle"></i> ${doneSteps} done</span>
+              <span class="ct-arc-view-meta-item"><i class="fas fa-star"></i> ${xpTotal} XP</span>
+            </div>
+            ${totalSteps > 0 ? `<div class="ct-arc-view-progress"><div class="ct-arc-view-progress-bar" style="width:${stepProgress}%"></div><span>${stepProgress}%</span></div>` : ''}
+          </div>
+          <div class="ct-persona-arc-view-body">
+            ${arc.opening ? `<div class="ct-arc-view-section"><div class="ct-arc-view-section-title"><i class="fas fa-door-open"></i> OPENING</div><div class="ct-arc-view-section-text">${foundry.utils.escapeHTML(arc.opening).replace(/\n/g, '<br>')}</div></div>` : ''}
+            ${arc.steps?.length ? `<div class="ct-arc-view-section"><div class="ct-arc-view-section-title"><i class="fas fa-list-ol"></i> STEPS <em>(${doneSteps}/${totalSteps} completed)</em></div><div class="ct-arc-view-steps">${stepsHtml}</div></div>` : ''}
+            ${arc.climax ? `<div class="ct-arc-view-section"><div class="ct-arc-view-section-title"><i class="fas fa-fire"></i> CLIMAX <em>(${arc.climaxXp || 4} XP)</em></div><div class="ct-arc-view-section-text">${foundry.utils.escapeHTML(arc.climax).replace(/\n/g, '<br>')}</div></div>` : ''}
+            ${arc.resolution ? `<div class="ct-arc-view-section"><div class="ct-arc-view-section-title"><i class="fas fa-flag-checkered"></i> RESOLUTION <em>(1 XP)</em></div><div class="ct-arc-view-section-text">${foundry.utils.escapeHTML(arc.resolution).replace(/\n/g, '<br>')}</div></div>` : ''}
+            ${!arc.opening && !arc.steps?.length && !arc.climax && !arc.resolution ? `<div class="ct-arc-view-empty"><i class="fas fa-pen-square"></i> This arc is empty. Click Edit to add content.</div>` : ''}
+          </div>
+        </div>`;
+
+      _openFancyDialog({
+        title: title,
+        content,
+        classes: ['ct-persona-arc-view-dialog-app'],
+        buttons: {
+          edit: {
+            icon: '<i class="fas fa-pen"></i>',
+            label: 'Edit',
+            callback: async () => { await this._openPersonaArcDialog(index); }
+          },
+          close: {
+            icon: '<i class="fas fa-times"></i>',
+            label: 'Close'
+          }
+        },
+        defaultButton: 'close',
+        render: (root, app) => {
+          if (app) {
+            app.style.width = 'min(720px, calc(100vw - 32px))';
+            app.style.minWidth = '480px';
+            app.style.maxWidth = 'calc(100vw - 32px)';
+            app.style.height = 'auto';
+            app.style.maxHeight = 'calc(100vh - 32px)';
+          }
+          const contentEl = root.querySelector('.window-content') ?? app?.querySelector('.window-content');
+          if (contentEl) {
+            contentEl.style.overflow = 'hidden';
+            contentEl.style.display = 'flex';
+            contentEl.style.flexDirection = 'column';
+            contentEl.style.background = 'transparent';
+            contentEl.style.padding = '0';
+          }
+          const dialogButtons = root.querySelector('.dialog-buttons') ?? app?.querySelector('.dialog-buttons');
+          const hero = root.querySelector('.ct-persona-arc-view-hero');
+          if (dialogButtons && hero) hero.insertAdjacentElement('beforebegin', dialogButtons);
+        }
+      });
+    },
+
     async _deletePersonaArc(index) {
       const actor = this.actor;
       if (!actor) return;
@@ -525,6 +700,35 @@ export function applyPersonaPanel(CypherTaskbar) {
       }
     },
 
+    _getPersonaBackstoryData(actor) {
+      const defaultData = { text: "", imageUrl: "" };
+      try {
+        const raw = actor?.getFlag(MODULE_ID, 'personaBackstory');
+        if (!raw || typeof raw !== 'object') return defaultData;
+        return {
+          text: String(raw.text ?? "").trim().slice(0, 12000),
+          imageUrl: String(raw.imageUrl ?? "").trim().slice(0, 2048)
+        };
+      } catch {
+        return defaultData;
+      }
+    },
+
+    _getPersonaAboutHelpText(key) {
+      const help = {
+        appearance: "Describe your character's overall look and physical presence. Include stature, build, posture, distinctive features, scars, tattoos, or anything that makes them visually memorable. Think about how others would describe them at first glance.",
+        style: "Detail your character's aesthetic choices — fashion sense, color preferences, makeup routines, hairstyles for different occasions, jewelry and accessories. Consider how their style changes between casual wear, formal events, combat gear, and social outings.",
+        usualLife: "Paint a picture of a typical day in your character's life. What is their morning routine? Where do they live? What do they eat? What hobbies fill their free time? What small rituals bring them comfort? What everyday things annoy them or bring them joy?",
+        aroundFriends: "Reveal how your character transforms when surrounded by trusted companions. Do they become more talkative or quiet? Do they show a silly side? Are they protective, teasing, nurturing, or competitive? How do they handle conflict among friends?",
+        attractionPhysical: "What physical qualities draw your character's eye? Consider body types, facial features, mannerisms, voice, scent, or the way someone moves. Are they drawn to strength, grace, softness, sharp angles, warmth, or something uniquely specific?",
+        attractionPersonality: "What inner qualities make your character's heart race? Intelligence, humor, kindness, ambition, mystery, confidence, vulnerability? What conversational styles captivate them? What behaviors make them feel seen and understood?",
+        repels: "What behaviors, attitudes, or traits push your character away? Dishonesty, cruelty, arrogance, neediness, coldness? Are there deal-breakers in friendship or romance? What past experiences shaped these boundaries?",
+        natureSecrets: "Explore the core of who your character truly is beneath the surface. What is their moral compass? What drives their decisions — fear, hope, loyalty, ambition? What beliefs do they hide? What secrets could destroy them if revealed? What trauma shaped their worldview?",
+        kinksQuirks: "List the unique, strange, endearing, or unusual aspects of your character. Strange habits, irrational fears, peculiar tastes, odd collections, unusual sleep patterns, bizarre food preferences, compulsive behaviors, hidden talents, or anything that makes them wonderfully weird."
+      };
+      return help[key] || "";
+    },
+
     _buildPersonaAboutSection(actor) {
       const data = this._getPersonaAboutData(actor);
       const sections = [
@@ -541,6 +745,8 @@ export function applyPersonaPanel(CypherTaskbar) {
       return `<div class="ct-persona-about-section">
         ${sections.map(sec => {
           const entry = data[sec.key];
+          const helpText = this._getPersonaAboutHelpText(sec.key);
+          const helpButton = helpText ? `<button class="ct-persona-about-help" data-about-help="${sec.key}" data-ct-help="${foundry.utils.escapeHTML(helpText)}"><i class="fas fa-question"></i></button>` : '';
           if (sec.key === "appearance") {
             const fields = [
               { key: "age", label: "AGE" },
@@ -557,17 +763,20 @@ export function applyPersonaPanel(CypherTaskbar) {
             const hasContent = entry.text || entry.imageUrl || hasAnyField;
             const imageHtml = entry.imageUrl ? `<div class="ct-persona-about-image"><img src="${foundry.utils.escapeHTML(entry.imageUrl)}" alt="" loading="lazy"></div>` : '';
             const textHtml = entry.text ? `<div class="ct-persona-about-text">${foundry.utils.escapeHTML(entry.text).replace(/\n/g, '<br>')}</div>` : '';
-            const tableHtml = hasAnyField ? `<div class="ct-persona-appearance-table-wrap">
+            const tableHtml = `<div class="ct-persona-appearance-table-wrap">
               <table class="ct-persona-appearance-table">
                 <tbody>
-                  ${fields.map(f => entry[f.key] ? `<tr><td class="ct-apt-label">${f.label}</td><td class="ct-apt-value">${foundry.utils.escapeHTML(entry[f.key])}</td></tr>` : '').join('')}
+                  ${fields.map(f => `<tr><td class="ct-apt-label">${f.label}</td><td class="ct-apt-value">${entry[f.key] ? foundry.utils.escapeHTML(entry[f.key]) : '—'}</td></tr>`).join('')}
                 </tbody>
               </table>
-            </div>` : '';
+            </div>`;
             return `<div class="ct-persona-about-card${hasContent ? ' has-content' : ''}" data-about-key="${sec.key}">
               <div class="ct-persona-about-header">
                 <div class="ct-persona-about-title"><i class="${sec.icon}"></i> ${sec.label}</div>
-                <button class="ct-persona-about-edit" data-about-edit="${sec.key}" title="Edit ${sec.label}"><i class="fas fa-pen"></i></button>
+                <div class="ct-persona-about-actions">
+                  ${helpButton}
+                  <button class="ct-persona-about-edit" data-about-edit="${sec.key}" title="Edit ${sec.label}"><i class="fas fa-pen"></i></button>
+                </div>
               </div>
               <div class="ct-persona-about-body">
                 ${tableHtml}${imageHtml}${textHtml}
@@ -581,7 +790,10 @@ export function applyPersonaPanel(CypherTaskbar) {
           return `<div class="ct-persona-about-card${hasContent ? ' has-content' : ''}" data-about-key="${sec.key}">
             <div class="ct-persona-about-header">
               <div class="ct-persona-about-title"><i class="${sec.icon}"></i> ${sec.label}</div>
-              <button class="ct-persona-about-edit" data-about-edit="${sec.key}" title="Edit ${sec.label}"><i class="fas fa-pen"></i></button>
+              <div class="ct-persona-about-actions">
+                ${helpButton}
+                <button class="ct-persona-about-edit" data-about-edit="${sec.key}" title="Edit ${sec.label}"><i class="fas fa-pen"></i></button>
+              </div>
             </div>
             <div class="ct-persona-about-body">
               ${hasContent ? `${imageHtml}${textHtml}` : `<div class="ct-persona-about-empty"><i class="fas fa-pen-square"></i> Click edit to add content</div>`}
@@ -622,12 +834,40 @@ export function applyPersonaPanel(CypherTaskbar) {
       </div>`;
     },
 
+    _buildPersonaBackstorySection(actor) {
+      const data = this._getPersonaBackstoryData(actor);
+      const hasContent = data.text || data.imageUrl;
+      const imageHtml = data.imageUrl ? `<div class="ct-persona-backstory-image"><img src="${foundry.utils.escapeHTML(data.imageUrl)}" alt="" loading="lazy"></div>` : '';
+      const textHtml = data.text ? `<div class="ct-persona-backstory-text">${foundry.utils.escapeHTML(data.text).replace(/\n/g, '<br>')}</div>` : '';
+      return `<div class="ct-persona-backstory-section${hasContent ? ' has-content' : ''}">
+        <div class="ct-persona-backstory-header">
+          <div class="ct-persona-backstory-title"><i class="fas fa-book-open"></i> BACKSTORY</div>
+          <button class="ct-persona-backstory-edit" data-backstory-edit title="Edit Backstory"><i class="fas fa-pen"></i></button>
+        </div>
+        <div class="ct-persona-backstory-body">
+          ${hasContent ? `${imageHtml}${textHtml}` : `<div class="ct-persona-backstory-empty"><i class="fas fa-pen-square"></i> Click edit to write your character's backstory</div>`}
+        </div>
+      </div>`;
+    },
+
+    _buildPersonaReputationSection(actor) {
+      return `<div class="ct-persona-reputation-section">
+        <div class="ct-persona-reputation-header">
+          <div class="ct-persona-reputation-title"><i class="fas fa-medal"></i> REPUTATION</div>
+        </div>
+        <div class="ct-persona-reputation-body">
+          <div class="ct-persona-reputation-empty"><i class="fas fa-hammer"></i> Reputation system coming soon — track your standing with factions and the world!</div>
+        </div>
+      </div>`;
+    },
+
     _buildPersonaPanel(actor) {
       const tabs = [
         { key: "extra", label: "EXTRA", icon: "fas fa-plus-circle", color: "#e8a838" },
         { key: "about", label: "ABOUT", icon: "fas fa-info-circle", color: "#4ecdc4" },
         { key: "backstory", label: "BACKSTORY", icon: "fas fa-book-open", color: "#c792ea" },
         { key: "personality", label: "PERSONALITY", icon: "fas fa-masks-theater", color: "#5c9dff" },
+        { key: "reputation", label: "REPUTATION", icon: "fas fa-medal", color: "#daa520" },
         { key: "arc", label: "ARC", icon: "fas fa-route", color: "#ff7b5c" }
       ];
       const renderContent = (tab) => {
@@ -635,9 +875,11 @@ export function applyPersonaPanel(CypherTaskbar) {
         if (tab.key === "arc") return this._buildPersonaArcSection(actor);
         if (tab.key === "extra") return this._buildPersonaExtraSection(actor);
         if (tab.key === "about") return this._buildPersonaAboutSection(actor);
+        if (tab.key === "backstory") return this._buildPersonaBackstorySection(actor);
+        if (tab.key === "reputation") return this._buildPersonaReputationSection(actor);
         return `<div class="ct-persona-empty-state"><div class="ct-persona-empty-title">${tab.label}</div><div class="ct-persona-empty-text">This tab is ready for future content.</div></div>`;
       };
-      return `<div class="ct-panel ct-panel-persona-custom" style="${this._getMenuBackgroundVars("persona")}"><div class="ct-panel-header ct-panel-header-persona-menu"><div class="ct-panel-title-wrap"><i class="fas fa-user-circle"></i> <span class="ct-panel-title-text ct-persona-panel-title-text">Persona</span></div><div class="ct-panel-action-group ct-panel-action-group-persona"><div class="ct-persona-header-tabs" role="tablist" aria-orientation="horizontal">${tabs.map((tab, index) => `<button class="ct-persona-tab ct-persona-tab-header ct-persona-tab-${tab.key}${index === 0 ? ' is-active' : ''}" type="button" role="tab" aria-selected="${index === 0 ? 'true' : 'false'}" data-persona-tab="${tab.key}" title="${tab.label}"${tab.color ? ` style="--ct-tab-color:${tab.color}"` : ''}><i class="${tab.icon}"></i><span>${tab.label}</span></button>`).join("")}</div><button class="ct-panel-settings-btn" data-persona-close title="Close Persona Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-persona-panel-body"><div class="ct-persona-content-wrap">${tabs.map((tab, index) => `<section class="ct-persona-content${index === 0 ? ' is-active' : ''}" data-persona-content="${tab.key}" role="tabpanel" ${index === 0 ? '' : 'hidden'}>${renderContent(tab)}</section>`).join("")}</div></div></div>`;
+      return `<div class="ct-panel ct-panel-persona-custom" style="${this._getMenuBackgroundVars("persona")}"><div class="ct-panel-header ct-panel-header-persona-menu"><div class="ct-panel-title-wrap"><i class="fas fa-user-circle"></i> <span class="ct-panel-title-text ct-persona-panel-title-text">Persona</span></div><div class="ct-panel-action-group ct-panel-action-group-persona"><div class="ct-persona-header-tabs" role="tablist" aria-orientation="horizontal">${tabs.map((tab, index) => `<button class="ct-persona-tab ct-persona-tab-header ct-persona-tab-${tab.key}${index === 0 ? ' is-active' : ''}" type="button" role="tab" aria-selected="${index === 0 ? 'true' : 'false'}" data-persona-tab="${tab.key}" title="${tab.label}"${tab.color ? ` style="--ct-tab-color:${tab.color}"` : ''}><i class="${tab.icon}"></i><span>${tab.label}</span></button>`).join("")}</div><button class="ct-panel-settings-btn" data-persona-close title="Close Persona Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-persona-panel-body"><div class="ct-persona-content-wrap">${tabs.map((tab, index) => `<section class="ct-persona-content${index === 0 ? ' is-active' : ''}" data-persona-content="${tab.key}" role="tabpanel" ${index === 0 ? '' : 'hidden'}>${renderContent(tab)}</section>`).join("")}</div></div><div class="ct-persona-tooltip" aria-hidden="true"><div class="ct-persona-tooltip-arrow"></div><div class="ct-persona-tooltip-text"></div></div></div>`;
     },
 
     _bindPersonaTabs(root = this.element) {
@@ -932,6 +1174,65 @@ export function applyPersonaPanel(CypherTaskbar) {
           this._openPersonaAboutDialog(btn.dataset.aboutEdit);
         });
       });
+
+      // ── BACKSTORY tab: edit backstory ──
+      panel.querySelectorAll('[data-backstory-edit]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this._openPersonaBackstoryDialog();
+        });
+      });
+
+      // ── ABOUT tab: fancy tooltip for help buttons ──
+      const tooltipEl = panel.querySelector('.ct-persona-tooltip');
+      const tooltipText = tooltipEl?.querySelector('.ct-persona-tooltip-text');
+      let tooltipTimer = null;
+      if (tooltipEl && tooltipText) {
+        panel.querySelectorAll('[data-about-help]').forEach((btn) => {
+          const showTip = () => {
+            const text = btn.dataset.ctHelp || '';
+            if (!text) return;
+            tooltipText.textContent = text;
+            tooltipEl.classList.add('is-visible');
+            tooltipEl.setAttribute('aria-hidden', 'false');
+            const rect = btn.getBoundingClientRect();
+            const panelRect = panel.getBoundingClientRect();
+            // Force layout so tipRect is accurate
+            const tipRect = tooltipEl.getBoundingClientRect();
+            // Position: above the button, left-aligned
+            let left = rect.left - panelRect.left;
+            let top = rect.top - tipRect.height - 8 - panelRect.top;
+            // Keep inside panel bounds
+            if (left < 6) left = 6;
+            if (left + tipRect.width > panelRect.width - 6) left = panelRect.width - tipRect.width - 6;
+            if (top < 6) {
+              // Not enough room above, flip below
+              top = rect.bottom + 8 - panelRect.top;
+            }
+            tooltipEl.style.left = `${left}px`;
+            tooltipEl.style.top = `${top}px`;
+            // Position arrow near the button's center horizontally
+            const arrow = tooltipEl.querySelector('.ct-persona-tooltip-arrow');
+            if (arrow) {
+              const arrowX = rect.left + rect.width / 2 - left;
+              arrow.style.left = `${Math.max(10, Math.min(tipRect.width - 10, arrowX))}px`;
+              arrow.style.transform = top < rect.top - panelRect.top ? 'translateX(-50%) rotate(45deg)' : 'translateX(-50%) rotate(-135deg)';
+              arrow.style.bottom = top < rect.top - panelRect.top ? '-6px' : 'auto';
+              arrow.style.top = top < rect.top - panelRect.top ? 'auto' : '-6px';
+            }
+          };
+          const hideTip = () => {
+            if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+            tooltipEl.classList.remove('is-visible');
+            tooltipEl.setAttribute('aria-hidden', 'true');
+          };
+          btn.addEventListener('mouseenter', () => { tooltipTimer = window.setTimeout(showTip, 350); });
+          btn.addEventListener('mouseleave', hideTip);
+          btn.addEventListener('focus', () => { tooltipTimer = window.setTimeout(showTip, 350); });
+          btn.addEventListener('blur', hideTip);
+        });
+      }
     },
 
     async _openPersonaAboutDialog(key) {
@@ -948,13 +1249,25 @@ export function applyPersonaPanel(CypherTaskbar) {
         natureSecrets: "NATURE and SECRETS",
         kinksQuirks: "KINKS, QUIRKS, STRANGENESS, HABITS, NEEDS"
       };
+      const sectionIcons = {
+        appearance: "fa-user",
+        style: "fa-tshirt",
+        usualLife: "fa-home",
+        aroundFriends: "fa-users",
+        attractionPhysical: "fa-heart",
+        attractionPersonality: "fa-brain",
+        repels: "fa-ban",
+        natureSecrets: "fa-mask",
+        kinksQuirks: "fa-star"
+      };
       const data = this._getPersonaAboutData(actor);
       const current = data[key] || { text: "", imageUrl: "" };
       const label = sectionLabels[key] || key;
+      const icon = sectionIcons[key] || "fa-pen";
 
       const appearanceFieldsHtml = key === "appearance" ? `
-        <div class="form-group">
-          <label>Appearance Details</label>
+        <div class="ct-abt-field ct-abt-field-full">
+          <span>Appearance Details</span>
           <div class="ct-persona-appearance-fields">
             <div class="form-group"><label>AGE</label><input type="text" name="aboutAge" maxlength="50" value="${foundry.utils.escapeHTML(current.age || "")}" placeholder="e.g. 24" /></div>
             <div class="form-group"><label>GENDER</label><input type="text" name="aboutGender" maxlength="50" value="${foundry.utils.escapeHTML(current.gender || "")}" placeholder="e.g. Female" /></div>
@@ -970,58 +1283,175 @@ export function applyPersonaPanel(CypherTaskbar) {
       ` : '';
 
       const dialogContent = `
-        <form class="ct-persona-about-form">
-          <div class="form-group">
-            <label>Image URL</label>
+        <form class="ct-persona-about-dialog" data-ct-about="${key}">
+          <div class="ct-persona-about-dialog-hero">
+            <div class="ct-persona-about-dialog-kicker">About Editor</div>
+            <div class="ct-persona-about-dialog-title"><i class="fas ${icon}"></i> ${label}</div>
+          </div>
+          <div class="ct-abt-field ct-abt-field-full">
+            <span>Image URL</span>
             <input type="url" name="aboutImageUrl" maxlength="2048" value="${foundry.utils.escapeHTML(current.imageUrl || "")}" placeholder="https://example.com/image.webp" />
           </div>
           ${appearanceFieldsHtml}
-          <div class="form-group">
-            <label>Content</label>
-            <textarea name="aboutText" rows="12" maxlength="4000" placeholder="Write about ${foundry.utils.escapeHTML(label)}...">${foundry.utils.escapeHTML(current.text || "")}</textarea>
-            <p class="notes">Up to 4000 characters.</p>
+          <div class="ct-abt-field ct-abt-field-full">
+            <span>Content</span>
+            <textarea name="aboutText" rows="10" maxlength="4000" placeholder="Write about ${foundry.utils.escapeHTML(label)}...">${foundry.utils.escapeHTML(current.text || "")}</textarea>
+            <em>Up to 4000 characters.</em>
           </div>
         </form>`;
 
-      new Dialog({
+      const saveCallback = async (root) => {
+        const text = String(root.querySelector('[name="aboutText"]')?.value ?? "").trim().slice(0, 4000);
+        const imageUrl = String(root.querySelector('[name="aboutImageUrl"]')?.value ?? "").trim().slice(0, 2048);
+        const next = this._getPersonaAboutData(actor);
+        next[key] = { text, imageUrl };
+        if (key === "appearance") {
+          next[key].age = String(root.querySelector('[name="aboutAge"]')?.value ?? "").trim().slice(0, 50);
+          next[key].gender = String(root.querySelector('[name="aboutGender"]')?.value ?? "").trim().slice(0, 50);
+          next[key].width = String(root.querySelector('[name="aboutWidth"]')?.value ?? "").trim().slice(0, 50);
+          next[key].height = String(root.querySelector('[name="aboutHeight"]')?.value ?? "").trim().slice(0, 50);
+          next[key].ancestry = String(root.querySelector('[name="aboutAncestry"]')?.value ?? "").trim().slice(0, 50);
+          next[key].skin = String(root.querySelector('[name="aboutSkin"]')?.value ?? "").trim().slice(0, 50);
+          next[key].hair = String(root.querySelector('[name="aboutHair"]')?.value ?? "").trim().slice(0, 50);
+          next[key].eyes = String(root.querySelector('[name="aboutEyes"]')?.value ?? "").trim().slice(0, 50);
+          next[key].body = String(root.querySelector('[name="aboutBody"]')?.value ?? "").trim().slice(0, 50);
+        }
+        await actor.setFlag(MODULE_ID, 'personaAbout', next);
+        this.render();
+      };
+
+      _openFancyDialog({
         title: `Edit — ${label}`,
         content: dialogContent,
+        classes: [],
         buttons: {
           save: {
             icon: '<i class="fas fa-save"></i>',
             label: 'Save',
-            callback: async (html) => {
-              const root = html?.[0] ?? html;
-              const text = String(root.querySelector('[name="aboutText"]')?.value ?? "").trim().slice(0, 4000);
-              const imageUrl = String(root.querySelector('[name="aboutImageUrl"]')?.value ?? "").trim().slice(0, 2048);
-              const next = this._getPersonaAboutData(actor);
-              next[key] = { text, imageUrl };
-              if (key === "appearance") {
-                next[key].age = String(root.querySelector('[name="aboutAge"]')?.value ?? "").trim().slice(0, 50);
-                next[key].gender = String(root.querySelector('[name="aboutGender"]')?.value ?? "").trim().slice(0, 50);
-                next[key].width = String(root.querySelector('[name="aboutWidth"]')?.value ?? "").trim().slice(0, 50);
-                next[key].height = String(root.querySelector('[name="aboutHeight"]')?.value ?? "").trim().slice(0, 50);
-                next[key].ancestry = String(root.querySelector('[name="aboutAncestry"]')?.value ?? "").trim().slice(0, 50);
-                next[key].skin = String(root.querySelector('[name="aboutSkin"]')?.value ?? "").trim().slice(0, 50);
-                next[key].hair = String(root.querySelector('[name="aboutHair"]')?.value ?? "").trim().slice(0, 50);
-                next[key].eyes = String(root.querySelector('[name="aboutEyes"]')?.value ?? "").trim().slice(0, 50);
-                next[key].body = String(root.querySelector('[name="aboutBody"]')?.value ?? "").trim().slice(0, 50);
-              }
-              await actor.setFlag(MODULE_ID, 'personaAbout', next);
-              this.render();
-            }
+            callback: saveCallback
           },
           cancel: {
             icon: '<i class="fas fa-times"></i>',
             label: 'Cancel'
           }
         },
-        default: 'save',
-        render: (html) => {
-          const root = html?.[0] ?? html;
+        defaultButton: 'save',
+        render: (root, app) => {
+          if (app) {
+            app.style.width = 'min(860px, calc(100vw - 32px))';
+            app.style.minWidth = '600px';
+            app.style.maxWidth = 'calc(100vw - 32px)';
+            app.style.height = 'auto';
+            app.style.maxHeight = 'calc(100vh - 32px)';
+          }
+          const contentEl = root.querySelector('.window-content') ?? app?.querySelector('.window-content');
+          if (contentEl) {
+            contentEl.style.overflow = 'hidden';
+            contentEl.style.display = 'flex';
+            contentEl.style.flexDirection = 'column';
+            contentEl.style.background = 'transparent';
+            contentEl.style.padding = '0';
+          }
+          const form = root.querySelector('.ct-persona-about-dialog');
+          if (form) {
+            form.style.width = '100%';
+            form.style.maxWidth = '100%';
+            form.style.boxSizing = 'border-box';
+          }
+          const textarea = root.querySelector('[name="aboutText"]');
+          if (textarea) {
+            textarea.style.width = '100%';
+            textarea.style.minWidth = '100%';
+            textarea.style.boxSizing = 'border-box';
+            textarea.style.minHeight = '160px';
+          }
+          const dialogButtons = root.querySelector('.dialog-buttons') ?? app?.querySelector('.dialog-buttons');
+          const hero = root.querySelector('.ct-persona-about-dialog-hero') ?? app?.querySelector('.ct-persona-about-dialog-hero');
+          if (dialogButtons && hero) hero.insertAdjacentElement('beforebegin', dialogButtons);
           root?.querySelector('[name="aboutText"]')?.focus?.();
         }
-      }).render(true);
+      });
+    },
+
+    async _openPersonaBackstoryDialog() {
+      const actor = this.actor;
+      if (!actor) return;
+      const current = this._getPersonaBackstoryData(actor);
+      const dialogContent = `
+        <form class="ct-persona-about-dialog ct-persona-backstory-dialog">
+          <div class="ct-persona-about-dialog-hero">
+            <div class="ct-persona-about-dialog-kicker">Backstory Editor</div>
+            <div class="ct-persona-about-dialog-title"><i class="fas fa-book-open"></i> BACKSTORY</div>
+          </div>
+          <div class="ct-abt-field ct-abt-field-full">
+            <span>Image URL</span>
+            <input type="url" name="backstoryImageUrl" maxlength="2048" value="${foundry.utils.escapeHTML(current.imageUrl || "")}" placeholder="https://example.com/image.webp" />
+          </div>
+          <div class="ct-abt-field ct-abt-field-full">
+            <span>Backstory</span>
+            <textarea name="backstoryText" rows="14" maxlength="12000" placeholder="Tell the tale of where your character came from, what shaped them, and the journey that led them here...">${foundry.utils.escapeHTML(current.text || "")}</textarea>
+            <em>Up to 12000 characters.</em>
+          </div>
+        </form>`;
+
+      const saveCallback = async (root) => {
+        const text = String(root.querySelector('[name="backstoryText"]')?.value ?? "").trim().slice(0, 12000);
+        const imageUrl = String(root.querySelector('[name="backstoryImageUrl"]')?.value ?? "").trim().slice(0, 2048);
+        await actor.setFlag(MODULE_ID, 'personaBackstory', { text, imageUrl });
+        this.render();
+      };
+
+      _openFancyDialog({
+        title: 'Edit — Backstory',
+        content: dialogContent,
+        classes: ['ct-persona-backstory-dialog-app'],
+        buttons: {
+          save: {
+            icon: '<i class="fas fa-save"></i>',
+            label: 'Save',
+            callback: saveCallback
+          },
+          cancel: {
+            icon: '<i class="fas fa-times"></i>',
+            label: 'Cancel'
+          }
+        },
+        defaultButton: 'save',
+        render: (root, app) => {
+          if (app) {
+            app.style.width = 'min(860px, calc(100vw - 32px))';
+            app.style.minWidth = '600px';
+            app.style.maxWidth = 'calc(100vw - 32px)';
+            app.style.height = 'auto';
+            app.style.maxHeight = 'calc(100vh - 32px)';
+          }
+          const contentEl = root.querySelector('.window-content') ?? app?.querySelector('.window-content');
+          if (contentEl) {
+            contentEl.style.overflow = 'hidden';
+            contentEl.style.display = 'flex';
+            contentEl.style.flexDirection = 'column';
+            contentEl.style.background = 'transparent';
+            contentEl.style.padding = '0';
+          }
+          const form = root.querySelector('.ct-persona-backstory-dialog');
+          if (form) {
+            form.style.width = '100%';
+            form.style.maxWidth = '100%';
+            form.style.boxSizing = 'border-box';
+          }
+          const textarea = root.querySelector('[name="backstoryText"]');
+          if (textarea) {
+            textarea.style.width = '100%';
+            textarea.style.minWidth = '100%';
+            textarea.style.boxSizing = 'border-box';
+            textarea.style.minHeight = '200px';
+          }
+          const dialogButtons = root.querySelector('.dialog-buttons') ?? app?.querySelector('.dialog-buttons');
+          const hero = root.querySelector('.ct-persona-about-dialog-hero') ?? app?.querySelector('.ct-persona-about-dialog-hero');
+          if (dialogButtons && hero) hero.insertAdjacentElement('beforebegin', dialogButtons);
+          root?.querySelector('[name="backstoryText"]')?.focus?.();
+        }
+      });
     },
 
     async _openFocusedArcWidgetDialog(actor) {
@@ -1032,7 +1462,7 @@ export function applyPersonaPanel(CypherTaskbar) {
         ui.notifications?.info?.("No focused ARC selected.");
         return;
       }
-      await this._openPersonaArcDialog(focusedArcIndex);
+      await this._openPersonaArcViewDialog(focusedArcIndex);
     },
 
   });

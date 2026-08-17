@@ -23,15 +23,18 @@ A floating character portrait that breathes on your screen. Complete with:
 Your character is more than numbers.
 - **Personality traits** with descriptions, levels, and custom art
 - **Story Arcs** with step progression: Opening → Steps → Climax → Resolution
+- **Appearance table** — Structured details: Age, Gender, Width, Height, Ancestry, Skin, Hair, Eyes, Body
 - Track narrative XP right in the taskbar
 
 ### 📋 **Smart Panels**
-Five fully-featured panels that slide out from the taskbar:
+Seven fully-featured panels that slide out from the taskbar:
 - **Skills** — Categorized, drag-and-drop, custom icons & colors
 - **Abilities** — Your powers, organized and beautiful
 - **Equipment** — Your stuff, where you can actually find it
 - **Spells** — Intelligent spell detection, memorization ("Ready"), casting
 - **Combat** — One-click combat entry, initiative, GM approval workflow
+- **Cash & Values** — Coin tracking (CP/SP/GP/PP), carriable valuables, SPEND dialog
+- **Assets** — Property, deeds, vehicles, investments (GM-managed drag & drop)
 
 ### 🎛️ **Visual Customization**
 If you can see it, you can tweak it. Per-panel controls for:
@@ -69,6 +72,25 @@ Set the visual standard for your entire table:
 
 Perfect for maintaining visual consistency across your campaign!
 
+### 💰 **Cash & Values Panel**
+Your money and valuables, managed beautifully:
+- **Coin tracking** — CP, SP, GP, PP with +/- buttons and direct input
+- **Carriable valuables** — Drag items from inventory to track gems, jewelry, art
+- **No flicker, no close** — Panel stays rock-solid stable during all operations
+- **Panel lock** — Once opened, stays open until you click the X
+- **SPEND dialog** — Quick spend calculator with value buttons (1, 3, 5, 10, 30, 50, 100, 300, 500)
+  - Denomination radio buttons with colors (CP brown, SP grey, GP gold, PP silver)
+  - Running total, SPEND/CANCEL buttons
+  - Insufficient funds? Fancy inline message: *"Check again. You are not so rich! or you missed the color of coins..."*
+
+### 🏛️ **Assets Panel**
+Property, deeds, vehicles, investments — your non-carriable wealth:
+- **Drag & drop** items to add them (GM only — players can view but not add)
+- **Visual cards** — 48×48 icon cards with hover tooltips
+- **Click to open** item sheets
+- **Right-click context menu** — Open sheet or remove
+- **Persistent storage** — Assets survive refreshes and are tied to the actor
+
 ### 💾 **Export / Import**
 Save and share your perfect setup:
 - Export all settings to a JSON file
@@ -105,8 +127,8 @@ Coming soon to Foundry's package manager!
 1. **Select your character** — Click the portrait area or use the character selector
 2. **Right-click the taskbar** — Access Taskbar Settings
 3. **Right-click your portrait** — Access Portrait Space Settings
-4. **Click any panel icon** — Open Skills, Abilities, Equipment, Spells, or Combat
-5. **Drag items** — Reorganize skills, abilities, and equipment
+4. **Click any panel icon** — Open Skills, Abilities, Equipment, Spells, Combat, Cash & Values, or Assets
+5. **Drag items** — Reorganize skills, abilities, equipment, valuables, and assets
 6. **Customize everything** — Make it *yours*
 
 ---
@@ -150,6 +172,49 @@ Combat entry and initiative reroll requests use Foundry's socket system for GM a
 ---
 
 ## 📝 Changelog
+
+### v4.0.67 — Appearance Table
+- **Added**: APPEARANCE card now shows a structured details table
+- 9 fields: Age, Gender, Width, Height, Ancestry, Skin, Hair, Eyes, Body
+- 30% width, teal labels, only shows filled rows
+- Editable via edit dialog with 3-column grid
+
+### v4.0.66 — Panel Lock
+- **Added**: Cash & Values panel now locks when opened
+- Panel stays open until X button is clicked
+- Toggle on same button does nothing when locked
+- Clicking other panel buttons still switches normally
+
+### v4.0.65 — SPEND Dialog Polish
+- **Added**: Colored denomination radio buttons (CP brown, SP grey, GP gold, PP silver)
+- **Added**: Fancy inline error message: *"Check again. You are not so rich! or you missed the color of coins..."*
+
+### v4.0.64 — SPEND CASH Dialog
+- **Added**: Spend cash dialog with value buttons (1, 3, 5, 10, 30, 50, 100, 300, 500)
+- Denomination selection (CP, SP, GP, PP)
+- Running total, SPEND and CANCEL buttons
+- Checks funds before spending
+
+### v4.0.63 — Button Spacing Sliders
+- **Added**: Cash & Assets button spacing controls in Taskbar Settings
+- Space Left / Space Right sliders (0–50px)
+- Real-time preview
+
+### v4.0.62 — GM-Only Assets
+- **Fixed**: Asset drops restricted to GM only
+- Players can view but not add/remove assets
+
+### v4.0.61 — Assets Panel
+- **Added**: Assets panel for non-carriable wealth
+- GM-only drag & drop from inventory
+- Visual 48×48 icon cards with tooltips
+- Right-click context menu (Open / Remove)
+
+### v4.0.60 — Cash & Values Stability
+- **Fixed**: Eliminated panel flicker and unwanted closing on all cash operations
+- Counter-based render suppression with 600ms timeout
+- DOM removal instead of full rebuild for valuables delete
+- Assets now use dedicated `assetsItems` actor flag
 
 ### v4.0.49 — Icon Settings Fix
 - **Fixed**: ICONS tab settings now properly apply to taskbar buttons immediately
