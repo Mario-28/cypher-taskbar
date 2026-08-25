@@ -152,10 +152,6 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "upperPanelOffsetX", { scope: "client", config: false, type: Number, range: { min: -100, max: 100, step: 1 }, default: 0 });
   game.settings.register(MODULE_ID, "upperPanelOffsetY", { scope: "client", config: false, type: Number, range: { min: -100, max: 100, step: 1 }, default: 0 });
 
-  // ── XP Circle Settings ──
-  game.settings.register(MODULE_ID, "xpCircleOffsetX", { scope: "client", config: false, type: Number, range: { min: -100, max: 100, step: 1 }, default: 0 });
-  game.settings.register(MODULE_ID, "xpCircleOffsetY", { scope: "client", config: false, type: Number, range: { min: -100, max: 100, step: 1 }, default: 0 });
-
   // ── Recovery Drop Settings ──
   game.settings.register(MODULE_ID, "recoveryDropColor", { scope: "client", config: false, type: String, default: "#3a8fd4" });
   game.settings.register(MODULE_ID, "recoveryBgColor", { scope: "client", config: false, type: String, default: "#808080" });

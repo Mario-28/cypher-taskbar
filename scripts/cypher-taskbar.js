@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v3.0.2
+ * Cypher Taskbar v4.0.87
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -187,7 +187,6 @@ class CypherTaskbar {
       portrait: bar.querySelector(".ct-portrait"),
       portraitWrap: bar.querySelector(".ct-portrait-wrap"),
       eyeBtn: bar.querySelector("#ct-btn-eye"),
-      xpOrb: bar.querySelector(".ct-xp-orb"),
       lockBtn: bar.querySelector("#ct-btn-lock"),
       settingsBtn: bar.querySelector("#ct-btn-settings"),
       section1: bar.querySelector(".ct-section-1"),
@@ -301,17 +300,6 @@ class CypherTaskbar {
     const upperPanelScale = this._gs("upperPanelScale") ?? 100;
     const upperPanelOffsetX = this._gs("upperPanelOffsetX") ?? 0;
     const upperPanelOffsetY = this._gs("upperPanelOffsetY") ?? 0;
-    const xpCircleOffsetX = this._gs("xpCircleOffsetX") ?? 0;
-    const xpCircleOffsetY = this._gs("xpCircleOffsetY") ?? 0;
-    const focusedArcIndex = this._getFocusedPersonaArcIndex(actor);
-    const focusedArcs = this._getPersonaArcs(actor);
-    const focusedArcTitle = focusedArcIndex !== null && focusedArcs[focusedArcIndex]
-      ? String(focusedArcs[focusedArcIndex]?.title || `Arc ${focusedArcIndex + 1}`).trim()
-      : '';
-    const portraitArcWidgetDisabled = !focusedArcTitle;
-    const focusedArcWidget = portraitAreaCollapsed
-      ? ``
-      : `<button type="button" class="ct-portrait-focus-widget${focusedArcTitle ? ' has-arc' : ''}" data-open-focused-arc="1" ${portraitArcWidgetDisabled ? 'disabled' : ''} title="${focusedArcTitle ? 'Open focused ARC details' : 'No focused ARC selected'}" aria-label="${focusedArcTitle ? 'Open focused ARC details' : 'No focused ARC selected'}"><div class="ct-portrait-focus-label" data-open-focused-arc-title="1">FOCUSED ARC</div><div class="ct-portrait-focus-title" data-open-focused-arc-title="1">${foundry.utils.escapeHTML(focusedArcTitle || 'None selected')}</div>${focusedArcTitle ? `<div class="ct-portrait-focus-hint" data-open-focused-arc-title="1"><i class="fas fa-sparkles"></i><span>Open details</span></div>` : ``}</button>`;
     const sBlur  = this._gs("portraitShadowBlur");
     const sColor = this._gs("portraitShadowColor");
     const sOp    = this._gs("portraitShadowOpacity");
@@ -375,7 +363,7 @@ class CypherTaskbar {
           </div>
 
           <!-- Portrait below -->
-          <div class="ct-portrait-wrap" style="--ct-xp-x:${xpCircleOffsetX}%; --ct-xp-y:${xpCircleOffsetY}%;" title="Left-click: Open Sheet · Right-click: Portrait Settings">
+          <div class="ct-portrait-wrap" title="Left-click: Open Sheet · Right-click: Portrait Settings">
             <img class="ct-portrait"
                  src="${img}"
                  style="width:${pWidth}px;${shadowCSS}"
@@ -396,16 +384,6 @@ class CypherTaskbar {
               </button>
             </div>
             ${this._buildRecoveryRolls(actor)}
-            <div class="ct-xp-panel ct-xp-panel-portrait">
-              <div class="ct-xp-orb" title="Click left side to decrease XP · Click right side to increase XP">
-                <div class="ct-xp-wheel">
-                  ${xpSegments.map((active, idx) => `<span class="ct-xp-seg${active ? ' active' : ''}" style="--seg:${idx}"></span>`).join('')}
-                </div>
-                <div class="ct-xp-core">
-                  <span class="ct-xp-value">${xpDisplay}</span>
-                </div>
-              </div>
-            </div>
           </div>
           ${this._buildFocusedArcWidget(actor)}
         </div>
@@ -418,6 +396,8 @@ class CypherTaskbar {
     const focusedArcTitle = focusedArcIndex !== null && focusedArcs[focusedArcIndex]
       ? String(focusedArcs[focusedArcIndex]?.title || `Arc ${focusedArcIndex + 1}`).trim()
       : '';
+    // Hide widget entirely when no focused arc is chosen
+    if (!focusedArcTitle) return '';
     const ax  = this._gs("arcWidgetOffsetX")   ?? 82;
     const ay  = this._gs("arcWidgetOffsetY")   ?? 64;
     const asc = Math.max(0.5, Math.min(1.6, (this._gs("arcWidgetScale") ?? 74) / 100));
@@ -432,10 +412,11 @@ class CypherTaskbar {
       `--ct-arc-wfc:${afc}`,
       `--ct-arc-wfs:${afs}`
     ].join(';');
-    return `<div class="ct-portrait-focus-widget${focusedArcTitle ? ' has-arc' : ''}" style="${style}">
-      <div class="ct-portrait-focus-label">FOCUSED ARC</div>
-      <div class="ct-portrait-focus-title">${foundry.utils.escapeHTML(focusedArcTitle || 'None selected')}</div>
-    </div>`;
+    return `<button type="button" class="ct-portrait-focus-widget has-arc" data-open-focused-arc="1" title="Open focused ARC details" style="${style}">
+      <div class="ct-portrait-focus-label" data-open-focused-arc-title="1">FOCUSED ARC</div>
+      <div class="ct-portrait-focus-title" data-open-focused-arc-title="1">${foundry.utils.escapeHTML(focusedArcTitle)}</div>
+      <div class="ct-portrait-focus-hint" data-open-focused-arc-title="1"><i class="fas fa-sparkles"></i><span>Open details</span></div>
+    </button>`;
   }
 
   _getActorDamageStatus(actor) {
@@ -625,7 +606,7 @@ class CypherTaskbar {
       <div class="ct-mini-grid" title="Quick category menus">
         <button class="ct-mini-btn" data-mini="people" title="People"><i class="fas fa-users"></i></button>
         <button class="ct-mini-btn" data-mini="places" title="Places"><i class="fas fa-map-marker-alt"></i></button>
-        <button class="ct-mini-btn" data-mini="assets" title="Assets"><i class="fas fa-coins"></i></button>
+        <button class="ct-mini-btn" data-mini="documents" title="Documents"><i class="fas fa-book"></i></button>
         <button class="ct-mini-btn" data-mini="secrets" title="Secrets"><i class="fas fa-user-secret"></i></button>
       </div>
     </div>`;
@@ -1100,18 +1081,24 @@ class CypherTaskbar {
 
     const focusedArcWidgetBtn = bar.querySelector("[data-open-focused-arc]");
     if (focusedArcWidgetBtn) {
-      const openFocusedArcDialog = (e) => {
+      const openFocusedArcDialog = async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (this._arcDialogOpening) return;
+        this._arcDialogOpening = true;
         const targetActor = this.actor ?? actor;
-        if (!targetActor) return;
-        this._openFocusedArcWidgetDialog(targetActor);
+        if (!targetActor) { this._arcDialogOpening = false; return; }
+        try {
+          await this._openFocusedArcWidgetDialog(targetActor);
+        } catch (err) {
+          console.error(`${MODULE_ID} | Failed to open focused arc dialog:`, err);
+        } finally {
+          this._arcDialogOpening = false;
+        }
       };
       focusedArcWidgetBtn.onclick = openFocusedArcDialog;
-      focusedArcWidgetBtn.addEventListener("pointerdown", openFocusedArcDialog);
       focusedArcWidgetBtn.querySelectorAll("[data-open-focused-arc-title]").forEach((el) => {
-        el.addEventListener("click", openFocusedArcDialog);
-        el.addEventListener("pointerdown", openFocusedArcDialog);
+        el.onclick = openFocusedArcDialog;
       });
     }
     const barPortraitRestoreBtn = bar.querySelector(".ct-bar-portrait-restore");
@@ -1159,20 +1146,6 @@ class CypherTaskbar {
         await this._openStatRoll(el.dataset.rollStat);
       };
     });
-
-    const xpOrb = bar.querySelector(".ct-xp-orb");
-    if (xpOrb) {
-      xpOrb.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._adjustXP(1);
-      };
-      xpOrb.oncontextmenu = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._adjustXP(-1);
-      };
-    }
 
     const portraitWrap = bar.querySelector(".ct-portrait-wrap");
     if (portraitWrap) portraitWrap.oncontextmenu = (e) => {
@@ -1232,8 +1205,8 @@ class CypherTaskbar {
     });
 
     // ── Mini category grid buttons (People / Places / Assets / Secrets) ──
-    const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", assets: "_openAssetsPanel", secrets: "_openSecretsPanel" };
-    const miniKeyToSetting = { people: "People", places: "Places", assets: "Assets", secrets: "Secrets" };
+    const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", documents: "_openDocumentsPanel", secrets: "_openSecretsPanel" };
+    const miniKeyToSetting = { people: "People", places: "Places", documents: "Documents", secrets: "Secrets" };
     bar.querySelectorAll(".ct-mini-btn[data-mini]").forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -1306,6 +1279,7 @@ class CypherTaskbar {
     this._bindEquipmentRowEvents(bar);
     this._bindEquipmentDnD(bar);
     this._bindEquipmentTabs(bar);
+    this._bindWeaponDropZone(bar);
 
     const abSettingsBtn = bar.querySelector("[data-ab-settings]");
     if (abSettingsBtn) abSettingsBtn.onclick = (e) => {
@@ -1693,6 +1667,7 @@ class CypherTaskbar {
     this._bindEquipmentRowEvents(bar);
     this._bindEquipmentDnD(bar);
     this._bindEquipmentTabs(bar);
+    this._bindWeaponDropZone(bar);
 
     // ── Click on item images in panels → open item sheet ──
     const panelContainer = bar.querySelector("#ct-panel-container");
@@ -2982,13 +2957,11 @@ class CypherTaskbar {
     const upperPanelScale = this._gs("upperPanelScale") ?? 100;
     const upperPanelOffsetX = this._gs("upperPanelOffsetX") ?? 0;
     const upperPanelOffsetY = this._gs("upperPanelOffsetY") ?? 0;
-    const xpCircleOffsetX = this._gs("xpCircleOffsetX") ?? 0;
-    const xpCircleOffsetY = this._gs("xpCircleOffsetY") ?? 0;
     const portraitSpaceTransparent = this._gs("portraitSpaceTransparent") ?? true;
     const portraitSpaceOpacity = this._gs("portraitSpaceOpacity") ?? 0.8;
     const portraitRect = this.element.querySelector(".ct-portrait-wrap")?.getBoundingClientRect();
     const lastPortraitTab = this._gs("lastPortraitSettingsTab") || "portrait";
-    const portraitTabs = ["portrait","identity","bars","arc","xp","opacity"];
+    const portraitTabs = ["portrait","identity","bars","arc","opacity"];
     const activePortraitTab = portraitTabs.includes(lastPortraitTab) ? lastPortraitTab : "portrait";
 
     const popup = document.createElement("div");
@@ -3020,7 +2993,6 @@ class CypherTaskbar {
         <button class="ct-popup-tab${activePortraitTab==="identity"?" is-active":""}" data-tab="identity" title="Name panel appearance"><i class="fas fa-id-card"></i><span>Identity</span></button>
         <button class="ct-popup-tab${activePortraitTab==="bars"?" is-active":""}" data-tab="bars" title="Attribute bars layout & style"><i class="fas fa-bars"></i><span>Attribute Bar</span></button>
         <button class="ct-popup-tab${activePortraitTab==="arc"?" is-active":""}" data-tab="arc" title="Focused arc widget"><i class="fas fa-bullseye"></i><span>Arc</span></button>
-        <button class="ct-popup-tab${activePortraitTab==="xp"?" is-active":""}" data-tab="xp" title="XP circle position"><i class="fas fa-star"></i><span>XP Circle</span></button>
         <button class="ct-popup-tab${activePortraitTab==="opacity"?" is-active":""}" data-tab="opacity" title="Portrait space transparency"><i class="fas fa-eye-slash"></i><span>Opacity</span></button>
       </div>
       <div class="ct-popup-body ct-popup-body-compact ct-portrait-settings-body">
@@ -3160,18 +3132,6 @@ class CypherTaskbar {
             </label>
           </div>
         </div>
-        <!-- ═══ XP CIRCLE TAB ═══ -->
-        <div class="ct-popup-pane${activePortraitTab==="xp"?" is-active":""}" data-pane="xp">
-          <div class="ct-settings-section">
-            <div class="ct-settings-section-title"><i class="fas fa-arrows-alt"></i> Position</div>
-            <label>Horizontal Offset <span class="ct-val-label" id="ps-xp-x-val">${xpCircleOffsetX}%</span>
-              <input type="range" id="ps-xp-x" min="-100" max="100" step="1" value="${xpCircleOffsetX}">
-            </label>
-            <label>Vertical Offset <span class="ct-val-label" id="ps-xp-y-val">${xpCircleOffsetY}%</span>
-              <input type="range" id="ps-xp-y" min="-100" max="100" step="1" value="${xpCircleOffsetY}">
-            </label>
-          </div>
-        </div>
         <!-- ═══ OPACITY TAB ═══ -->
         <div class="ct-popup-pane${activePortraitTab==="opacity"?" is-active":""}" data-pane="opacity">
           <div class="ct-settings-section">
@@ -3251,8 +3211,6 @@ class CypherTaskbar {
         await this._ss("upperPanelScale", parseInt(popup.querySelector("#ps-upper-scale").value));
         await this._ss("upperPanelOffsetX", parseInt(popup.querySelector("#ps-upper-x").value));
         await this._ss("upperPanelOffsetY", parseInt(popup.querySelector("#ps-upper-y").value));
-        await this._ss("xpCircleOffsetX", parseInt(popup.querySelector("#ps-xp-x").value));
-        await this._ss("xpCircleOffsetY", parseInt(popup.querySelector("#ps-xp-y").value));
         await this._ss("arcWidgetOffsetX",   parseInt(popup.querySelector("#ps-arc-x").value));
         await this._ss("arcWidgetOffsetY",   parseInt(popup.querySelector("#ps-arc-y").value));
         await this._ss("arcWidgetScale",     parseInt(popup.querySelector("#ps-arc-scale").value));
@@ -3296,8 +3254,6 @@ class CypherTaskbar {
     popup.querySelector("#ps-upper-scale")?.addEventListener("input",e=>{popup.querySelector("#ps-upper-scale-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ps-upper-x")?.addEventListener("input",e=>{popup.querySelector("#ps-upper-x-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ps-upper-y")?.addEventListener("input",e=>{popup.querySelector("#ps-upper-y-val").textContent=e.target.value+"%";apply();});
-    popup.querySelector("#ps-xp-x")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-x-val").textContent=e.target.value+"%";apply();});
-    popup.querySelector("#ps-xp-y")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-y-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ps-value-color")?.addEventListener("input",applyDebounced);
     popup.querySelector("#ps-arc-x")?.addEventListener("input",e=>{popup.querySelector("#ps-arc-x-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ps-arc-y")?.addEventListener("input",e=>{popup.querySelector("#ps-arc-y-val").textContent=e.target.value+"%";apply();});
@@ -3595,7 +3551,6 @@ class CypherTaskbar {
         "namePanelBgColor","namePanelOpacity","namePanelFontSize","namePanelFontColor","namePanelFontFamily",
         "bar1Color","bar2Color","bar3Color","bar1TextColor","bar2TextColor","bar3TextColor",
         "arcBarColor","arcBarGlow","arcBarTextColor",
-        "xpCircleColor","xpCircleSize","xpCircleOffsetX","xpCircleOffsetY",
         "portraitSpaceTransparent","portraitSpaceOpacity",
         "portraitSettingsPos","lastPortraitSettingsTab"
       ];
@@ -4958,6 +4913,7 @@ class CypherTaskbar {
         <button class="ct-popup-close" id="ct-mini-close" title="Close"><i class="fas fa-times"></i></button>
       </div>
       <div class="ct-popup-body" id="ct-mini-body" style="overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0;">
+        ${key === "documents" ? `<div class="ct-mini-info"><i class="fas fa-info-circle"></i> Drag journals from the Book panel or sidebar here. Click to open, right-click to edit.</div>` : ""}
         ${stored.length === 0 ? `<div class="ct-mini-empty-state">Empty — drag items here</div>` : ""}
         <div class="ct-mini-items" id="ct-mini-items"></div>
       </div>`;
@@ -5434,7 +5390,7 @@ class CypherTaskbar {
 
   _openPeoplePanel(btn)   { this._openMiniContainer("people",  "PEOPLE",  "fas fa-users", "#8fbc8f", btn); }
   _openPlacesPanel(btn)   { this._openMiniContainer("places",  "PLACES",  "fas fa-map-marker-alt", "#c4a86b", btn); }
-  _openAssetsPanel(btn)   { this._openMiniContainer("assets",  "ASSETS",  "fas fa-coins", "#d4af37", btn); }
+  _openDocumentsPanel(btn) { this._openMiniContainer("documents", "DOCUMENTS", "fas fa-book", "#4a90d9", btn); }
   _openSecretsPanel(btn)  { this._openMiniContainer("secrets", "SECRETS", "fas fa-user-secret", "#9b59b6", btn); }
 
   /**
@@ -5446,7 +5402,7 @@ class CypherTaskbar {
     if (!key || btn._ctDropBound) return;
     btn._ctDropBound = true;
     const title = key.toUpperCase();
-    const color = { People: "#8fbc8f", Places: "#c4a86b", Assets: "#d4af37", Secrets: "#9b59b6" }[key] || "#c8a96e";
+    const color = { People: "#8fbc8f", Places: "#c4a86b", Documents: "#4a90d9", Secrets: "#9b59b6" }[key] || "#c8a96e";
     const _onDragOver = (e) => { e.preventDefault(); e.stopPropagation(); btn.classList.add("is-dragover"); };
     const _onDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); btn.classList.remove("is-dragover"); };
     const _onDrop = async (e) => {
@@ -6208,16 +6164,6 @@ class CypherTaskbar {
           await this._openStatRoll(el.dataset.rollStat);
         });
       });
-      old.querySelector(".ct-xp-orb")?.addEventListener("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._adjustXP(1);
-      });
-      old.querySelector(".ct-xp-orb")?.addEventListener("contextmenu", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._adjustXP(-1);
-      });
       // Re-bind dice button events
       old.querySelectorAll(".ct-dice-btn").forEach(btn => {
         btn.addEventListener("click", async (e) => {
@@ -6245,6 +6191,29 @@ class CypherTaskbar {
           await this._spendRecoveryRoll(idx);
         });
       });
+      // Re-bind focused arc widget
+      const focusedArcWidgetBtn = old.querySelector("[data-open-focused-arc]");
+      if (focusedArcWidgetBtn) {
+        const openFocusedArcDialog = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (this._arcDialogOpening) return;
+          this._arcDialogOpening = true;
+          const targetActor = this.actor;
+          if (!targetActor) { this._arcDialogOpening = false; return; }
+          try {
+            await this._openFocusedArcWidgetDialog(targetActor);
+          } catch (err) {
+            console.error(`${MODULE_ID} | Failed to open focused arc dialog (refresh):`, err);
+          } finally {
+            this._arcDialogOpening = false;
+          }
+        };
+        focusedArcWidgetBtn.onclick = openFocusedArcDialog;
+        focusedArcWidgetBtn.querySelectorAll("[data-open-focused-arc-title]").forEach((el) => {
+          el.onclick = openFocusedArcDialog;
+        });
+      }
     }
 
     // Rebuild bar meta + eye + book buttons
@@ -6332,8 +6301,8 @@ class CypherTaskbar {
         this._applyMenuIconStyles(btn);
       });
       // Re-bind mini category grid buttons
-      const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", assets: "_openAssetsPanel", secrets: "_openSecretsPanel" };
-      const miniKeyToSetting = { people: "People", places: "Places", assets: "Assets", secrets: "Secrets" };
+      const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", documents: "_openDocumentsPanel", secrets: "_openSecretsPanel" };
+      const miniKeyToSetting = { people: "People", places: "Places", documents: "Documents", secrets: "Secrets" };
       s2.querySelectorAll(".ct-mini-btn[data-mini]").forEach(btn => {
         btn.addEventListener("click", (e) => {
           e.preventDefault();

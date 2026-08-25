@@ -229,6 +229,13 @@ export function applyEquipmentPanel(CypherTaskbar) {
         if (!this._combatFloatingOpen) this._closePanel();
         await this.openEquipmentUseDialog(e.currentTarget.dataset.useEquipment);
       });
+      // Weapon card use buttons
+      bar.querySelectorAll('[data-use-weapon]').forEach((btn) => btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!this._combatFloatingOpen) this._closePanel();
+        await this.openEquipmentUseDialog(e.currentTarget.dataset.useWeapon);
+      });
       bar.querySelectorAll(".ct-equipment-draggable[data-equipment-id]").forEach(row => {
         row.oncontextmenu = (e) => {
           e.preventDefault();
@@ -251,6 +258,28 @@ export function applyEquipmentPanel(CypherTaskbar) {
         row.onmouseleave = () => this._equipmentHideTooltip();
         row.onmousedown = () => this._equipmentHideTooltip();
       });
+      // Weapon cards: right-click to open sheet + tooltip
+      bar.querySelectorAll(".ct-weapon-card[data-weapon-id]").forEach(card => {
+        card.oncontextmenu = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this._equipmentHideTooltip();
+          if (this.activePanel === "equipment" && !this._combatFloatingOpen) {
+            this._closePanel();
+          }
+          const item = this.actor?.items.get(card.dataset.weaponId);
+          item?.sheet?.render(true);
+        };
+        card.onmouseenter = () => {
+          this._equipmentHideTooltip();
+          const item = this.actor?.items.get(card.dataset.weaponId);
+          const description = this._equipmentGetDescription(item);
+          if (!description) return;
+          this._equipmentTooltipTimer = setTimeout(() => this._equipmentShowTooltip(card, description), 2000);
+        };
+        card.onmouseleave = () => this._equipmentHideTooltip();
+        card.onmousedown = () => this._equipmentHideTooltip();
+      });
       bar.querySelectorAll("[data-equipment-category-header]").forEach(header => {
         header.oncontextmenu = (e) => {
           e.preventDefault();
@@ -269,6 +298,28 @@ export function applyEquipmentPanel(CypherTaskbar) {
       const nameLower = (item.name || "").toLowerCase();
       const keywords = ["sword","axe","bow","dagger","mace","spear","staff","crossbow","pistol","rifle","gun","blade","club","hammer","whip","weapon","ammo","arrow","bolt","bullet","quiver","slingshot","javelin","lance","musket","shotgun","grenade","explosive"];
       return keywords.some(k => nameLower.includes(k));
+    },
+
+    _getWeaponStats(item) {
+      const sys = item?.system ?? {};
+      const basic = sys.basic ?? {};
+      const damage = basic.damage || sys.damage || "—";
+      const range = basic.range || sys.range || "—";
+      // Try to find ammo type from various possible locations
+      let ammo = "—";
+      if (basic.ammo) ammo = basic.ammo;
+      else if (sys.ammo) ammo = sys.ammo;
+      else if (basic.ammoType) ammo = basic.ammoType;
+      else if (sys.ammoType) ammo = sys.ammoType;
+      else {
+        // Infer from name
+        const nameLower = (item.name || "").toLowerCase();
+        if (nameLower.includes("arrow") || nameLower.includes("bow")) ammo = "Arrows";
+        else if (nameLower.includes("bolt") || nameLower.includes("crossbow")) ammo = "Bolts";
+        else if (nameLower.includes("bullet") || nameLower.includes("pistol") || nameLower.includes("rifle") || nameLower.includes("gun") || nameLower.includes("musket") || nameLower.includes("shotgun")) ammo = "Bullets";
+        else if (nameLower.includes("grenade")) ammo = "Grenades";
+      }
+      return { damage, range, ammo };
     },
 
     _isArmorItem(item) {
@@ -1254,11 +1305,42 @@ export function applyEquipmentPanel(CypherTaskbar) {
       let mainContent;
       if (subTab === "equip") {
         mainContent = `<div class="ct-equipment-placeholder"><i class="fas fa-shirt"></i><p>Equipment Doll is open</p><p class="ct-equipment-placeholder-sub">Click the Equip tab to toggle the doll</p></div>`;
+      } else if (subTab === "weapon") {
+        // Weapon tab: clean weapon grid with stats
+        const weaponItems = actor.items.filter(i => ["equipment", "artifact", "cypher", "oddity", "material"].includes(i.type))
+          .filter(i => this._isWeaponItem(i))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        if (weaponItems.length === 0) {
+          mainContent = `<div class="ct-weapon-grid-empty"><i class="fas fa-khanda"></i><p>No weapons yet</p><p class="ct-weapon-grid-empty-sub">Drag weapons from the sidebar or compendium here</p></div>`;
+        } else {
+          const weaponCards = weaponItems.map(item => {
+            const stats = this._getWeaponStats(item);
+            const { quantity: qty } = equipmentQuantityInfo(item);
+            return `<div class="ct-weapon-card" data-weapon-id="${item.id}" draggable="true" title="${escapeEquipmentText(item.name)}">
+              <div class="ct-weapon-card-icon-wrap">
+                <img class="ct-weapon-card-icon" src="${item.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
+                ${qty > 1 ? `<span class="ct-weapon-card-qty">${qty}</span>` : ""}
+              </div>
+              <div class="ct-weapon-card-info">
+                <div class="ct-weapon-card-name">${escapeEquipmentText(item.name)}</div>
+                <div class="ct-weapon-card-stats">
+                  <span class="ct-weapon-stat"><i class="fas fa-burst"></i> ${escapeEquipmentText(String(stats.damage))}</span>
+                  <span class="ct-weapon-stat"><i class="fas fa-ruler-horizontal"></i> ${escapeEquipmentText(String(stats.range))}</span>
+                  <span class="ct-weapon-stat"><i class="fas fa-box-open"></i> ${escapeEquipmentText(String(stats.ammo))}</span>
+                </div>
+              </div>
+              <button type="button" class="ct-weapon-use-btn" data-use-weapon="${item.id}" title="Use weapon"><i class="fas fa-hand-sparkles"></i></button>
+            </div>`;
+          }).join("");
+          mainContent = `<div class="ct-weapon-grid">${weaponCards}</div>`;
+        }
+        mainContent += `<div class="ct-weapon-drop-zone" data-weapon-dropzone><div class="ct-weapon-drop-zone-inner"><i class="fas fa-plus"></i><span>Drop weapons here</span></div></div>`;
       } else {
         mainContent = sections || `<div class="ct-empty-msg">No ${subTab === "home" ? "equipment" : subTab} items found.</div>`;
       }
 
-      const equipmentPanel = `<div class="ct-panel ct-panel-equipment-custom" style="${this._equipmentMenuStyleVars()};${this._getMenuBackgroundVars("equipment")}"><div class="ct-panel-header ct-panel-header-equipment-menu"><div class="ct-panel-title-wrap"><i class="fas ${meta.icon}"></i> <span class="ct-panel-title-text ct-equipment-panel-title-text">${meta.title}</span></div><div class="ct-panel-action-group"><button class="ct-panel-settings-btn" data-equipment-categories title="Equipment Categories"><i class="fas fa-folder-plus"></i></button><button class="ct-panel-settings-btn" data-equipment-settings title="Equipment Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-equipment-close title="Close Equipment Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-equipment-panel-body">${mainContent}</div></div>`;
+      const showCategoriesBtn = subTab !== "weapon" && subTab !== "armor";
+      const equipmentPanel = `<div class="ct-panel ct-panel-equipment-custom" style="${this._equipmentMenuStyleVars()};${this._getMenuBackgroundVars("equipment")}"><div class="ct-panel-header ct-panel-header-equipment-menu"><div class="ct-panel-title-wrap"><i class="fas ${meta.icon}"></i> <span class="ct-panel-title-text ct-equipment-panel-title-text">${meta.title}</span></div><div class="ct-panel-action-group">${showCategoriesBtn ? `<button class="ct-panel-settings-btn" data-equipment-categories title="Equipment Categories"><i class="fas fa-folder-plus"></i></button>` : ""}<button class="ct-panel-settings-btn" data-equipment-settings title="Equipment Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-equipment-close title="Close Equipment Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-equipment-panel-body ct-equipment-panel-body-${subTab}">${mainContent}</div></div>`;
 
       const isHomeActive = subTab === "home";
       const isEquipActive = subTab === "equip" || this._combatFloatingOpen;
@@ -1346,6 +1428,76 @@ export function applyEquipmentPanel(CypherTaskbar) {
           await savePlacement();
         };
       });
+    },
+
+    _bindWeaponDropZone(bar) {
+      const dropzone = bar.querySelector("[data-weapon-dropzone]");
+      if (!dropzone) return;
+      const actor = this.actor;
+      if (!actor) return;
+
+      const _onDragOver = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add("ct-weapon-drop-active");
+      };
+      const _onDragLeave = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!dropzone.contains(e.relatedTarget)) dropzone.classList.remove("ct-weapon-drop-active");
+      };
+      const _onDrop = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove("ct-weapon-drop-active");
+
+        let data;
+        try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch { data = {}; }
+
+        let item = null;
+        if (data.uuid) {
+          try { item = await fromUuid(data.uuid); } catch { /* ignore */ }
+        }
+        if (!item && data.id) {
+          item = game.items.get(data.id);
+        }
+        if (!item && data && !data.uuid && !data.id && typeof e.dataTransfer.getData("text/plain") === "string") {
+          const rawId = e.dataTransfer.getData("text/plain").trim();
+          if (rawId) item = actor.items.get(rawId);
+        }
+
+        if (!item) { ui.notifications.warn("Item not found."); return; }
+
+        // Validate: must be a weapon
+        if (!this._isWeaponItem(item)) {
+          ui.notifications.warn(`"${item.name}" is not a weapon or attack item.`);
+          return;
+        }
+
+        // Check if already on actor
+        let actorItem = actor.items.find(i => i.name === item.name && i.type === item.type);
+        if (!actorItem && item.uuid && !item.actor) {
+          // Item from sidebar - add to actor
+          try {
+            const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
+            delete itemData._id;
+            const created = await actor.createEmbeddedDocuments("Item", [itemData]);
+            if (created && created.length) actorItem = created[0];
+          } catch (err) {
+            ui.notifications.error("Failed to add weapon to actor.");
+            return;
+          }
+        }
+
+        if (actorItem) {
+          ui.notifications.info(`"${actorItem.name}" added to weapons.`);
+          this._refreshActivePanel();
+        }
+      };
+
+      dropzone.addEventListener("dragover", _onDragOver);
+      dropzone.addEventListener("dragleave", _onDragLeave);
+      dropzone.addEventListener("drop", _onDrop);
     },
 
     openEquipmentUseDialog(itemId) {

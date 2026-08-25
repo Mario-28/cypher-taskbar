@@ -1258,65 +1258,6 @@
 }
 
 
-.ct-xp-panel-portrait {
-  position: absolute;
-  left: calc(50% + var(--ct-xp-x, 0%));
-  bottom: calc((-42px * var(--ct-bars-scale, 1)) + var(--ct-xp-y, 0%));
-  transform: translateX(-50%);
-  justify-content: center;
-  width: auto;
-  margin-top: 0;
-  padding-right: 0;
-  gap: calc(6px * var(--ct-bars-scale, 1));
-  z-index: 8;
-}
-.ct-xp-panel-portrait .ct-xp-orb {
-  width: calc(54px * var(--ct-bars-scale, 1));
-  height: calc(54px * var(--ct-bars-scale, 1));
-  min-width: calc(54px * var(--ct-bars-scale, 1));
-  min-height: calc(54px * var(--ct-bars-scale, 1));
-}
-.ct-xp-panel-portrait .ct-xp-core {
-  inset: calc(10px * var(--ct-bars-scale, 1));
-}
-.ct-xp-panel-portrait .ct-xp-btn {
-  width: calc(22px * var(--ct-bars-scale, 1));
-  height: calc(22px * var(--ct-bars-scale, 1));
-  min-width: calc(22px * var(--ct-bars-scale, 1));
-}
-
-
-.ct-xp-panel-portrait .ct-xp-orb {
-  width: calc(58px * var(--ct-bars-scale, 1));
-  height: calc(58px * var(--ct-bars-scale, 1));
-  min-width: calc(58px * var(--ct-bars-scale, 1));
-  min-height: calc(58px * var(--ct-bars-scale, 1));
-  cursor: pointer;
-}
-.ct-xp-panel-portrait .ct-xp-wheel {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-}
-.ct-xp-panel-portrait .ct-xp-seg {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: conic-gradient(from calc((var(--seg) * 36deg) - 88deg), rgba(90,64,20,0) 0deg 2deg, rgba(92,66,22,0.22) 2deg 31deg, rgba(90,64,20,0) 31deg 36deg);
-  -webkit-mask: radial-gradient(circle, transparent 0 46%, #000 47% 100%);
-          mask: radial-gradient(circle, transparent 0 46%, #000 47% 100%);
-}
-.ct-xp-panel-portrait .ct-xp-seg.active {
-  background: conic-gradient(from calc((var(--seg) * 36deg) - 88deg), rgba(224,187,82,0) 0deg 2deg, rgba(255,235,146,1) 2deg 14deg, rgba(224,187,82,0.98) 14deg 29deg, rgba(120,78,18,1) 29deg 31deg, rgba(224,187,82,0) 31deg 36deg);
-}
-.ct-xp-panel-portrait .ct-xp-core {
-  inset: calc(14px * var(--ct-bars-scale, 1));
-}
-.ct-xp-panel-portrait .ct-xp-btn {
-  display: none !important;
-}
-
-
 .ct-popup-body > label {
   display: flex;
   flex-direction: column;
@@ -5275,6 +5216,8 @@ align-self: stretch;
 }
 .ct-portrait-focus-widget.has-arc {
   border-color: rgba(255,224,163,.32);
+  pointer-events: all;
+  cursor: pointer;
 }
 .ct-portrait-focus-label {
   font-size: calc(0.46rem * var(--ct-arc-wfs, 0.84));
@@ -6647,6 +6590,205 @@ scrollbar-color: rgba(212,169,77,0.7) rgba(255,255,255,0.08);
 .ct-equipment-panel-body::-webkit-scrollbar { width: 10px; }
 .ct-equipment-panel-body::-webkit-scrollbar-track { background: rgba(255,255,255,0.08); border-radius: 999px; }
 .ct-equipment-panel-body::-webkit-scrollbar-thumb { background: linear-gradient(180deg, rgba(212,169,77,0.85), rgba(122,84,20,0.95)); border-radius: 999px; border: 1px solid rgba(0,0,0,0.18); }
+
+/* ── Weapon Drop Zone ── */
+.ct-weapon-drop-zone {
+  grid-column: 1 / -1;
+  border: 2px dashed rgba(212, 169, 77, 0.3);
+  border-radius: 10px;
+  padding: 20px;
+  margin-top: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+.ct-weapon-drop-zone-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.8em;
+  pointer-events: none;
+}
+.ct-weapon-drop-zone-inner i {
+  font-size: 1.8em;
+  color: rgba(212, 169, 77, 0.4);
+}
+.ct-weapon-drop-zone:hover {
+  border-color: rgba(212, 169, 77, 0.6);
+  background: rgba(212, 169, 77, 0.05);
+}
+.ct-weapon-drop-zone:hover .ct-weapon-drop-zone-inner {
+  color: rgba(255, 255, 255, 0.6);
+}
+.ct-weapon-drop-zone:hover .ct-weapon-drop-zone-inner i {
+  color: rgba(212, 169, 77, 0.7);
+}
+.ct-weapon-drop-zone.ct-weapon-drop-active {
+  border-color: rgba(212, 169, 77, 0.9);
+  background: rgba(212, 169, 77, 0.1);
+  border-style: solid;
+}
+.ct-weapon-drop-zone.ct-weapon-drop-active .ct-weapon-drop-zone-inner {
+  color: rgba(255, 255, 255, 0.8);
+}
+.ct-weapon-drop-zone.ct-weapon-drop-active .ct-weapon-drop-zone-inner i {
+  color: rgba(212, 169, 77, 1);
+}
+
+/* ── Weapon Grid ── */
+.ct-weapon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 8px;
+}
+.ct-weapon-grid-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: rgba(255, 255, 255, 0.35);
+  text-align: center;
+  gap: 8px;
+}
+.ct-weapon-grid-empty i {
+  font-size: 2.5em;
+  color: rgba(212, 169, 77, 0.3);
+}
+.ct-weapon-grid-empty p {
+  margin: 0;
+  font-size: 0.9em;
+}
+.ct-weapon-grid-empty-sub {
+  font-size: 0.7em;
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* ── Weapon Card ── */
+.ct-weapon-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+  user-select: none;
+}
+.ct-weapon-card:hover {
+  background: rgba(200, 169, 110, 0.08);
+  border-color: rgba(200, 169, 110, 0.3);
+  transform: translateY(-2px);
+}
+.ct-weapon-card:active {
+  transform: scale(0.97);
+}
+.ct-weapon-card-icon-wrap {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ct-weapon-card-icon {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ct-weapon-card-qty {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #f0d68a;
+  font-size: 0.6em;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
+.ct-weapon-card-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+}
+.ct-weapon-card-name {
+  font-size: 0.78em;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  text-align: center;
+  line-height: 1.2;
+  word-break: break-word;
+}
+.ct-weapon-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+}
+.ct-weapon-stat {
+  font-size: 0.62em;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ct-weapon-stat i {
+  font-size: 0.85em;
+  color: rgba(212, 169, 77, 0.6);
+}
+.ct-weapon-use-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: none;
+  background: rgba(200, 169, 110, 0.15);
+  color: rgba(200, 169, 110, 0.7);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65em;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  padding: 0;
+}
+.ct-weapon-card:hover .ct-weapon-use-btn {
+  opacity: 1;
+}
+.ct-weapon-use-btn:hover {
+  background: rgba(200, 169, 110, 0.35);
+  color: #f0d68a;
+}
+
+/* Weapon panel body override */
+.ct-equipment-panel-body-weapon {
+  display: block !important;
+  grid-template-columns: none !important;
+}
 .ct-equipment-masonry-column {
 display: flex;
 flex-direction: column;
@@ -8238,6 +8380,17 @@ backdrop-filter: blur(8px);
 .ct-book-entry:hover .ct-book-edit { opacity: 1; }
 .ct-book-edit:hover { background: rgba(200,169,110,0.35); }
 
+/* Blue hand icon always visible on journal entries */
+.ct-book-entry .ct-item-hand {
+  display: inline-flex;
+  color: #4a9eff;
+  margin-left: auto;
+}
+.ct-book-entry:hover .ct-item-hand {
+  color: #6bb8ff;
+  transform: scale(1.15);
+}
+
 /* ── Book Settings Popup ── */
 #ct-book-settings-popup { width: 420px; }
 #ct-book-settings-popup .ct-popup-body { max-height: 380px; overflow-y: auto; }
@@ -8858,7 +9011,7 @@ backdrop-filter: blur(8px);
 }
 .ct-mini-btn[data-mini="people"] i { color: #8fbc8f; }
 .ct-mini-btn[data-mini="places"] i { color: #c4a86b; }
-.ct-mini-btn[data-mini="assets"] i { color: #d4af37; }
+.ct-mini-btn[data-mini="documents"] i { color: #4a90d9; }
 .ct-mini-btn[data-mini="secrets"] i { color: #9b59b6; }
 .ct-mini-btn:hover i { color: var(--ct-accent); }
 
@@ -9005,6 +9158,22 @@ backdrop-filter: blur(8px);
 .ct-mini-popup .ct-mini-remove:hover {
   background: rgba(231,76,60,0.3);
   color: #e74c3c;
+}
+
+/* Mini menu info message */
+.ct-mini-info {
+  padding: 8px 12px;
+  margin: 8px;
+  background: rgba(74, 144, 217, 0.1);
+  border: 1px solid rgba(74, 144, 217, 0.3);
+  border-radius: 6px;
+  color: #8ab4e6;
+  font-size: 0.7em;
+  line-height: 1.4;
+}
+.ct-mini-info i {
+  color: #4a9eff;
+  margin-right: 6px;
 }
 
 /* Hand icon inside mini items */

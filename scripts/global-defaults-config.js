@@ -87,7 +87,6 @@ export const GlobalTaskbarDefaultsConfig = (typeof FormApplication !== "undefine
                 "namePanelBgColor","namePanelOpacity","namePanelFontSize","namePanelFontColor","namePanelFontFamily",
                 "bar1Color","bar2Color","bar3Color","bar1TextColor","bar2TextColor","bar3TextColor",
                 "arcBarColor","arcBarGlow","arcBarTextColor",
-                "xpCircleColor","xpCircleSize","xpCircleOffsetX","xpCircleOffsetY",
                 "portraitSpaceTransparent","portraitSpaceOpacity"
               ];
               for (const key of knownKeys) {

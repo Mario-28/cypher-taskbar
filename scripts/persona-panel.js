@@ -13,56 +13,16 @@ function _silenceV1Warn(fn) {
 function _openFancyDialog({ title, content, classes = [], buttons = {}, defaultButton = null, render = null, close = null }) {
   const allClasses = ['ct-persona-about-dialog-app', ...classes];
 
-  // ── Foundry v14+ : DialogV2 ──
-  if (foundry.applications?.api?.DialogV2) {
-    const okBtn = buttons.save || buttons.ok;
-    const cancelBtn = buttons.cancel;
-    const v2Buttons = [];
-    if (okBtn) {
-      v2Buttons.push({
-        action: 'save',
-        label: okBtn.label || 'Save',
-        icon: okBtn.icon || 'fas fa-save',
-        default: defaultButton === 'save',
-        callback: async (event, button, dialog) => {
-          if (okBtn.callback) {
-            const root = dialog.element?.querySelector('.window-content') || dialog.element;
-            await okBtn.callback(root);
-          }
-        }
-      });
-    }
-    if (cancelBtn) {
-      v2Buttons.push({
-        action: 'cancel',
-        label: cancelBtn.label || 'Cancel',
-        icon: cancelBtn.icon || 'fas fa-times',
-        default: defaultButton === 'cancel'
-      });
-    }
-    const dlg = new foundry.applications.api.DialogV2({
-      window: {
-        title: title || '',
-        icon: 'fas fa-pen',
-        classes: allClasses
-      },
-      content: content,
-      modal: false,
-      rejectClose: false,
-      buttons: v2Buttons
-    });
-    dlg.render(true);
-    if (render) {
-      window.setTimeout(() => {
-        const root = dlg.element?.querySelector('.window-content') || dlg.element;
-        if (root) render(root, dlg.element);
-      }, 50);
-    }
-    return dlg;
-  }
+  // Helper: extract FA class from HTML icon string or return as-is
+  const _iconClass = (icon) => {
+    if (!icon) return 'fas fa-check';
+    if (typeof icon !== 'string') return 'fas fa-check';
+    const match = icon.match(/class=["']([^"']+)["']/);
+    return match ? match[1] : icon;
+  };
 
-  // ── Foundry v13 / legacy V1 Dialog (suppress deprecation noise) ──
-  return _silenceV1Warn(() => {
+  // Helper: build V1 fallback dialog
+  const _v1Fallback = () => _silenceV1Warn(() => {
     const dlg = new Dialog({
       title,
       content,
@@ -87,6 +47,59 @@ function _openFancyDialog({ title, content, classes = [], buttons = {}, defaultB
     dlg.render(true);
     return dlg;
   });
+
+  // ── Foundry v14+ : DialogV2 ──
+  if (foundry.applications?.api?.DialogV2) {
+    const v2Buttons = [];
+    for (const [key, btn] of Object.entries(buttons)) {
+      if (!btn) continue;
+      const btnDef = {
+        action: key,
+        label: btn.label || key,
+        icon: _iconClass(btn.icon),
+        default: defaultButton === key
+      };
+      if (btn.callback) {
+        btnDef.callback = async (event, button, dialog) => {
+          const root = dialog.element?.querySelector('.window-content') || dialog.element;
+          await btn.callback(root);
+        };
+      }
+      v2Buttons.push(btnDef);
+    }
+    // DialogV2 requires at least one button
+    if (v2Buttons.length === 0) {
+      v2Buttons.push({ action: 'close', label: 'Close', icon: 'fas fa-times', default: true });
+    }
+
+    try {
+      const dlg = new foundry.applications.api.DialogV2({
+        window: {
+          title: title || '',
+          icon: 'fas fa-pen',
+          classes: allClasses
+        },
+        content: content,
+        modal: false,
+        rejectClose: false,
+        buttons: v2Buttons
+      });
+      dlg.render(true);
+      if (render) {
+        window.setTimeout(() => {
+          const root = dlg.element?.querySelector('.window-content') || dlg.element;
+          if (root) render(root, dlg.element);
+        }, 50);
+      }
+      return dlg;
+    } catch (err) {
+      console.warn(`[cypher-taskbar] DialogV2 failed (${err.message}), falling back to V1 Dialog`);
+      return _v1Fallback();
+    }
+  }
+
+  // ── Foundry v13 / legacy V1 Dialog (suppress deprecation noise) ──
+  return _v1Fallback();
 }
 
 export function applyPersonaPanel(CypherTaskbar) {
