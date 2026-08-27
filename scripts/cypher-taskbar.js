@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v4.0.87
+ * Cypher Taskbar v4.1.1
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -38,6 +38,32 @@ class CypherTaskbar {
     this._cashOpPending = 0;
     this._cashSuppressTimer = null;
     this._cashPanelLocked = false;
+    this._lastRollData = null; // Store last roll parameters for reroll
+    this._xpApi = null;        // Cached Cypher XP API
+
+    // Listen for Cypher XP ready hook
+    Hooks.on("cypher-xp.ready", (api) => {
+      this._xpApi = api;
+      console.log(`${MODULE_ID} | Cypher XP API ready`);
+    });
+  }
+
+  /** Check if Cypher XP module is active */
+  _cypherXpActive() {
+    return game.modules.get("cypher-xp")?.active === true;
+  }
+
+  /** Get Cypher XP API — returns null if not ready */
+  _getXpApi() {
+    // If we have cached API, use it
+    if (this._xpApi?.openPlayerApp) return this._xpApi;
+    // Otherwise try to get it directly from the module
+    const mod = game.modules.get("cypher-xp");
+    if (mod?.active && mod.api?.openPlayerApp) {
+      this._xpApi = mod.api;
+      return mod.api;
+    }
+    return null;
   }
 
   /** Get setting: per-actor preference first, then global fallback */
@@ -151,6 +177,17 @@ class CypherTaskbar {
       bar.innerHTML = this._buildHTML();
       document.body.appendChild(bar);
       this.element = bar;
+
+      // Hide Cypher XP floating launcher when integrated
+      if (this._cypherXpActive()) {
+        const xpLauncher = document.getElementById("cypher-xp-player-launcher") ?? document.getElementById("cypher-development-track-player-launcher");
+        if (xpLauncher) xpLauncher.style.display = "none";
+        // Also hide the "Log Immediate Spend" button inside the Cypher XP app
+        document.querySelectorAll('.cxp-log-spend-btn, .cypher-xp-app .cxp-chart-toolbar button[data-action="logSpend"]').forEach(el => {
+          el.style.display = 'none';
+        });
+      }
+
       if (this._boundDocumentClick) {
         document.removeEventListener("click", this._boundDocumentClick);
         this._boundDocumentClick = null;
@@ -187,6 +224,7 @@ class CypherTaskbar {
       portrait: bar.querySelector(".ct-portrait"),
       portraitWrap: bar.querySelector(".ct-portrait-wrap"),
       eyeBtn: bar.querySelector("#ct-btn-eye"),
+      xpBtn: bar.querySelector("#ct-btn-xp"),
       lockBtn: bar.querySelector("#ct-btn-lock"),
       settingsBtn: bar.querySelector("#ct-btn-settings"),
       section1: bar.querySelector(".ct-section-1"),
@@ -218,6 +256,7 @@ class CypherTaskbar {
           ${noActor
             ? `<div class="ct-no-actor"><i class="fas fa-user-slash"></i> No Character</div>`
             : this._buildBarMeta(actor)}
+          ${this._cypherXpActive() && !noActor ? `<button class="ct-btn ct-xp-btn" id="ct-btn-xp" title="Cypher XP — Development Track"><i class="fas fa-chart-line"></i></button>` : ''}
           <button class="ct-btn ct-eye-btn ${(this._gs("portraitAreaCollapsed") ?? false) ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${(this._gs("portraitAreaCollapsed") ?? false) ? 'Show portrait' : 'Hide portrait'}" ${noActor ? 'disabled' : ''}><i class="fas ${(this._gs("portraitAreaCollapsed") ?? false) ? 'fa-eye-slash' : 'fa-eye'}"></i></button>
         </div>
 
@@ -360,6 +399,7 @@ class CypherTaskbar {
               </div>
               <span class="ct-stat-value">${iV}</span><button class="ct-roll-btn" data-roll-stat="intellect" title="Roll Intellect"><i class="fas fa-dice-d20"></i></button>
             </div>
+            ${this._buildXpSpendBar(actor)}
           </div>
 
           <!-- Portrait below -->
@@ -417,6 +457,46 @@ class CypherTaskbar {
       <div class="ct-portrait-focus-title" data-open-focused-arc-title="1">${foundry.utils.escapeHTML(focusedArcTitle)}</div>
       <div class="ct-portrait-focus-hint" data-open-focused-arc-title="1"><i class="fas fa-sparkles"></i><span>Open details</span></div>
     </button>`;
+  }
+
+  /** Build XP spend buttons bar for portrait area (Cypher XP integration) */
+  _buildXpSpendBar(actor) {
+    if (!this._cypherXpActive() || !actor) return '';
+    const xp = Number(actor.system?.basic?.xp ?? actor.system?.advancement?.xp ?? 0);
+    const xw = this._gs("xpBarWidth") ?? 100;
+    const xh = this._gs("xpBarHeight") ?? 100;
+    const xs = this._gs("xpBarScale") ?? 100;
+    const xx = this._gs("xpBarOffsetX") ?? 0;
+    const xy = this._gs("xpBarOffsetY") ?? 0;
+    const iconSize = this._gs("xpBarIconSize") ?? 14;
+    const ttSize = this._gs("xpBarTooltipFontSize") ?? 12;
+    const spendTypes = [
+      { key: 'reroll', icon: 'fa-dice', label: 'Reroll', tooltip: 'Spend 1 XP to reroll your last check with all the same modifiers.' },
+      { key: 'player-intrusion', icon: 'fa-hand-sparkles', label: 'Intrusion', tooltip: 'Spend 1 XP to introduce a minor complication or twist into the story.' },
+      { key: 'insight', icon: 'fa-lightbulb', label: 'Insight', tooltip: 'Spend 1 XP to gain a clue, hint, or piece of relevant information.' },
+      { key: 'temporary-benefit', icon: 'fa-clock', label: 'Benefit', tooltip: 'Spend 1 XP for a temporary advantage, shortcut, or minor narrative convenience.' },
+      { key: 'other', icon: 'fa-circle', label: 'Other', tooltip: 'Spend XP for any other immediate use not covered by the standard options.' }
+    ];
+    const buttons = spendTypes.map(t => `
+      <button type="button" class="ct-xp-spend-btn" data-xp-spend="${t.key}" data-xp-cost="1" style="--ct-xp-icon-size:${iconSize}px;">
+        <i class="fas ${t.icon}"></i>
+        <span class="ct-xp-spend-tooltip" style="--ct-xp-tt-size:${ttSize}px;"><strong>${t.label}</strong> — ${t.tooltip}</span>
+      </button>
+    `).join('');
+    const style = [
+      `--ct-xp-w:${xw}%`,
+      `--ct-xp-h:${xh}%`,
+      `--ct-xp-s:scale(${Math.max(0.5, Math.min(2.0, xs / 100))})`,
+      `--ct-xp-ox:${xx}%`,
+      `--ct-xp-oy:${xy}%`,
+      `--ct-xp-icon-size:${iconSize}px`,
+      `--ct-xp-tt-size:${ttSize}px`
+    ].join(';');
+    return `
+      <div class="ct-xp-spend-bar" style="${style}">
+        <div class="ct-xp-counter" title="Current XP"><i class="fas fa-star"></i><span>${xp}</span></div>
+        <div class="ct-xp-spend-buttons">${buttons}</div>
+      </div>`;
   }
 
   _getActorDamageStatus(actor) {
@@ -1079,6 +1159,15 @@ class CypherTaskbar {
       };
     }
 
+    const xpBtn = bar.querySelector("#ct-btn-xp");
+    if (xpBtn) {
+      xpBtn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await this._openCypherXpApp(xpBtn);
+      };
+    }
+
     const focusedArcWidgetBtn = bar.querySelector("[data-open-focused-arc]");
     if (focusedArcWidgetBtn) {
       const openFocusedArcDialog = async (e) => {
@@ -1171,6 +1260,16 @@ class CypherTaskbar {
         }
       });
     });
+    // XP spend buttons (Cypher XP integration)
+    bar.querySelectorAll(".ct-xp-spend-btn[data-xp-spend]").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = btn.dataset.xpSpend;
+        await this._spendXpImmediate(action);
+      });
+    });
+
     // Recovery roll drops
     bar.querySelectorAll(".ct-recovery-drop[data-recovery-index]").forEach(btn => {
       btn.addEventListener("click", async (e) => {
@@ -1488,6 +1587,61 @@ class CypherTaskbar {
     const locked = this._gs("locked");
     const autoHide = this._gs("autoHide");
     if (!locked && autoHide && !this.element?.matches(":hover")) this._adjustCanvasPadding(false);
+  }
+
+  /** Open Cypher XP Player Development App positioned above the trigger button */
+  async _openCypherXpApp(btnEl) {
+    const actor = this.actor;
+    if (!actor) return ui.notifications.warn("Cypher XP: select or assign a character first.");
+    if (!this._cypherXpActive()) return ui.notifications.warn("Cypher XP module is not active.");
+
+    // Wait for API (up to 5 seconds)
+    let api = this._getXpApi();
+    for (let i = 0; i < 50 && !api; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      api = this._getXpApi();
+    }
+    if (!api) return ui.notifications.warn("Cypher XP API is not ready yet. Please try again in a moment.");
+
+    // Call Cypher XP API to open the player app
+    await api.openPlayerApp(actor);
+
+    // Position the app window so its bottom-left corner is above the button
+    let posAttempts = 0;
+    const maxPosAttempts = 10;
+    const tryPosition = () => {
+      const appEl = document.getElementById("cypher-xp-player-app");
+      if (!appEl || !btnEl) return;
+      const btnRect = btnEl.getBoundingClientRect();
+      const appHeight = appEl.offsetHeight || 700;
+      const appWidth = appEl.offsetWidth || 680;
+
+      let top = btnRect.top - appHeight;
+      let left = btnRect.left;
+
+      // Keep on screen: if too high, place below button instead
+      if (top < 0) top = btnRect.bottom + 8;
+      // Keep right edge on screen
+      if (left + appWidth > window.innerWidth - 8) {
+        left = Math.max(8, window.innerWidth - appWidth - 8);
+      }
+
+      appEl.style.position = "fixed";
+      appEl.style.top = `${top}px`;
+      appEl.style.left = `${left}px`;
+      appEl.style.zIndex = "9999";
+    };
+
+    const schedulePosition = () => {
+      if (posAttempts >= maxPosAttempts) return;
+      posAttempts++;
+      requestAnimationFrame(() => {
+        const appEl = document.getElementById("cypher-xp-player-app");
+        if (appEl && appEl.offsetHeight > 0) tryPosition();
+        else setTimeout(schedulePosition, 100);
+      });
+    };
+    schedulePosition();
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -2959,9 +3113,17 @@ class CypherTaskbar {
     const upperPanelOffsetY = this._gs("upperPanelOffsetY") ?? 0;
     const portraitSpaceTransparent = this._gs("portraitSpaceTransparent") ?? true;
     const portraitSpaceOpacity = this._gs("portraitSpaceOpacity") ?? 0.8;
+    // XP bar settings
+    const xpBarWidth = this._gs("xpBarWidth") ?? 100;
+    const xpBarHeight = this._gs("xpBarHeight") ?? 100;
+    const xpBarScale = this._gs("xpBarScale") ?? 100;
+    const xpBarOffsetX = this._gs("xpBarOffsetX") ?? 0;
+    const xpBarOffsetY = this._gs("xpBarOffsetY") ?? 0;
+    const xpBarIconSize = this._gs("xpBarIconSize") ?? 14;
+    const xpBarTooltipFontSize = this._gs("xpBarTooltipFontSize") ?? 12;
     const portraitRect = this.element.querySelector(".ct-portrait-wrap")?.getBoundingClientRect();
     const lastPortraitTab = this._gs("lastPortraitSettingsTab") || "portrait";
-    const portraitTabs = ["portrait","identity","bars","arc","opacity"];
+    const portraitTabs = ["portrait","identity","bars","arc","opacity","xp"];
     const activePortraitTab = portraitTabs.includes(lastPortraitTab) ? lastPortraitTab : "portrait";
 
     const popup = document.createElement("div");
@@ -2994,6 +3156,7 @@ class CypherTaskbar {
         <button class="ct-popup-tab${activePortraitTab==="bars"?" is-active":""}" data-tab="bars" title="Attribute bars layout & style"><i class="fas fa-bars"></i><span>Attribute Bar</span></button>
         <button class="ct-popup-tab${activePortraitTab==="arc"?" is-active":""}" data-tab="arc" title="Focused arc widget"><i class="fas fa-bullseye"></i><span>Arc</span></button>
         <button class="ct-popup-tab${activePortraitTab==="opacity"?" is-active":""}" data-tab="opacity" title="Portrait space transparency"><i class="fas fa-eye-slash"></i><span>Opacity</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="xp"?" is-active":""}" data-tab="xp" title="XP spend bar layout"><i class="fas fa-star"></i><span>XP</span></button>
       </div>
       <div class="ct-popup-body ct-popup-body-compact ct-portrait-settings-body">
         <!-- ═══ PORTRAIT TAB ═══ -->
@@ -3145,6 +3308,39 @@ class CypherTaskbar {
             </div>
           </div>
         </div>
+        <!-- ═══ XP BAR TAB ═══ -->
+        <div class="ct-popup-pane${activePortraitTab==="xp"?" is-active":""}" data-pane="xp">
+          <div class="ct-settings-section">
+            <div class="ct-settings-section-title"><i class="fas fa-ruler-combined"></i> Size</div>
+            <label>Bar Width <span class="ct-val-label" id="ps-xp-w-val">${xpBarWidth}%</span>
+              <input type="range" id="ps-xp-w" min="60" max="200" step="5" value="${xpBarWidth}">
+            </label>
+            <label>Bar Height <span class="ct-val-label" id="ps-xp-h-val">${xpBarHeight}%</span>
+              <input type="range" id="ps-xp-h" min="60" max="200" step="5" value="${xpBarHeight}">
+            </label>
+            <label>Bar Scale <span class="ct-val-label" id="ps-xp-scale-val">${xpBarScale}%</span>
+              <input type="range" id="ps-xp-scale" min="60" max="200" step="5" value="${xpBarScale}">
+            </label>
+          </div>
+          <div class="ct-settings-section">
+            <div class="ct-settings-section-title"><i class="fas fa-arrows-alt"></i> Position</div>
+            <label>Horizontal Offset <span class="ct-val-label" id="ps-xp-x-val">${xpBarOffsetX}%</span>
+              <input type="range" id="ps-xp-x" min="-100" max="300" step="1" value="${xpBarOffsetX}">
+            </label>
+            <label>Vertical Offset <span class="ct-val-label" id="ps-xp-y-val">${xpBarOffsetY}%</span>
+              <input type="range" id="ps-xp-y" min="-100" max="300" step="1" value="${xpBarOffsetY}">
+            </label>
+          </div>
+          <div class="ct-settings-section">
+            <div class="ct-settings-section-title"><i class="fas fa-icons"></i> Appearance</div>
+            <label>Icon Size <span class="ct-val-label" id="ps-xp-icon-val">${xpBarIconSize}px</span>
+              <input type="range" id="ps-xp-icon" min="8" max="24" step="1" value="${xpBarIconSize}">
+            </label>
+            <label>Tooltip Font Size <span class="ct-val-label" id="ps-xp-tt-val">${xpBarTooltipFontSize}px</span>
+              <input type="range" id="ps-xp-tt" min="8" max="20" step="1" value="${xpBarTooltipFontSize}">
+            </label>
+          </div>
+        </div>
       </div>`;
     document.body.appendChild(popup);
     if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings popup appended`, {popupInDOM: !!document.querySelector("#ct-portrait-settings-popup")});
@@ -3231,6 +3427,13 @@ class CypherTaskbar {
         await this._ss("portraitShadowDistance", parseInt(popup.querySelector("#ps-dist").value));
         await this._ss("portraitSpaceTransparent", popup.querySelector("#ps-space-transparent").checked);
         await this._ss("portraitSpaceOpacity", parseFloat(popup.querySelector("#ps-space-opacity").value));
+        await this._ss("xpBarWidth", parseInt(popup.querySelector("#ps-xp-w").value));
+        await this._ss("xpBarHeight", parseInt(popup.querySelector("#ps-xp-h").value));
+        await this._ss("xpBarScale", parseInt(popup.querySelector("#ps-xp-scale").value));
+        await this._ss("xpBarOffsetX", parseInt(popup.querySelector("#ps-xp-x").value));
+        await this._ss("xpBarOffsetY", parseInt(popup.querySelector("#ps-xp-y").value));
+        await this._ss("xpBarIconSize", parseInt(popup.querySelector("#ps-xp-icon").value));
+        await this._ss("xpBarTooltipFontSize", parseInt(popup.querySelector("#ps-xp-tt").value));
         this.refresh();
         if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings applied successfully`);
       } catch (err) {
@@ -3267,6 +3470,13 @@ class CypherTaskbar {
     popup.querySelector("#ps-title-size")?.addEventListener("input",e=>{popup.querySelector("#ps-title-size-val").textContent=e.target.value+"%";apply();});
     popup.querySelector("#ps-title-spacing")?.addEventListener("input",e=>{popup.querySelector("#ps-title-spacing-val").textContent=e.target.value+"px";apply();});
     popup.querySelector("#ps-title-bold")?.addEventListener("input",e=>{popup.querySelector("#ps-title-bold-val").textContent=e.target.value;apply();});
+    popup.querySelector("#ps-xp-w")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-w-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ps-xp-h")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-h-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ps-xp-scale")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-scale-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ps-xp-x")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-x-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ps-xp-y")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-y-val").textContent=e.target.value+"%";apply();});
+    popup.querySelector("#ps-xp-icon")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-icon-val").textContent=e.target.value+"px";apply();});
+    popup.querySelector("#ps-xp-tt")?.addEventListener("input",e=>{popup.querySelector("#ps-xp-tt-val").textContent=e.target.value+"px";apply();});
     popup.querySelector("#ps-blur")?.addEventListener("input",e=>{popup.querySelector("#ps-blur-val").textContent=e.target.value+"px";apply();});
     popup.querySelector("#ps-op")?.addEventListener("input",e=>{popup.querySelector("#ps-op-val").textContent=Math.round(e.target.value*100)+"%";apply();});
     popup.querySelector("#ps-dist")?.addEventListener("input",e=>{popup.querySelector("#ps-dist-val").textContent=e.target.value+"px";apply();});
@@ -6216,21 +6426,33 @@ class CypherTaskbar {
       }
     }
 
-    // Rebuild bar meta + eye + book buttons
+    // Rebuild bar meta + eye + xp buttons
     const s1 = this.element?.querySelector(".ct-section-1");
+    const xpBtnActive = this._cypherXpActive();
     const portraitAreaCollapsed = this._gs("portraitAreaCollapsed") ?? false;
     if (s1) {
-      // Preserve externally-injected buttons (e.g., Cypher Log's cl-taskbar-btn)
+      // Preserve externally-injected buttons (e.g. Cypher Log's cl-taskbar-btn)
       const externalBtn = s1.querySelector("#cl-taskbar-log-btn");
       const collapsedClass = portraitAreaCollapsed ? ' ct-section-1-collapsed' : '';
       s1.className = `ct-section ct-section-1${collapsedClass}`;
       s1.innerHTML = noActor
         ? `<div class="ct-no-actor"><i class="fas fa-user-slash"></i> No Character</div>`
+          + (xpBtnActive ? `<button class="ct-btn ct-xp-btn" id="ct-btn-xp" title="Cypher XP — Development Track"><i class="fas fa-chart-line"></i></button>` : '')
           + `<button class="ct-btn ct-eye-btn ${portraitAreaCollapsed ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${portraitAreaCollapsed ? 'Show portrait' : 'Hide portrait'}" disabled><i class="fas ${portraitAreaCollapsed ? 'fa-eye-slash' : 'fa-eye'}"></i></button>`
         : this._buildBarMeta(actor)
+          + (xpBtnActive ? `<button class="ct-btn ct-xp-btn" id="ct-btn-xp" title="Cypher XP — Development Track"><i class="fas fa-chart-line"></i></button>` : '')
           + `<button class="ct-btn ct-eye-btn ${portraitAreaCollapsed ? 'ct-eye-collapsed' : ''}" id="ct-btn-eye" title="${portraitAreaCollapsed ? 'Show portrait' : 'Hide portrait'}"><i class="fas ${portraitAreaCollapsed ? 'fa-eye-slash' : 'fa-eye'}"></i></button>`;
       // Re-insert preserved external button at end of section
       if (externalBtn) s1.append(externalBtn);
+      // Re-bind XP button event
+      const newXpBtn = s1.querySelector("#ct-btn-xp");
+      if (newXpBtn) {
+        newXpBtn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          await this._openCypherXpApp(newXpBtn);
+        };
+      }
       // Re-bind eye button event
       const newEyeBtn = s1.querySelector("#ct-btn-eye");
       if (newEyeBtn && !noActor) {
@@ -7138,6 +7360,17 @@ class CypherTaskbar {
   }
 
   async _performAttributeRoll(actor, statName, options = {}) {
+    // Store roll data for potential reroll
+    this._lastRollData = {
+      statName,
+      pool: String(statName || "might").trim().toLowerCase().charAt(0).toUpperCase() + String(statName || "might").trim().toLowerCase().slice(1),
+      baseDifficulty: Number(options.baseDifficulty ?? options.difficulty ?? 0),
+      assets: Number(options.assets ?? 0),
+      effort: Number(options.effort ?? 0),
+      easedBy: Number(options.easedBy ?? 0),
+      hinderedBy: Number(options.hinderedBy ?? 0),
+      timestamp: Date.now()
+    };
     const summary = this._attributeRollSummary(actor, options);
     const roll = await (new Roll('1d20')).evaluate();
     const total = Number(roll.total ?? 0);
@@ -7180,6 +7413,194 @@ class CypherTaskbar {
     }
     await this._fadeCombatActionButtons(["move"]);
     return total;
+  }
+
+  /** Request GM approval to spend XP (players) or spend directly (GM) */
+  async _spendXpImmediate(spendType) {
+    const actor = this.actor;
+    if (!actor) return ui.notifications.warn("Select a character first.");
+    if (!this._cypherXpActive()) return ui.notifications.warn("Cypher XP module is not active.");
+
+    const xp = Number(actor.system?.basic?.xp ?? actor.system?.advancement?.xp ?? 0);
+    if (xp < 1) return ui.notifications.warn("Not enough XP! You need at least 1 XP.");
+
+    const spendLabels = {
+      'reroll': 'Reroll',
+      'player-intrusion': 'Player Intrusion',
+      'insight': 'Insight / Clue',
+      'temporary-benefit': 'Temporary Benefit',
+      'other': 'Other Immediate Spend'
+    };
+    const label = spendLabels[spendType] || spendType;
+
+    // GM spends directly — no approval needed
+    if (game.user?.isGM) {
+      await this._doXpSpend(actor, spendType, label);
+      return;
+    }
+
+    // Players must request GM approval
+    const gmUsers = game.users?.filter(u => u.active && u.isGM) ?? [];
+    if (gmUsers.length === 0) {
+      ui.notifications?.warn?.("No GM online to approve XP spend.");
+      return;
+    }
+
+    const requestId = foundry.utils.randomID();
+    this._pendingXpRequests = this._pendingXpRequests || new Map();
+    this._pendingXpRequests.set(requestId, { spendType, label, actorId: actor.id });
+
+    const payload = {
+      type: "gmXpSpendRequest",
+      requestId,
+      actorId: actor.id,
+      actorName: actor.name,
+      userId: game.user.id,
+      userName: game.user.name,
+      spendType,
+      label,
+      xpCost: 1
+    };
+    // Include roll data for reroll so the player can perform it after approval
+    if (spendType === "reroll" && this._lastRollData) {
+      payload.rollData = foundry.utils.duplicate(this._lastRollData);
+    }
+    game.socket.emit(`module.${MODULE_ID}`, payload);
+    ui.notifications?.info?.(`XP spend request sent to GM: ${label} (1 XP).`);
+  }
+
+  /** Actually perform the XP spend via Cypher XP API */
+  async _doXpSpend(actor, spendType, label) {
+    let api = this._getXpApi();
+    for (let i = 0; i < 50 && !api; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      api = this._getXpApi();
+    }
+    if (!api) {
+      ui.notifications.warn("Cypher XP API is not ready yet. Please try again.");
+      return;
+    }
+    try {
+      await api.logSpend(actor, {
+        spendType,
+        amount: 1,
+        note: label
+      });
+      ui.notifications.info(`Spent 1 XP on ${label}.`);
+    } catch (err) {
+      console.error(`${MODULE_ID} | XP spend failed:`, err);
+      ui.notifications.error("Failed to spend XP.");
+    }
+  }
+
+  /** GM receives XP spend approval request from player */
+  async _openGMXpSpendRequest(payload) {
+    if (!game.user?.isGM) return;
+    const actor = game.actors?.get(payload.actorId);
+    if (!actor) return;
+
+    const spendIcons = {
+      'reroll': 'fa-dice',
+      'player-intrusion': 'fa-hand-sparkles',
+      'insight': 'fa-lightbulb',
+      'temporary-benefit': 'fa-clock',
+      'other': 'fa-circle'
+    };
+    const iconClass = spendIcons[payload.spendType] || 'fa-star';
+
+    const result = await this._showCustomModal({
+      width: 380,
+      title: "XP Spend Request",
+      content: `
+        <div class="ct-snark" style="padding:12px 4px 4px;">
+          <div class="ct-snark-frame" style="animation:none; padding:20px 16px 16px;">
+            <div class="ct-snark-icon" style="font-size:2em; animation:none; color:#ffd700;"><i class="fas ${iconClass}"></i></div>
+            <div class="ct-snark-title" style="font-size:1.2em;">${foundry.utils.escapeHTML(payload.userName)} wants to spend XP</div>
+            <div class="ct-snark-line">Character: <strong style="color:#c8a96e;">${foundry.utils.escapeHTML(payload.actorName)}</strong></div>
+            <div class="ct-snark-line">Action: <strong style="color:#f0d68a;">${foundry.utils.escapeHTML(payload.label)}</strong></div>
+            <div class="ct-snark-line">Cost: <strong style="color:#ffd700;">${payload.xpCost} XP</strong></div>
+            <div class="ct-snark-line" style="font-size:0.85em; color:#7a7a7a; margin-top:8px;">Approve to deduct XP and log the spend.</div>
+          </div>
+        </div>`,
+      buttons: [
+        { label: "Allow", action: "approve", className: "ct-modal-btn ct-modal-btn-primary" },
+        { label: "Deny", action: "deny", className: "ct-modal-btn ct-modal-btn-ghost" }
+      ]
+    });
+
+    if (result === "approve") {
+      await this._doXpSpend(actor, payload.spendType, payload.label);
+      // Notify player
+      const approvalPayload = {
+        type: "xpSpendApproved",
+        requestId: payload.requestId,
+        targetUserId: payload.userId,
+        actorName: payload.actorName,
+        label: payload.label,
+        spendType: payload.spendType
+      };
+      if (payload.rollData) approvalPayload.rollData = payload.rollData;
+      game.socket.emit(`module.${MODULE_ID}`, approvalPayload);
+    } else {
+      // Notify player of denial
+      const denialPayload = {
+        type: "xpSpendDenied",
+        requestId: payload.requestId,
+        targetUserId: payload.userId,
+        actorName: payload.actorName,
+        label: payload.label,
+        spendType: payload.spendType
+      };
+      game.socket.emit(`module.${MODULE_ID}`, denialPayload);
+    }
+  }
+
+  _onXpSpendApproved(payload) {
+    if (game.user.id !== payload.targetUserId) return;
+    ui.notifications?.info?.(`GM approved: Spent 1 XP on ${payload.label} for ${payload.actorName}.`);
+    this._pendingXpRequests?.delete?.(payload.requestId);
+    // If this was a reroll approval, perform the reroll now
+    if (payload.spendType === "reroll" && payload.rollData) {
+      this._performRerollFromData(payload.rollData);
+    }
+  }
+
+  _onXpSpendDenied(payload) {
+    if (game.user.id !== payload.targetUserId) return;
+    ui.notifications?.warn?.(`GM denied XP spend: ${payload.label} for ${payload.actorName}.`);
+    this._pendingXpRequests?.delete?.(payload.requestId);
+  }
+
+  /** Reroll last attribute check, spending 1 XP */
+  async _rerollLast() {
+    const actor = this.actor;
+    if (!actor) return ui.notifications.warn("Select a character first.");
+    if (!this._lastRollData) return ui.notifications.warn("No recent roll to reroll.");
+    const xp = Number(actor.system?.basic?.xp ?? actor.system?.advancement?.xp ?? 0);
+    if (xp < 1) return ui.notifications.warn("Not enough XP! You need at least 1 XP to reroll.");
+
+    const api = this._getXpApi();
+    if (api?.logSpend) {
+      try {
+        await api.logSpend(actor, {
+          spendType: 'reroll',
+          amount: 1,
+          note: `Reroll ${this._lastRollData.pool}`
+        });
+      } catch (err) {
+        console.error(`${MODULE_ID} | XP spend for reroll failed:`, err);
+      }
+    }
+
+    const { pool, baseDifficulty, assets, effort, easedBy, hinderedBy } = this._lastRollData;
+    await this._performAttributeRoll(actor, pool, {
+      baseDifficulty,
+      assets,
+      effort,
+      easedBy,
+      hinderedBy
+    });
+    ui.notifications.info(`Rerolled ${pool} (1 XP spent).`);
   }
 
   async _adjustPool(poolKey, delta) {
@@ -7703,6 +8124,18 @@ Hooks.once("ready", () => {
     }
     if (payload.type === "restApproved") {
       CypherTaskbar.instance?._onRestApproved(payload);
+      return;
+    }
+    if (payload.type === "gmXpSpendRequest" && game.user?.isGM) {
+      CypherTaskbar.instance?._openGMXpSpendRequest(payload);
+      return;
+    }
+    if (payload.type === "xpSpendApproved") {
+      CypherTaskbar.instance?._onXpSpendApproved(payload);
+      return;
+    }
+    if (payload.type === "xpSpendDenied") {
+      CypherTaskbar.instance?._onXpSpendDenied(payload);
       return;
     }
     /* ── GM Taskbar CALL ROLL triggers ── */

@@ -10102,6 +10102,27 @@ backdrop-filter: blur(8px);
   color: #ff4444;
   animation: ct-eye-pulse-red 2s ease-in-out infinite;
 }
+
+/* Cypher XP integration button */
+#ct-btn-xp {
+  min-width: 44px;
+  padding: 6px 10px;
+  margin-right: 4px;
+}
+#ct-btn-xp i {
+  font-size: 1.4em;
+  color: #b98328;
+  transition: color 0.2s ease;
+}
+#ct-btn-xp:hover i {
+  color: #ffe6a0;
+}
+
+/* Hide Cypher XP floating launcher when integrated with taskbar */
+#cypher-xp-player-launcher {
+  display: none !important;
+}
+
 @keyframes ct-eye-pulse-red {
   0%, 100% { opacity: 1; filter: drop-shadow(0 0 2px rgba(255, 68, 68, 0.4)); }
   50% { opacity: 0.55; filter: drop-shadow(0 0 8px rgba(255, 68, 68, 0.9)); }
@@ -10746,4 +10767,152 @@ backdrop-filter: blur(8px);
 }
 .ct-cash-use-btn.keep:hover {
   background: rgba(90,200,90,0.25);
+}
+
+/* ============================================================
+   CYPHER XP INTEGRATION
+   ============================================================ */
+
+/* Hide Cypher XP "Log Immediate Spend" button (replaced by taskbar buttons) */
+.cxp-log-spend-btn,
+.cypher-xp-app .cxp-chart-toolbar button[data-action="logSpend"] {
+  display: none !important;
+}
+
+/* XP Spend Bar in portrait area */
+.ct-xp-spend-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  margin: 0 0 6px 0;
+  background: linear-gradient(135deg, rgba(22,18,30,0.92) 0%, rgba(10,8,16,0.86) 100%);
+  border: 1px solid rgba(200, 169, 110, 0.2);
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  min-width: fit-content;
+  pointer-events: all;
+  /* Settings-driven sizing & positioning */
+  width: var(--ct-xp-w, 100%);
+  height: var(--ct-xp-h, auto);
+  transform: var(--ct-xp-s, scale(1)) translate(var(--ct-xp-ox, 0%), var(--ct-xp-oy, 0%));
+  transform-origin: center center;
+}
+
+/* XP Counter (stylized number) */
+.ct-xp-counter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: linear-gradient(135deg, rgba(255,215,0,0.15) 0%, rgba(255,180,0,0.08) 100%);
+  border: 1px solid rgba(255, 200, 80, 0.35);
+  border-radius: 6px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 1.05em;
+  color: #ffd700;
+  text-shadow: 0 0 8px rgba(255, 215, 0, 0.4);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ct-xp-counter i {
+  font-size: 0.72em;
+  color: #ffc840;
+}
+.ct-xp-counter span {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+/* XP Spend Buttons Row */
+.ct-xp-spend-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Individual XP Spend Button */
+.ct-xp-spend-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(200, 169, 110, 0.2);
+  border-radius: 5px;
+  color: #c8a96e;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82em;
+}
+.ct-xp-spend-btn i {
+  pointer-events: none;
+  font-size: var(--ct-xp-icon-size, 14px);
+}
+.ct-xp-spend-btn:hover {
+  background: rgba(200, 169, 110, 0.18);
+  border-color: rgba(200, 169, 110, 0.5);
+  color: #f0d68a;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+.ct-xp-spend-btn:active {
+  transform: translateY(0);
+}
+
+/* Fancy Tooltip above buttons */
+.ct-xp-spend-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(22,18,30,0.98) 0%, rgba(10,8,16,0.96) 100%);
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  border-radius: 6px;
+  color: #e8dcc8;
+  font-size: var(--ct-xp-tt-size, 12px);
+  line-height: 1.4;
+  white-space: normal;
+  max-width: 220px;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  z-index: 10000;
+}
+.ct-xp-spend-tooltip strong {
+  color: #f0d68a;
+  display: block;
+  margin-bottom: 2px;
+  font-weight: 600;
+  font-size: calc(var(--ct-xp-tt-size, 12px) * 1.08);
+}
+.ct-xp-spend-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 5px;
+  border-style: solid;
+  border-color: rgba(200, 169, 110, 0.35) transparent transparent transparent;
+}
+.ct-xp-spend-btn:hover .ct-xp-spend-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Hide XP bar when portrait area is collapsed */
+.ct-portrait-area-collapsed .ct-xp-spend-bar {
+  display: none;
 }
