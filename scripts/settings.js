@@ -102,7 +102,7 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "bookBtnIconVPos", { scope: "client", config: false, type: String, default: "center" });
   game.settings.register(MODULE_ID, "bookBtnIconOffset", { scope: "client", config: false, type: Number, range: { min: -50, max: 50, step: 1 }, default: 0 });
   // ── Book Menu Settings ──
-  game.settings.register(MODULE_ID, "bookMenuWidth", { scope: "client", config: false, type: Number, range: { min: 200, max: 1200, step: 10 }, default: 480 });
+  game.settings.register(MODULE_ID, "bookMenuWidth", { scope: "client", config: false, type: Number, range: { min: 200, max: 1200, step: 10 }, default: 300 });
   game.settings.register(MODULE_ID, "bookMenuHeight", { scope: "client", config: false, type: Number, range: { min: 150, max: 1200, step: 10 }, default: 420 });
   game.settings.register(MODULE_ID, "bookMenuBgColor", { scope: "client", config: false, type: String, default: "#17121f" });
   game.settings.register(MODULE_ID, "bookMenuBgOpacity", { scope: "client", config: false, type: Number, range: { min: 0.1, max: 1, step: 0.05 }, default: 0.94 });
@@ -127,6 +127,12 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "portraitShadowOpacity", { scope: "client", config: false, type: Number, default: 0.85 });
   game.settings.register(MODULE_ID, "portraitShadowDistance", { scope: "client", config: false, type: Number, default: 6 });
   game.settings.register(MODULE_ID, "portraitShadowDirection", { scope: "client", config: false, type: String, default: "bottom-right" });
+
+  // ── Portrait File Container Settings ──
+  game.settings.register(MODULE_ID, "portraitFilesEnabled", { scope: "client", config: false, type: Boolean, default: false });
+  game.settings.register(MODULE_ID, "portraitFiles", { scope: "client", config: false, type: String, default: "[]" });
+  game.settings.register(MODULE_ID, "portraitAnimFrequency", { scope: "client", config: false, type: Number, default: 0 });
+  game.settings.register(MODULE_ID, "portraitAnimLoops", { scope: "client", config: false, type: Number, default: 0 });
 
   // ── Attribute Bar Settings ──
   game.settings.register(MODULE_ID, "attributeBarScale", { scope: "client", config: false, type: Number, range: { min: 60, max: 180, step: 5 }, default: 100 });
@@ -174,6 +180,11 @@ export function registerSettings() {
   // ── Equipment Menu Settings ──
   _registerMenuSettings("equipment");
   game.settings.register(MODULE_ID, "equipmentMenuIconSize", { scope: "client", config: false, type: Number, range: { min: 12, max: 40, step: 2 }, default: 20 });
+  game.settings.register(MODULE_ID, "hideEquipmentTabs", {
+    name: "Hide Equipment Sub-Tabs",
+    hint: "When enabled, players will only see the Home tab in the Equipment menu. GMs always see all tabs.",
+    scope: "world", config: true, type: Boolean, default: false
+  });
   // ── Abilities Menu Settings ──
   _registerMenuSettings("abilities");
   // ── Spells Menu Settings ──

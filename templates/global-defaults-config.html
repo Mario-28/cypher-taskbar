@@ -1,41 +1,52 @@
-<form class="ct-global-defaults-form">
+<form class="ct-global-defaults-form" style="color: #000;">
   <div class="form-group">
-    <label for="ct-global-active">Activate Global Defaults</label>
+    <label for="ct-global-active" style="color: #000;">Activate Global Defaults</label>
     <input type="checkbox" id="ct-global-active" name="active" {{#if active}}checked{{/if}}>
-    <p class="notes">When checked, all actors use these imported defaults unless they override a specific setting.</p>
+    <p class="notes" style="color: #000;">When checked, all actors use these imported defaults unless they override a specific setting.</p>
   </div>
 
   <hr>
 
   <div class="form-group">
-    <label>Import Settings</label>
+    <label style="color: #000;">Import Settings</label>
     <button type="button" class="ct-import-btn" id="ct-import-global-defaults">
       <i class="fas fa-file-import"></i> Choose File…
     </button>
-    <p class="notes">Select a Cypher Taskbar settings JSON file exported from any actor.</p>
+    <p class="notes" style="color: #000;">Select a Cypher Taskbar settings JSON file exported from any actor.</p>
+  </div>
+
+  <div class="form-group">
+    <label style="color: #000;">
+      <input type="checkbox" id="ct-apply-to-all-actors" name="applyToAllActors">
+      Apply to All Actors
+    </label>
+    <p class="notes" style="color: #000;">When checked, imported settings will be applied to every actor's taskbar immediately.</p>
   </div>
 
   {{#if hasData}}
   <div class="form-group">
-    <label>Current Defaults</label>
+    <label style="color: #000;">Current Defaults</label>
     <div class="ct-defaults-preview">
-      <pre>{{dataPreview}}</pre>
+      <pre style="color: #000;">{{dataPreview}}</pre>
     </div>
   </div>
-  <div class="form-group">
-    <button type="button" class="ct-clear-btn" id="ct-clear-global-defaults">
+  <div class="form-group" style="display: flex; gap: 8px;">
+    <button type="button" class="ct-save-apply-btn" id="ct-save-apply-global-defaults" style="flex: 1; background: #4a90d9; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">
+      <i class="fas fa-save"></i> Save & Apply to All Actors
+    </button>
+    <button type="button" class="ct-clear-btn" id="ct-clear-global-defaults" style="flex: 1;">
       <i class="fas fa-trash"></i> Clear Global Defaults
     </button>
   </div>
   {{else}}
   <div class="form-group">
-    <p class="notes ct-no-data"><i class="fas fa-info-circle"></i> No global defaults loaded yet.</p>
+    <p class="notes ct-no-data" style="color: #000;"><i class="fas fa-info-circle"></i> No global defaults loaded yet.</p>
   </div>
   {{/if}}
 
   <hr>
 
   <div class="form-group">
-    <p class="notes"><strong>How it works:</strong> Imported settings become the default for all actors. When a player changes a setting in their taskbar, only that changed setting is saved to their character. Everything else continues to use these global defaults.</p>
+    <p class="notes" style="color: #000;"><strong>How it works:</strong> Imported settings become the default for all actors. When a player changes a setting in their taskbar, only that changed setting is saved to their character. Everything else continues to use these global defaults.</p>
   </div>
 </form>

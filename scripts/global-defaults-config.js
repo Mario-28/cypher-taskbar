@@ -41,17 +41,33 @@ export const GlobalTaskbarDefaultsConfig = (typeof FormApplication !== "undefine
         super.activateListeners(html);
         html.find("#ct-import-global-defaults").click(this._onImport.bind(this));
         html.find("#ct-clear-global-defaults").click(this._onClear.bind(this));
+        html.find("#ct-save-apply-global-defaults").click(this._onSaveApply.bind(this));
+
+        // ── Bug fix: checkbox must save immediately (no submit button in form) ──
+        html.find("#ct-global-active").on("change", async (ev) => {
+          const isActive = ev.currentTarget.checked;
+          await game.settings.set(MODULE_ID, "globalTaskbarDefaultsActive", isActive);
+          ui.notifications.info(`Global defaults ${isActive ? "activated" : "deactivated"}.`);
+          if (game.cypherTaskbar?.instance) {
+            game.cypherTaskbar.instance.applySettings();
+            game.cypherTaskbar.instance.refresh();
+          }
+        });
       }
 
       async _onImport(event) {
         event.preventDefault();
+
+        // Remember whether "Apply to All" was checked BEFORE file picker opens
+        const applyToAll = document.getElementById("ct-apply-to-all-actors")?.checked ?? false;
+
         const input = document.createElement("input");
         input.type = "file";
         input.accept = ".json";
         input.style.display = "none";
         input.addEventListener("change", async (ev) => {
           const file = ev.target.files?.[0];
-          if (!file) return;
+          if (!file) { input.remove(); return; }
           try {
             const text = await file.text();
             const json = JSON.parse(text);
@@ -96,11 +112,17 @@ export const GlobalTaskbarDefaultsConfig = (typeof FormApplication !== "undefine
 
             if (Object.keys(defaults).length === 0) {
               ui.notifications.error("Invalid settings file: no recognizable settings.");
+              input.remove();
               return;
             }
 
             await saveJSONSetting("globalTaskbarDefaultsData", defaults);
             ui.notifications.info(`Global defaults imported: ${Object.keys(defaults).length} settings.`);
+
+            if (applyToAll) {
+              await this._applyToAllActors(defaults);
+            }
+
             this.render();
           } catch (err) {
             console.error(`${MODULE_ID} | Global defaults import failed:`, err);
@@ -110,6 +132,34 @@ export const GlobalTaskbarDefaultsConfig = (typeof FormApplication !== "undefine
         });
         document.body.appendChild(input);
         input.click();
+      }
+
+      async _applyToAllActors(defaults) {
+        const actors = game.actors?.contents || [];
+        let count = 0;
+        for (const actor of actors) {
+          if (!actor) continue;
+          const current = actor.getFlag(MODULE_ID, "settings") || {};
+          const merged = foundry.utils.mergeObject(current, defaults, { inplace: false });
+          await actor.setFlag(MODULE_ID, "settings", merged);
+          count++;
+        }
+        ui.notifications.info(`Applied defaults to ${count} actor(s).`);
+        // Refresh all taskbars
+        if (game.cypherTaskbar?.instance) {
+          game.cypherTaskbar.instance.applySettings();
+          game.cypherTaskbar.instance.refresh();
+        }
+      }
+
+      async _onSaveApply(event) {
+        event.preventDefault();
+        const defaults = readJSONSetting("globalTaskbarDefaultsData", {});
+        if (Object.keys(defaults).length === 0) {
+          ui.notifications.warn("No global defaults loaded. Import settings first.");
+          return;
+        }
+        await this._applyToAllActors(defaults);
       }
 
       async _onClear(event) {
@@ -126,6 +176,8 @@ export const GlobalTaskbarDefaultsConfig = (typeof FormApplication !== "undefine
       }
 
       async _updateObject(event, formData) {
+        // The "active" checkbox now saves via its own change listener,
+        // but keep this as a fallback for form-submission paths (Enter key, etc.)
         const wasActive = game.settings.get(MODULE_ID, "globalTaskbarDefaultsActive");
         const nowActive = !!formData.active;
 
@@ -133,7 +185,6 @@ export const GlobalTaskbarDefaultsConfig = (typeof FormApplication !== "undefine
           await game.settings.set(MODULE_ID, "globalTaskbarDefaultsActive", nowActive);
           ui.notifications.info(`Global defaults ${nowActive ? "activated" : "deactivated"}.`);
 
-          // Refresh all taskbars
           if (game.cypherTaskbar?.instance) {
             game.cypherTaskbar.instance.applySettings();
             game.cypherTaskbar.instance.refresh();

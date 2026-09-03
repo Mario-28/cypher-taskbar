@@ -864,14 +864,95 @@ export function applyPersonaPanel(CypherTaskbar) {
     },
 
     _buildPersonaReputationSection(actor) {
+      const esc = foundry.utils.escapeHTML;
+      const reps = this._getPlayerReputations(actor);
+      const gossips = this._getPlayerGossips(actor);
+
+      // ── REPUTATION ──
+      let repHtml = '';
+      if (!reps.length) {
+        repHtml = `<div class="ct-persona-reputation-empty"><i class="fas fa-handshake"></i> No reputations yet.</div>`;
+      } else {
+        repHtml = `<div class="ct-persona-rep-list">${reps.map(rep => {
+          const scoreColor = rep.score < 0 ? 'ct-rep-neg' : rep.score > 0 ? 'ct-rep-pos' : 'ct-rep-neu';
+          const scoreSign = rep.score > 0 ? `+${rep.score}` : rep.score;
+          return `
+            <div class="ct-persona-rep-row">
+              <div class="ct-persona-rep-info">
+                <div class="ct-persona-rep-name">${esc(rep.name)}</div>
+                <div class="ct-persona-rep-type">${esc(rep.repType || 'Neutral')}</div>
+                ${rep.description ? `<div class="ct-persona-rep-desc">${esc(rep.description)}</div>` : ''}
+              </div>
+              <div class="ct-persona-rep-score ${scoreColor}">${scoreSign}</div>
+            </div>`;
+        }).join('')}</div>`;
+      }
+
+      // ── GOSSIP ──
+      let gossipHtml = '';
+      if (!gossips.length) {
+        gossipHtml = `<div class="ct-persona-gossip-empty"><i class="fas fa-comments"></i> No gossips known.</div>`;
+      } else {
+        gossipHtml = `<div class="ct-persona-gossip-list">${gossips.map(g => {
+          const scoreSign = g.score < 0 ? `${g.score}` : `-${g.score}`;
+          return `
+            <div class="ct-persona-gossip-row">
+              <div class="ct-persona-gossip-info">
+                <div class="ct-persona-gossip-name">${esc(g.name)}</div>
+                <div class="ct-persona-gossip-meta">
+                  <span class="ct-persona-gossip-source"><i class="fas fa-user"></i> ${esc(g.source || 'Unknown')}</span>
+                  ${g.group ? `<span class="ct-persona-gossip-group"><i class="fas fa-users"></i> ${esc(g.group)}</span>` : ''}
+                </div>
+                ${g.description ? `<div class="ct-persona-gossip-desc">${esc(g.description)}</div>` : ''}
+              </div>
+              <div class="ct-persona-gossip-score">${scoreSign}</div>
+            </div>`;
+        }).join('')}</div>`;
+      }
+
       return `<div class="ct-persona-reputation-section">
         <div class="ct-persona-reputation-header">
           <div class="ct-persona-reputation-title"><i class="fas fa-medal"></i> REPUTATION</div>
         </div>
-        <div class="ct-persona-reputation-body">
-          <div class="ct-persona-reputation-empty"><i class="fas fa-hammer"></i> Reputation system coming soon — track your standing with factions and the world!</div>
+        <div class="ct-persona-reputation-body ct-persona-rep-two-col">
+          <div class="ct-persona-rep-col">
+            <div class="ct-persona-rep-block-title"><i class="fas fa-handshake"></i> Standings</div>
+            ${repHtml}
+          </div>
+          <div class="ct-persona-rep-col-sep"></div>
+          <div class="ct-persona-rep-col">
+            <div class="ct-persona-gossip-block-title"><i class="fas fa-comments"></i> Gossips</div>
+            ${gossipHtml}
+          </div>
         </div>
       </div>`;
+    },
+
+    _getPlayerReputations(actor) {
+      if (!actor) return [];
+      const reps = actor.getFlag('cypher-gm-taskbar', 'reputations') || [];
+      // Filter: only show reputations that are NOT hidden
+      return reps.filter(r => !r.hidden).map(r => ({
+        id: r.id,
+        name: r.name,
+        repType: r.repType || 'Neutral',
+        score: Math.max(-2, Math.min(2, Number(r.score) || 0)),
+        description: r.description || ''
+      }));
+    },
+
+    _getPlayerGossips(actor) {
+      if (!actor) return [];
+      const gossips = actor.getFlag('cypher-gm-taskbar', 'gossips') || [];
+      // Filter: only show gossips that are known to the player
+      return gossips.filter(g => g.known !== false).map(g => ({
+        id: g.id,
+        name: g.name,
+        source: g.source || 'Unknown',
+        group: g.group || '',
+        score: Math.max(-4, Math.min(0, Number(g.score) || 0)),
+        description: g.description || ''
+      }));
     },
 
     _buildPersonaPanel(actor) {

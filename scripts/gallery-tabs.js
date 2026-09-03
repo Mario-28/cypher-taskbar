@@ -2629,6 +2629,9 @@ function openLightboxBase(src, title, {
   });
 
   // Drag hand: close lightbox on drag, keep image data for drop
+  if (dragBtn) {
+    dragBtn.dataset.docInfo = JSON.stringify({ uuid: null, name: titleText || "Image", img: src, type: "Image" });
+  }
   dragBtn?.addEventListener("dragstart", (e) => {
     e.stopPropagation();
     const payload = { uuid: null, name: titleText || "Image", img: src, type: "Image" };

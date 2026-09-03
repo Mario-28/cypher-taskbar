@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v4.1.1
+ * Cypher Taskbar v4.1.10
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -36,6 +36,8 @@ class CypherTaskbar {
     this._combatSidebarSettings = this._loadCombatSettings();
     this._suppressRender = false;
     this._cashOpPending = 0;
+    this._portraitAnimTimer = null;
+    this._portraitAnimEndedHandler = null;
     this._cashSuppressTimer = null;
     this._cashPanelLocked = false;
     this._lastRollData = null; // Store last roll parameters for reroll
@@ -45,6 +47,37 @@ class CypherTaskbar {
     Hooks.on("cypher-xp.ready", (api) => {
       this._xpApi = api;
       console.log(`${MODULE_ID} | Cypher XP API ready`);
+    });
+
+    // ── Global right-click handler for ALL blue hands (works even through overlays) ──
+    document.addEventListener("contextmenu", (e) => {
+      const hand = e.target.closest?.(".ct-hand-btn, .ct-item-hand, .ct-scene-hand, .cgt-lb-drag");
+      if (!hand) return;
+      let docInfo = null;
+      // Try data-doc-info first (pre-stored payload)
+      if (hand.dataset.docInfo) {
+        try { docInfo = JSON.parse(hand.dataset.docInfo); } catch {}
+      }
+      // Fallback: read from other data attributes
+      if (!docInfo && hand.dataset.dragPayload) {
+        try { docInfo = JSON.parse(hand.dataset.dragPayload); } catch {}
+      }
+      if (!docInfo && hand.dataset.stuffDrag) {
+        docInfo = { uuid: hand.dataset.stuffDrag, name: hand.title?.replace("Drag: ", "") || "", img: "" };
+      }
+      if (!docInfo && hand.dataset.miniDrag !== undefined) {
+        // Mini items: data stored on parent .ct-mini-item
+        const miniItem = hand.closest(".ct-mini-item");
+        if (miniItem) {
+          const idx = parseInt(miniItem.dataset.miniIdx);
+          // We can't access stored array here; skip inline mini hands
+          return;
+        }
+      }
+      if (!docInfo) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this._showHandContextMenu(e, docInfo);
     });
   }
 
@@ -76,6 +109,77 @@ class CypherTaskbar {
   /** Set setting: always writes to per-actor preference store */
   async _ss(key, value) {
     await setActorPref(this.actor?.id, key, value);
+  }
+
+  /** Check if a portrait path is a video file (webm) */
+  _isPortraitVideo(path) {
+    if (!path) return false;
+    const ext = path.split("?")[0].split("#")[0].split(".").pop()?.toLowerCase();
+    return ext === "webm";
+  }
+
+  /** Clear portrait animation timer and listeners */
+  _clearPortraitAnim() {
+    if (this._portraitAnimTimer) {
+      clearInterval(this._portraitAnimTimer);
+      this._portraitAnimTimer = null;
+    }
+    if (this._portraitAnimEndedHandler) {
+      const video = this.element?.querySelector('.ct-portrait-video[data-timer-anim="1"]');
+      if (video) video.removeEventListener('ended', this._portraitAnimEndedHandler);
+      this._portraitAnimEndedHandler = null;
+    }
+  }
+
+  /** Set up timed portrait animation for webm portraits */
+  _setupPortraitAnim() {
+    const video = this.element?.querySelector('.ct-portrait-video[data-timer-anim="1"]');
+    if (!video) return;
+
+    // Clear any existing animation
+    this._clearPortraitAnim();
+
+    const freq = this._gs('portraitAnimFrequency') ?? 0;
+    const loops = this._gs('portraitAnimLoops') ?? 0;
+
+    // Continuous mode is handled by autoplay/loop attributes — nothing to do
+    if (freq <= 0) return;
+
+    // Timer-based mode: play every X minutes
+    // loops = 0 → infinite loops until next interval
+    // loops > 0 → exactly that many loops per interval
+    video.pause();
+    video.currentTime = 0;
+
+    let loopCount = 0;
+
+    const onEnded = () => {
+      loopCount++;
+      if (loops > 0 && loopCount >= loops) {
+        video.pause();
+        video.currentTime = 0;
+      } else {
+        video.currentTime = 0;
+        video.play().catch(() => {});
+      }
+    };
+
+    const playAnim = () => {
+      // Verify video still exists in DOM
+      if (!this.element?.querySelector('.ct-portrait-video[data-timer-anim="1"]')) return;
+      loopCount = 0;
+      video.currentTime = 0;
+      video.play().catch(() => {});
+    };
+
+    video.addEventListener('ended', onEnded);
+    this._portraitAnimEndedHandler = onEnded;
+
+    // Initial play
+    playAnim();
+
+    // Schedule repeats
+    this._portraitAnimTimer = setInterval(playAnim, freq * 60 * 1000);
   }
 
   /** Get JSON setting: per-actor JSON first, then global fallback */
@@ -164,6 +268,7 @@ class CypherTaskbar {
   render() {
     if (this._suppressRender) return;
     try {
+      this._clearPortraitAnim();
       document.querySelector(`#${MODULE_ID}-bar`)?.remove();
       document.querySelector(".cgt-panel")?.remove();
 
@@ -202,6 +307,7 @@ class CypherTaskbar {
       this._injectAllMinimizeButtons();
       this.refreshTray();
       this._refreshCombatPlaceholder();
+      this._setupPortraitAnim();
       this._adjustCanvasPadding(
         this._gs("locked") || !this._gs("autoHide")
       );
@@ -315,7 +421,11 @@ class CypherTaskbar {
 
     const pct = (v, m) => m > 0 ? Math.round((v/m)*100) : 0;
 
-    const img    = actor.img ?? "icons/svg/mystery-man.svg";
+    const customPortraitImage = this._gs("customPortraitImage");
+    const customPortraitEnabled = this._gs("customPortraitEnabled") ?? false;
+    const img    = (customPortraitEnabled && customPortraitImage)
+      ? customPortraitImage
+      : (actor.img ?? "icons/svg/mystery-man.svg");
     const portraitAreaCollapsed = this._gs("portraitAreaCollapsed") ?? false;
     const pWidth = this._gs("portraitWidth");
     const shadowEnabled = this._gs("portraitShadow");
@@ -358,6 +468,13 @@ class CypherTaskbar {
     const shadowCSS = shadowEnabled
       ? `filter:drop-shadow(${sDist * dx}px ${sDist * dy}px ${sBlur}px ${hexToRGBA(sColor, sOp)});`
       : "";
+    const isVideoPortrait = this._isPortraitVideo(img);
+    const animFreq = this._gs("portraitAnimFrequency") ?? 0;
+    const animLoops = this._gs("portraitAnimLoops") ?? 0;
+    const useTimerAnim = isVideoPortrait && animFreq > 0;
+    const portraitHTML = isVideoPortrait
+      ? `<video class="ct-portrait-video" src="${img}" style="width:${pWidth}px;${shadowCSS}" ${useTimerAnim ? '' : 'autoplay loop'} muted playsinline alt="${actor.name}" data-timer-anim="${useTimerAnim ? '1' : '0'}"></video>`
+      : `<img class="ct-portrait" src="${img}" style="width:${pWidth}px;${shadowCSS}" alt="${actor.name}" />`;
 
     return `
       <div class="ct-char-float${portraitAreaCollapsed ? " ct-char-float-collapsed ct-portrait-slide-away" : ""}" id="ct-char-float">
@@ -404,10 +521,7 @@ class CypherTaskbar {
 
           <!-- Portrait below -->
           <div class="ct-portrait-wrap" title="Left-click: Open Sheet · Right-click: Portrait Settings">
-            <img class="ct-portrait"
-                 src="${img}"
-                 style="width:${pWidth}px;${shadowCSS}"
-                 alt="${actor.name}" />
+            ${portraitHTML}
             <!-- Dice bar — floating horizontally at bottom of portrait -->
             <div class="ct-dice-bar">
               <button class="ct-dice-btn" data-die="d100" title="Roll d100">
@@ -589,7 +703,8 @@ class CypherTaskbar {
     if (!changes.length) return "";
     return changes.map(c => {
       const key = (c.key || "").split(".").pop() || "stat";
-      const mode = ["+","×","↓","↑","→","⇄"][c.mode] || "→";
+      const changeType = c.type ?? c.mode ?? 0;
+      const mode = ["+","×","↓","↑","→","⇄"][changeType] || "→";
       return `${key} ${mode}${c.value}`;
     }).join(", ");
   }
@@ -682,12 +797,14 @@ class CypherTaskbar {
           <i class="fas fa-landmark"></i>
         </button>
       </div>
-      <!-- Compact 2x2 category grid -->
+      <!-- Compact 3×2 category grid -->
       <div class="ct-mini-grid" title="Quick category menus">
         <button class="ct-mini-btn" data-mini="people" title="People"><i class="fas fa-users"></i></button>
         <button class="ct-mini-btn" data-mini="places" title="Places"><i class="fas fa-map-marker-alt"></i></button>
         <button class="ct-mini-btn" data-mini="documents" title="Documents"><i class="fas fa-book"></i></button>
         <button class="ct-mini-btn" data-mini="secrets" title="Secrets"><i class="fas fa-user-secret"></i></button>
+        <button class="ct-mini-btn" data-mini="scenes" title="Scenes"><i class="fas fa-map"></i></button>
+        <button class="ct-mini-btn" data-mini="notes" title="Notes"><i class="fas fa-sticky-note"></i></button>
       </div>
     </div>`;
   }
@@ -700,8 +817,12 @@ class CypherTaskbar {
     };
     const statusKey = this._getActorDamageStatus(actor);
     const status = statuses[statusKey] ?? statuses.hale;
+    const portrait = actor.img ?? "icons/svg/mystery-man.svg";
     return `
       <div class="ct-bar-meta ct-bar-status-wrap">
+        <button class="ct-portrait-menu-btn" data-portrait-menu="1" title="MAIN menu">
+          <img src="${portrait}" alt="${actor.name}" draggable="false">
+        </button>
         <div class="ct-bar-status ${status.cls}" aria-label="Character status: ${status.label}">
           <i class="${status.icon}"></i>
           <span class="ct-bar-status-label">${status.label}</span>
@@ -833,9 +954,8 @@ class CypherTaskbar {
     }
     if (!spentViaAPI) await actor.update({ [path]: arr });
 
-    // ── 4. Force re-fetch actor data and refresh display ──
-    await this._resolveActor();
-    this.refresh();
+    // ── 4. Force re-render so recovery drops update immediately ──
+    this.render();
 
     // ── 5. Roll recovery ──
     const tier = actor.system?.basic?.tier ?? 1;
@@ -986,7 +1106,7 @@ class CypherTaskbar {
       // Try Cypher System native rest() API
       if (typeof actor.rest === "function") {
         await actor.rest();
-        this.refresh();
+        this.render();
         ui.notifications?.info?.("All recovery rolls restored.");
         return;
       }
@@ -1005,8 +1125,7 @@ class CypherTaskbar {
       }
       const isBool = typeof currentArr[0] === "boolean";
       await actor.update({ [updatePath]: currentArr.map(() => isBool ? true : 1) });
-      await this._resolveActor();
-      this.refresh();
+      this.render();
       ui.notifications?.info?.("All recovery rolls restored.");
     } catch (err) {
       console.error(`${MODULE_ID} | Rest failed:`, err);
@@ -1050,6 +1169,7 @@ class CypherTaskbar {
   _onRestApproved(payload) {
     if (game.user.id !== payload.targetUserId) return;
     ui.notifications?.info?.(`GM approved rest for ${payload.actorName}. Recovery rolls restored!`);
+    this.render();
   }
 
   /* ── Custom Modal — replaces Foundry Dialog with fully custom DOM ── */
@@ -1303,9 +1423,9 @@ class CypherTaskbar {
       this._applyMenuIconStyles(btn);
     });
 
-    // ── Mini category grid buttons (People / Places / Assets / Secrets) ──
-    const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", documents: "_openDocumentsPanel", secrets: "_openSecretsPanel" };
-    const miniKeyToSetting = { people: "People", places: "Places", documents: "Documents", secrets: "Secrets" };
+    // ── Mini category grid buttons (People / Places / Documents / Secrets / Scenes / Notes) ──
+    const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", documents: "_openDocumentsPanel", secrets: "_openSecretsPanel", scenes: "_openScenesPanel", notes: "_openNotesPanel" };
+    const miniKeyToSetting = { people: "People", places: "Places", documents: "Documents", secrets: "Secrets", scenes: "Scenes", notes: "Notes" };
     bar.querySelectorAll(".ct-mini-btn[data-mini]").forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -1316,6 +1436,16 @@ class CypherTaskbar {
       // Make each mini button a drop target (even when popup is closed)
       this._makeMiniButtonDropTarget(btn, miniKeyToSetting[btn.dataset.mini]);
     });
+
+    // ── Portrait menu button ──
+    const portraitMenuBtn = bar.querySelector("[data-portrait-menu]");
+    if (portraitMenuBtn) {
+      portraitMenuBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._openPortraitMenu(portraitMenuBtn);
+      });
+    }
 
     const taskbarBtn = bar.querySelector("#ct-btn-settings");
     if (taskbarBtn) taskbarBtn.onclick = () => this._openTaskbarSettings();
@@ -3083,6 +3213,11 @@ class CypherTaskbar {
     const op    = this._gs("portraitShadowOpacity");
     const dist  = this._gs("portraitShadowDistance");
     const width = this._gs("portraitWidth");
+    const customPortraitImage = this._gs("customPortraitImage") ?? "";
+    const customPortraitEnabled = this._gs("customPortraitEnabled") ?? false;
+    const portraitFilesEnabled = this._gs("portraitFilesEnabled") ?? false;
+    const portraitAnimFrequency = this._gs("portraitAnimFrequency") ?? 0;
+    const portraitAnimLoops = this._gs("portraitAnimLoops") ?? 0;
     const arcWidgetX         = this._gs("arcWidgetOffsetX")   ?? 82;
     const arcWidgetY         = this._gs("arcWidgetOffsetY")   ?? 64;
     const arcWidgetScale     = this._gs("arcWidgetScale")     ?? 74;
@@ -3152,6 +3287,7 @@ class CypherTaskbar {
       </div>
       <div class="ct-popup-tabs ct-portrait-settings-tabs">
         <button class="ct-popup-tab${activePortraitTab==="portrait"?" is-active":""}" data-tab="portrait" title="Portrait width & shadow"><i class="fas fa-image"></i><span>Portrait</span></button>
+        <button class="ct-popup-tab${activePortraitTab==="customP"?" is-active":""}" data-tab="customP" title="Custom portrait image & animation"><i class="fas fa-portrait"></i><span>Custom P</span></button>
         <button class="ct-popup-tab${activePortraitTab==="identity"?" is-active":""}" data-tab="identity" title="Name panel appearance"><i class="fas fa-id-card"></i><span>Identity</span></button>
         <button class="ct-popup-tab${activePortraitTab==="bars"?" is-active":""}" data-tab="bars" title="Attribute bars layout & style"><i class="fas fa-bars"></i><span>Attribute Bar</span></button>
         <button class="ct-popup-tab${activePortraitTab==="arc"?" is-active":""}" data-tab="arc" title="Focused arc widget"><i class="fas fa-bullseye"></i><span>Arc</span></button>
@@ -3193,6 +3329,40 @@ class CypherTaskbar {
               <label>Distance <span class="ct-val-label" id="ps-dist-val">${dist}px</span>
                 <input type="range" id="ps-dist" min="0" max="20" step="1" value="${dist}">
               </label>
+            </div>
+          </div>
+        </div>
+        <!-- ═══ CUSTOM P TAB ═══ -->
+        <div class="ct-popup-pane${activePortraitTab==="customP"?" is-active":""}" data-pane="customP">
+          <div class="ct-settings-section">
+            <div class="ct-settings-section-title"><i class="fas fa-portrait"></i> Custom Portrait</div>
+            <label class="ct-toggle-row">Use Custom Portrait <input type="checkbox" id="ps-custom-portrait-en" ${customPortraitEnabled?"checked":""}></label>
+            <label class="ct-toggle-row">Use Actor File Container <input type="checkbox" id="ps-portrait-files-en" ${portraitFilesEnabled?"checked":""}></label>
+            <div class="ct-settings-section${customPortraitEnabled?"":" ct-hidden"}" id="ps-custom-portrait-group">
+              <label class="ct-file-input-row">
+                <span>Image Path or URL</span>
+                <div class="ct-file-input-wrap">
+                  <input type="text" id="ps-custom-portrait-path" value="${foundry.utils.escapeHTML(customPortraitImage)}" placeholder="path/to/image.webp">
+                  <button type="button" class="ct-file-picker-btn" data-portrait-picker="1" title="Browse files"><i class="fas fa-folder-open"></i></button>
+                </div>
+              </label>
+              <div class="ct-file-types-hint">Supported: png, gif, webp, webm · Uploads to: worlds/<world>/cypher-taskbar-portraits/</div>
+              <div class="ct-portrait-preview${customPortraitImage?"":" ct-hidden"}" id="ps-custom-portrait-preview">
+                ${this._isPortraitVideo(customPortraitImage)
+                  ? `<video src="${foundry.utils.escapeHTML(customPortraitImage)}" autoplay loop muted playsinline style="max-width:100%;max-height:120px;border-radius:4px;" onerror="this.parentElement.classList.add('ct-hidden')"></video>`
+                  : `<img src="${foundry.utils.escapeHTML(customPortraitImage)}" alt="Preview" onerror="this.parentElement.classList.add('ct-hidden')">`
+                }
+              </div>
+              <!-- Animation settings -->
+              <div class="ct-portrait-anim-section">
+                <div class="ct-settings-section-title"><i class="fas fa-film"></i> Animation (webm only)</div>
+                <label>Play Interval <span class="ct-val-label" id="ps-anim-freq-val">${portraitAnimFrequency === 0 ? 'Always' : portraitAnimFrequency + ' min'}</span>
+                  <input type="range" id="ps-anim-freq" min="0" max="60" step="1" value="${portraitAnimFrequency}">
+                </label>
+                <label>Loops per Interval <span class="ct-val-label" id="ps-anim-loops-val">${portraitAnimLoops === 0 ? 'Infinite' : portraitAnimLoops}</span>
+                  <input type="range" id="ps-anim-loops" min="0" max="20" step="1" value="${portraitAnimLoops}">
+                </label>
+              </div>
             </div>
           </div>
         </div>
@@ -3346,10 +3516,13 @@ class CypherTaskbar {
     if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings popup appended`, {popupInDOM: !!document.querySelector("#ct-portrait-settings-popup")});
     requestAnimationFrame(() => {
       const rect = popup.getBoundingClientRect();
+      const desiredLeft = parseFloat(popup.style.left) || (window.innerWidth / 2);
+      const desiredTop = parseFloat(popup.style.top) || (window.innerHeight / 2);
       const left = Math.min(Math.max(8, desiredLeft), Math.max(8, window.innerWidth - rect.width - 8));
       const top = Math.min(Math.max(8, desiredTop), Math.max(8, window.innerHeight - rect.height - 8));
       popup.style.left = `${left}px`;
       popup.style.top = `${top}px`;
+      popup.style.transform = "none";
     });
 
     popup.querySelectorAll(".ct-popup-tab").forEach(btn => {
@@ -3425,6 +3598,11 @@ class CypherTaskbar {
         await this._ss("portraitShadowColor",    popup.querySelector("#ps-color").value);
         await this._ss("portraitShadowOpacity",  parseFloat(popup.querySelector("#ps-op").value));
         await this._ss("portraitShadowDistance", parseInt(popup.querySelector("#ps-dist").value));
+        await this._ss("customPortraitEnabled", popup.querySelector("#ps-custom-portrait-en").checked);
+        await this._ss("customPortraitImage",   popup.querySelector("#ps-custom-portrait-path").value.trim());
+        await this._ss("portraitFilesEnabled", popup.querySelector("#ps-portrait-files-en").checked);
+        await this._ss("portraitAnimFrequency", parseInt(popup.querySelector("#ps-anim-freq").value));
+        await this._ss("portraitAnimLoops", parseInt(popup.querySelector("#ps-anim-loops").value));
         await this._ss("portraitSpaceTransparent", popup.querySelector("#ps-space-transparent").checked);
         await this._ss("portraitSpaceOpacity", parseFloat(popup.querySelector("#ps-space-opacity").value));
         await this._ss("xpBarWidth", parseInt(popup.querySelector("#ps-xp-w").value));
@@ -3485,11 +3663,311 @@ class CypherTaskbar {
     popup.querySelector("#ps-color")?.addEventListener("input",applyDebounced);
     popup.querySelector("#ps-dir")?.addEventListener("change",apply);
     popup.querySelector("#ps-en")?.addEventListener("change",e=>{popup.querySelector("#ps-shadow-group").classList.toggle("ct-hidden",!e.target.checked);apply();});
+    // Custom portrait listeners
+    popup.querySelector("#ps-custom-portrait-en")?.addEventListener("change",e=>{
+      popup.querySelector("#ps-custom-portrait-group").classList.toggle("ct-hidden",!e.target.checked);
+      apply();
+    });
+    popup.querySelector("#ps-portrait-files-en")?.addEventListener("change",e=>{
+      apply();
+    });
+    popup.querySelector("#ps-anim-freq")?.addEventListener("input",e=>{
+      popup.querySelector("#ps-anim-freq-val").textContent = e.target.value === "0" ? "Always" : e.target.value + " min";
+      applyDebounced();
+    });
+    popup.querySelector("#ps-anim-loops")?.addEventListener("input",e=>{
+      popup.querySelector("#ps-anim-loops-val").textContent = e.target.value === "0" ? "Infinite" : e.target.value;
+      applyDebounced();
+    });
+    popup.querySelector("#ps-custom-portrait-path")?.addEventListener("input",applyDebounced);
+    popup.querySelector("[data-portrait-picker]")?.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      console.log(`[CT] Portrait picker clicked`);
+      
+      // Check if Actor File Container is enabled
+      const useFileContainer = popup.querySelector("#ps-portrait-files-en")?.checked;
+      if (useFileContainer) {
+        this._showPortraitFileContainer((path) => {
+          const pathInput = popup.querySelector("#ps-custom-portrait-path");
+          if (pathInput) pathInput.value = path;
+          const preview = popup.querySelector("#ps-custom-portrait-preview");
+          if (preview) {
+            preview.classList.remove("ct-hidden");
+            const isVideo = this._isPortraitVideo(path);
+            preview.innerHTML = isVideo
+              ? `<video src="${foundry.utils.escapeHTML(path)}" autoplay loop muted playsinline style="max-width:100%;max-height:120px;border-radius:4px;" onerror="this.parentElement.classList.add('ct-hidden')"></video>`
+              : `<img src="${foundry.utils.escapeHTML(path)}" alt="Preview" onerror="this.parentElement.classList.add('ct-hidden')">`;
+          }
+          apply();
+        });
+        return;
+      }
+      
+      const pathInput = popup.querySelector("#ps-custom-portrait-path");
+      const current = pathInput?.value || "";
+      
+      // Get the v14+ FilePicker class (not the deprecated global)
+      const FilePickerClass = foundry.applications?.apps?.FilePicker?.implementation;
+      if (!FilePickerClass) {
+        console.error(`[CT] FilePicker not available`);
+        ui.notifications?.error?.("File picker not available in this Foundry version.");
+        return;
+      }
+      
+      try {
+        const fp = new FilePickerClass({
+          type: "image",
+          current: current,
+          callback: (path) => {
+            console.log(`[CT] FilePicker selected:`, path);
+            if (pathInput) pathInput.value = path;
+            const preview = popup.querySelector("#ps-custom-portrait-preview");
+            if (preview) {
+              preview.classList.remove("ct-hidden");
+              const isVideo = this._isPortraitVideo(path);
+              preview.innerHTML = isVideo
+                ? `<video src="${foundry.utils.escapeHTML(path)}" autoplay loop muted playsinline style="max-width:100%;max-height:120px;border-radius:4px;" onerror="this.parentElement.classList.add('ct-hidden')"></video>`
+                : `<img src="${foundry.utils.escapeHTML(path)}" alt="Preview" onerror="this.parentElement.classList.add('ct-hidden')">`;
+            }
+            apply();
+          }
+        });
+        fp.render(true);
+      } catch (err) {
+        console.error(`[CT] FilePicker failed:`, err);
+        ui.notifications?.error?.("Could not open file picker. Check console for details.");
+      }
+    });
     popup.querySelector("#ps-upper-bg")?.addEventListener("input",applyDebounced);
     popup.querySelector("#ps-upper-font")?.addEventListener("input",applyDebounced);
     popup.querySelector(".ct-popup-close")?.addEventListener("click",()=>popup.remove());
     setTimeout(()=>{ document.addEventListener("click",function h(e){if(!popup.contains(e.target)){popup.remove();document.removeEventListener("click",h);}});},300);
 
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     PORTRAIT FILE CONTAINER — Special file browser for actor portraits
+     ═══════════════════════════════════════════════════════════════ */
+  _showPortraitFileContainer(callback) {
+    const actor = this.actor;
+    if (!actor) {
+      ui.notifications?.warn?.("No actor selected.");
+      return;
+    }
+
+    // Get stored files from actor flags
+    const getStoredFiles = () => {
+      const prefs = actor.getFlag(MODULE_ID, "taskbarPrefs") ?? {};
+      const files = prefs.portraitFiles ?? [];
+      return Array.isArray(files) ? files : [];
+    };
+
+    // Save files to actor flags
+    const saveFiles = async (files) => {
+      const prefs = actor.getFlag(MODULE_ID, "taskbarPrefs") ?? {};
+      prefs.portraitFiles = files;
+      await actor.setFlag(MODULE_ID, "taskbarPrefs", prefs);
+    };
+
+    // Remove existing container
+    const existing = document.getElementById("ct-portrait-file-container");
+    if (existing) existing.remove();
+
+    const container = document.createElement("div");
+    container.id = "ct-portrait-file-container";
+    container.classList.add("ct-popup", "ct-portrait-file-container");
+    container.style.cssText = "position:fixed;z-index:10001;min-width:320px;max-width:420px;width:380px;";
+
+    const files = getStoredFiles();
+    const currentPortrait = this._gs("customPortraitImage") ?? "";
+
+    const buildFileGrid = () => {
+      if (files.length === 0) {
+        return `<div class="ct-portrait-files-empty"><i class="fas fa-images"></i><p>No portrait files stored yet.</p><p class="ct-hint">Click "Add File" to browse, or drag & drop images here.</p></div>`;
+      }
+      return `<div class="ct-portrait-files-grid">${files.map((f, i) => `
+        <div class="ct-portrait-file-card${f === currentPortrait ? ' is-active' : ''}" data-file-index="${i}" data-file-path="${foundry.utils.escapeHTML(f)}">
+          <div class="ct-portrait-file-thumb"><img src="${foundry.utils.escapeHTML(f)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-image\\'></i>'"></div>
+          <div class="ct-portrait-file-name" title="${foundry.utils.escapeHTML(f)}">${foundry.utils.escapeHTML(f.split('/').pop() || f)}</div>
+          <button class="ct-portrait-file-delete" data-delete="${i}" title="Remove"><i class="fas fa-trash"></i></button>
+        </div>
+      `).join('')}</div>`;
+    };
+
+    container.innerHTML = `
+      <div class="ct-popup-header">
+        <div class="ct-popup-header-icon"><i class="fas fa-images"></i></div>
+        <div class="ct-popup-header-title">Actor Portraits</div>
+        <button class="ct-popup-close" title="Close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="ct-popup-body ct-portrait-files-body">
+        <div class="ct-portrait-files-toolbar">
+          <label class="ct-portrait-files-add-btn" title="Upload images from your computer">
+            <input type="file" class="ct-portrait-files-input" accept="image/*,.webm" multiple hidden>
+            <i class="fas fa-cloud-upload-alt"></i> Upload Portraits
+          </label>
+          <span class="ct-portrait-files-count">${files.length} file${files.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="ct-portrait-files-content" id="ct-portrait-files-content">
+          ${buildFileGrid()}
+        </div>
+        <div class="ct-portrait-files-footer">
+          <span class="ct-hint">Click a portrait to select it. Drag & drop images to add.</span>
+        </div>
+      </div>
+    `;
+
+    // Position next to portrait or center
+    const portraitRect = this.element?.querySelector(".ct-portrait-wrap")?.getBoundingClientRect();
+    if (portraitRect) {
+      container.style.left = `${portraitRect.right + 12}px`;
+      container.style.top = `${portraitRect.top}px`;
+      container.style.transform = "none";
+    } else {
+      container.style.left = "50%";
+      container.style.top = "50%";
+      container.style.transform = "translate(-50%, -50%)";
+    }
+
+    document.body.appendChild(container);
+
+    const refreshGrid = () => {
+      const content = container.querySelector("#ct-portrait-files-content");
+      const countLabel = container.querySelector(".ct-portrait-files-count");
+      if (content) content.innerHTML = buildFileGrid();
+      if (countLabel) countLabel.textContent = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+      bindCardClicks();
+    };
+
+    const bindCardClicks = () => {
+      // File card click = select portrait
+      container.querySelectorAll(".ct-portrait-file-card").forEach(card => {
+        card.addEventListener("click", (e) => {
+          if (e.target.closest(".ct-portrait-file-delete")) return;
+          const path = card.dataset.filePath;
+          if (path) {
+            callback(path);
+            container.remove();
+          }
+        });
+      });
+
+      // Delete button
+      container.querySelectorAll("[data-delete]").forEach(btn => {
+        btn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const idx = parseInt(btn.dataset.delete);
+          if (!isNaN(idx) && idx >= 0 && idx < files.length) {
+            files.splice(idx, 1);
+            await saveFiles(files);
+            refreshGrid();
+          }
+        });
+      });
+    };
+
+    bindCardClicks();
+
+    // Upload button — opens native file picker for local files
+    const fileInput = container.querySelector(".ct-portrait-files-input");
+    fileInput?.addEventListener("change", async (e) => {
+      e.stopPropagation();
+      const selectedFiles = Array.from(e.target.files);
+      if (!selectedFiles.length) return;
+
+      // Check upload permission
+      if (!game.user.can("FILES_UPLOAD")) {
+        ui.notifications?.warn?.("You don't have permission to upload files. Ask your GM to upload portraits or grant file upload permissions in User Management.");
+        return;
+      }
+
+      ui.notifications?.info?.(`Uploading ${selectedFiles.length} file(s)...`);
+      const uploadDir = `worlds/${game.world.id}/cypher-taskbar-portraits`;
+
+      for (const file of selectedFiles) {
+        const isImage = file.type.startsWith("image/");
+        const isWebm = file.type === "video/webm" || file.name.toLowerCase().endsWith(".webm");
+        if (!isImage && !isWebm) {
+          ui.notifications?.warn?.(`Skipped "${file.name}" — not an image or webm.`);
+          continue;
+        }
+        try {
+          const FilePickerV2 = foundry.applications?.apps?.FilePicker?.implementation;
+          const response = await FilePickerV2.upload("data", uploadDir, file);
+          if (response?.path && !files.includes(response.path)) {
+            files.push(response.path);
+          }
+        } catch (err) {
+          console.error(`[CT] Upload failed for "${file.name}":`, err);
+          ui.notifications?.error?.(`Failed to upload "${file.name}".`);
+        }
+      }
+
+      await saveFiles(files);
+      refreshGrid();
+      fileInput.value = ""; // reset so same file can be selected again
+    });
+
+    // Drag & drop support
+    const dropZone = container.querySelector(".ct-portrait-files-content");
+    if (dropZone) {
+      dropZone.addEventListener("dragover", (e) => { e.preventDefault(); dropZone.classList.add("ct-drag-over"); });
+      dropZone.addEventListener("dragleave", () => { dropZone.classList.remove("ct-drag-over"); });
+      dropZone.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("ct-drag-over");
+
+        // Check upload permission
+        if (!game.user.can("FILES_UPLOAD")) {
+          ui.notifications?.warn?.("You don't have permission to upload files. Ask your GM to upload portraits or grant file upload permissions in User Management.");
+          return;
+        }
+
+        const dropped = [];
+        if (e.dataTransfer.files?.length) {
+          // Local files dropped — need to upload
+          ui.notifications?.info?.("Uploading dropped files...");
+          for (const file of Array.from(e.dataTransfer.files)) {
+            const isImage = file.type.startsWith("image/");
+            const isWebm = file.type === "video/webm" || file.name.toLowerCase().endsWith(".webm");
+            if (!isImage && !isWebm) continue;
+            try {
+              const FilePickerV2 = foundry.applications?.apps?.FilePicker?.implementation;
+              const uploadDir = `worlds/${game.world.id}/cypher-taskbar-portraits`;
+              const response = await FilePickerV2.upload("data", uploadDir, file);
+              if (response?.path) dropped.push(response.path);
+            } catch (err) {
+              console.error(`[CT] Upload failed:`, err);
+            }
+          }
+        } else {
+          // Data transfer from Foundry (e.g., sidebar items)
+          const data = TextEditor.getDragEventData(e);
+          if (data?.src) dropped.push(data.src);
+        }
+        if (dropped.length) {
+          for (const path of dropped) {
+            if (!files.includes(path)) files.push(path);
+          }
+          await saveFiles(files);
+          refreshGrid();
+        }
+      });
+    }
+
+    // Close button
+    container.querySelector(".ct-popup-close")?.addEventListener("click", () => container.remove());
+
+    // Close on outside click (with dialog guard)
+    setTimeout(() => {
+      document.addEventListener("click", function outside(e) {
+        if (!container.contains(e.target) || e.target.closest('.dialog, .window-app, .application, .file-picker')) {
+          container.remove();
+          document.removeEventListener("click", outside);
+        }
+      });
+    }, 100);
   }
 
   _positionPopupAboveEvent(popup, event, options = {}) {
@@ -3743,26 +4221,83 @@ class CypherTaskbar {
       if (!actor) { ui.notifications.warn("No character assigned."); return; }
       const prefs = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
 
+      // ── ALL Taskbar Styling Settings ──
       const taskbarKeys = [
-        "taskbarHeight","bgColor","bgOpacity","accentColor","locked","autoHide",
-        "portraitWidth","portraitAreaCollapsed","sectionsExpanded",
+        // Core
+        "taskbarHeight","bgColor","bgOpacity","accentColor","locked","autoHide","hideMacroBar","pushSidebarUp",
+        // Menu styling
         "menuFontSize","menuFontColor","menuFontFamily","menuFontCaps",
-        "miniMenuDisplayMode","miniMenuItemSize","miniMenuPadding",
-        "miniMenuSpaceLeft","miniMenuSpaceRight",
         "menuIconSize","menuLabelSize","menuIconColor","menuLabelColor","menuIconBgColor",
         "menuIconsUnlocked","menuIconSettings",
+        "menuBackgrounds",
+        // Mini menu
+        "miniMenuDisplayMode","miniMenuItemSize","miniMenuPadding",
+        "miniMenuSpaceLeft","miniMenuSpaceRight",
+        "miniMenuShowTitle","miniMenuShowDescription","miniMenuWidth","miniMenuHeight",
+        // Gallery tabs
+        "galleryTabsEnabled","galleryTabsOffsetX",
         "galleryTabsFontSize","galleryTabsFontColor","galleryTabsIconColor","galleryTabsBackground",
-        "lastSettingsTab"
+        // Sections
+        "sectionsExpanded",
+        // Last tabs
+        "lastSettingsTab","lastPortraitSettingsTab"
       ];
+
+      // ── ALL Portrait Styling Settings ──
       const portraitKeys = [
-        "portraitShadowBlur","portraitShadowColor","portraitShadowOpacity",
-        "portraitShadowOffsetX","portraitShadowOffsetY",
-        "upperPanelBgColor","upperPanelOpacity",
-        "namePanelBgColor","namePanelOpacity","namePanelFontSize","namePanelFontColor","namePanelFontFamily",
-        "bar1Color","bar2Color","bar3Color","bar1TextColor","bar2TextColor","bar3TextColor",
-        "arcBarColor","arcBarGlow","arcBarTextColor",
-        "portraitSpaceTransparent","portraitSpaceOpacity",
-        "portraitSettingsPos","lastPortraitSettingsTab"
+        // Portrait
+        "portraitWidth","portraitAreaCollapsed",
+        "portraitShadow","portraitShadowBlur","portraitShadowColor","portraitShadowOpacity",
+        "portraitShadowDirection","portraitShadowDistance",
+        "portraitFilesEnabled","portraitAnimFrequency","portraitAnimLoops",
+        // Upper panel
+        "upperPanelBgColor","upperPanelOpacity","upperPanelFontColor",
+        "upperPanelNameSize","upperPanelScale","upperPanelOffsetX","upperPanelOffsetY",
+        // Attribute bars
+        "attributeBarScale","attributeBarRightOffset","attributeBarVerticalOffset",
+        "attributeBarGap","attributeBarTopPadding",
+        "attributeValueColor","attributeValueSize",
+        "attributeTitleColor","attributeTitleSize","attributeTitleSpacing",
+        "attributeTitleStrokeColor","attributeTitleStrokeThickness","attributeTitleBoldness",
+        // ARC widget
+        "arcWidgetOffsetX","arcWidgetOffsetY","arcWidgetScale",
+        "arcWidgetBgOpacity","arcWidgetFontColor","arcWidgetFontSize",
+        // Recovery
+        "recoveryDropColor","recoveryBgColor","recoveryBgOpacity","recoverySpace",
+        // Portrait space
+        "portraitSpaceTransparent","portraitSpaceOpacity","portraitSettingsPos"
+      ];
+
+      // ── Other visual / layout settings ──
+      const otherVisualKeys = [
+        "stuffMenuBgColor","stuffMenuBgOpacity","stuffMenuBgImage","stuffMenuBgImageOpacity",
+        "stuffMenuBgFit","stuffMenuShadowColor","stuffMenuShadowOpacity","stuffMenuShadowDistance",
+        "stuffMenuShadowDirection","stuffMenuTitleColor","stuffMenuTitleSize","stuffMenuTitleCaps",
+        "stuffMenuHeadingColor","stuffMenuHeadingOpacity","stuffMenuColumns",
+        "stuffMenuWidthScale","stuffMenuHeightScale","stuffMenuFontSize",
+        "stuffMenuItemPadding","stuffMenuItemSize","stuffMenuWidthScale","stuffMenuHeightScale",
+        "stuffDefaultTab",
+        "stuffBtnIconSize","stuffBtnIconColor","stuffBtnBorderOpacity","stuffBtnBorderThickness",
+        "stuffBtnBorderColor","stuffBtnIconHPos","stuffBtnIconVPos","stuffBtnIconOffset",
+        "bookMenuBgColor","bookMenuBgOpacity","bookMenuWidth","bookMenuHeight",
+        "bookMenuShadowColor","bookMenuShadowOpacity","bookMenuShadowDistance",
+        "bookMenuFontSize","bookMenuViewMode",
+        "bookBtnIconSize","bookBtnIconColor","bookBtnBorderOpacity","bookBtnBorderThickness",
+        "bookBtnBorderColor","bookBtnIconHPos","bookBtnIconVPos","bookBtnIconOffset",
+        "equipmentMenuIconSize",
+        "combatPlaceholderBgColor","combatPlaceholderBgOpacity","combatPlaceholderWidthScale",
+        "combatPlaceholderHeightScale","combatPlaceholderBorderWidth","combatPlaceholderBorderColor",
+        "combatPlaceholderBorderOpacity","combatPlaceholderShadowOpacity","combatPlaceholderShadowDir",
+        "combatPlaceholderShadowBlur","combatPlaceholderPosition","combatPlaceholderOffset",
+        "combatPlaceholderGradientColor2","combatPlaceholderGradientStretch",
+        "combatPlaceholderSeparatorMargin","combatPlaceholderSeparatorColor",
+        "combatPlaceholderGradientType","combatPlaceholderGradientDir",
+        "combatPlaceholderBgImage","combatPlaceholderBgImageOpacity","combatPlaceholderBgImageSize",
+        "combatPlaceholderBgImagePos","combatPlaceholderSeparator",
+        "combatActionIconColor","combatActionIconBgColor","combatActionIconSize",
+        "combatActionIconPadding","combatActionIconMargin",
+        "spellsIconSize","spellsReadyCastIconSize","spellsReadyFontSize",
+        "spellsReadyMargin","spellsReadyMemorized","spellsReadyPadding"
       ];
 
       const taskbarSettings = {};
@@ -3771,21 +4306,19 @@ class CypherTaskbar {
       for (const [k, v] of Object.entries(prefs)) {
         if (taskbarKeys.includes(k)) taskbarSettings[k] = v;
         else if (portraitKeys.includes(k)) portraitSettings[k] = v;
-        else otherSettings[k] = v;
+        else if (otherVisualKeys.includes(k)) otherSettings[k] = v;
       }
 
       const exportData = {
         module: "cypher-taskbar",
         version: game.modules.get("cypher-taskbar")?.data?.version ?? "unknown",
         exportedAt: new Date().toISOString(),
-        actorName: actor.name,
-        actorId: actor.id,
         taskbarSettings,
         portraitSettings,
         otherSettings
       };
 
-      const fileName = `cypher-taskbar-settings-${actor.name?.replace(/[^a-z0-9]/gi, "_") || "actor"}.json`;
+      const fileName = `cypher-taskbar-settings-${new Date().toISOString().slice(0,10)}.json`;
       const jsonStr = JSON.stringify(exportData, null, 2);
       const dataUrl = "data:application/json;charset=utf-8," + encodeURIComponent(jsonStr);
       const a = document.createElement("a");
@@ -3800,7 +4333,7 @@ class CypherTaskbar {
       setTimeout(() => {
         a.remove();
       }, 2000);
-      ui.notifications.info(`Settings exported for "${actor.name}". File downloaded.`);
+      ui.notifications.info(`Taskbar & portrait settings exported. File downloaded.`);
     });
 
     popup.querySelector("#ts-import")?.addEventListener("click", () => {
@@ -4033,7 +4566,7 @@ class CypherTaskbar {
               const uuid = displayUuids[idx];
               return `<div class="ct-stuff-item" data-stuff-uuid="${uuid}" data-stuff-idx="${idx}" title="${foundry.utils.escapeHTML(item.name)}">
                 <img src="${item.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
-                <span class="ct-item-hand ct-stuff-hand" data-stuff-drag="${uuid}" title="Drag: ${foundry.utils.escapeHTML(item.name)}"><i class="fas fa-hand-paper"></i></span>
+                <span class="ct-item-hand ct-stuff-hand" data-stuff-drag="${uuid}" data-doc-info="${JSON.stringify({ uuid, name: item?.name || "", img: item?.img || "" }).replace(/"/g, '&quot;')}" title="Drag: ${foundry.utils.escapeHTML(item.name)}"><i class="fas fa-hand-paper"></i></span>
                 <button class="ct-stuff-remove" data-stuff-remove="${uuid}" title="Remove"><i class="fas fa-times"></i></button>
               </div>`;
             }).join('')}</div>`}
@@ -4299,7 +4832,7 @@ class CypherTaskbar {
 
     popup.innerHTML = `
       <div class="ct-popup-header">
-        <span><i class="fas fa-book"></i> JOURNAL</span>
+        <span><i class="fas fa-book"></i> MAIN</span>
         <div class="ct-popup-header-actions">
           ${isGM ? `<button class="ct-popup-action-btn" id="ct-book-add-link" title="Add Global Link (GM)"><i class="fas fa-plus"></i></button>` : ''}
           <button class="ct-popup-action-btn" id="ct-book-settings-gear" title="Settings"><i class="fas fa-cog"></i></button>
@@ -4307,30 +4840,36 @@ class CypherTaskbar {
         </div>
       </div>
       <div class="ct-book-columns">
-        <div class="ct-book-col">
-          <div class="ct-book-col-header">
-            <span class="ct-book-section-label"><i class="fas fa-globe"></i> Links</span>
-            <select class="ct-book-sort" id="ct-book-sort-links">${sortOptions}</select>
-          </div>
-          <div class="ct-book-col-body" id="ct-book-links-area">${renderLinks(linkSort)}</div>
-        </div>
-        <div class="ct-book-col-sep"></div>
-        <div class="ct-book-col">
-          <div class="ct-book-col-header">
-            <span class="ct-book-section-label"><i class="fas fa-journal-whills"></i> Journals</span>
-            <div class="ct-book-journal-controls">
-              <label class="ct-book-owned-toggle" title="Show journals you can observe">
-                <input type="checkbox" id="ct-book-observed" checked>
-                <span>Observed</span>
-              </label>
-              <label class="ct-book-owned-toggle" title="Show only journals you own">
-                <input type="checkbox" id="ct-book-owned-only">
-                <span>Owned only</span>
-              </label>
-              <select class="ct-book-sort" id="ct-book-sort-journals">${sortOptions}</select>
+        <div class="ct-book-main">
+          <div class="ct-book-col">
+            <div class="ct-book-col-header">
+              <span class="ct-book-section-label"><i class="fas fa-globe"></i> Links</span>
+              <select class="ct-book-sort" id="ct-book-sort-links">${sortOptions}</select>
             </div>
+            <div class="ct-book-col-body" id="ct-book-links-area">${renderLinks(linkSort)}</div>
           </div>
-          <div class="ct-book-col-body" id="ct-book-journals-area">${renderJournals(journalSort, true, false)}</div>
+          <div class="ct-book-col-sep"></div>
+          <div class="ct-book-col">
+            <div class="ct-book-col-header">
+              <span class="ct-book-section-label"><i class="fas fa-journal-whills"></i> Journals</span>
+              <div class="ct-book-journal-controls">
+                <label class="ct-book-owned-toggle" title="Show journals you can observe">
+                  <input type="checkbox" id="ct-book-observed" checked>
+                  <span>Observed</span>
+                </label>
+                <label class="ct-book-owned-toggle" title="Show only journals you own">
+                  <input type="checkbox" id="ct-book-owned-only">
+                  <span>Owned only</span>
+                </label>
+                <select class="ct-book-sort" id="ct-book-sort-journals">${sortOptions}</select>
+              </div>
+            </div>
+            <div class="ct-book-col-body" id="ct-book-journals-area">${renderJournals(journalSort, true, false)}</div>
+          </div>
+        </div>
+        <div class="ct-book-sidebar">
+          <button class="ct-book-action-btn" id="ct-book-gm-tasks" title="Open GM Tasks"><i class="fas fa-user-shield"></i> GM TASKS</button>
+          <button class="ct-book-action-btn" id="ct-book-my-tasks" title="Open My Tasks"><i class="fas fa-clipboard-list"></i> MY TASKS</button>
         </div>
       </div>`;
 
@@ -4443,6 +4982,24 @@ class CypherTaskbar {
     popup.querySelector("#ct-book-add-link")?.addEventListener("click", () => this._openBookAddGlobalLink());
     popup.querySelector("#ct-book-settings-gear")?.addEventListener("click", () => this._openBookSettings(popup));
 
+    /* ── Sidebar action buttons ── */
+    popup.querySelector("#ct-book-gm-tasks")?.addEventListener("click", () => {
+      popup.remove();
+      if (game.cypherGMTaskbar?.instance) {
+        game.cypherGMTaskbar.instance.toggleTaskbar();
+      } else {
+        ui.notifications.warn("GM Taskbar not available.");
+      }
+    });
+    popup.querySelector("#ct-book-my-tasks")?.addEventListener("click", () => {
+      popup.remove();
+      if (game.cypherTaskbar?.instance) {
+        game.cypherTaskbar.instance._toggleTasksPanel?.() ?? ui.notifications.info("Tasks panel not implemented yet.");
+      } else {
+        ui.notifications.warn("Taskbar not available.");
+      }
+    });
+
     bindLinkEvents();
     bindJournalEvents();
 
@@ -4478,7 +5035,7 @@ class CypherTaskbar {
     const dist = s("bookMenuShadowDistance", 14);
     const dx = dir.includes("right") ? 1 : -1;
     const dy = dir.includes("bottom") ? 1 : -1;
-    const wPx = s("bookMenuWidth", 480);
+    const wPx = s("bookMenuWidth", 300);
     const hPx = s("bookMenuHeight", 420);
     popup.style.width = `${Math.max(200, wPx)}px`;
     popup.style.maxHeight = `${Math.max(150, hPx)}px`;
@@ -4494,7 +5051,7 @@ class CypherTaskbar {
     const dist = state.bookMenuShadowDistance ?? 14;
     const dx = dir.includes("right") ? 1 : -1;
     const dy = dir.includes("bottom") ? 1 : -1;
-    const wPx = state.bookMenuWidth ?? 480;
+    const wPx = state.bookMenuWidth ?? 300;
     const hPx = state.bookMenuHeight ?? 420;
     panel.style.width = `${Math.max(200, wPx)}px`;
     panel.style.maxHeight = `${Math.max(150, hPx)}px`;
@@ -4608,7 +5165,7 @@ class CypherTaskbar {
       bookBtnIconHPos: this._gs("bookBtnIconHPos") ?? "center",
       bookBtnIconVPos: this._gs("bookBtnIconVPos") ?? "center",
       bookBtnIconOffset: this._gs("bookBtnIconOffset") ?? 0,
-      bookMenuWidth: this._gs("bookMenuWidth") ?? 480,
+      bookMenuWidth: this._gs("bookMenuWidth") ?? 300,
       bookMenuHeight: this._gs("bookMenuHeight") ?? 420,
       bookMenuBgColor: this._gs("bookMenuBgColor") ?? "#17121f",
       bookMenuBgOpacity: this._gs("bookMenuBgOpacity") ?? 0.94,
@@ -5246,10 +5803,11 @@ class CypherTaskbar {
       tooltipEl.innerHTML = innerHtml;
       document.body.appendChild(tooltipEl);
       const tRect = targetEl.getBoundingClientRect();
-      let left = tRect.right + 10;
-      let top = tRect.top;
-      if (left + 280 > window.innerWidth) left = tRect.left - 290;
-      if (top + 120 > window.innerHeight) top = window.innerHeight - 130;
+      let left = tRect.left + (tRect.width / 2) - 140; // center horizontally
+      let top = tRect.top - 130; // show ABOVE the item
+      if (left < 10) left = 10;
+      if (left + 280 > window.innerWidth) left = window.innerWidth - 290;
+      if (top < 10) top = tRect.bottom + 10; // fallback below if no room above
       tooltipEl.style.left = `${left}px`;
       tooltipEl.style.top = `${top}px`;
     };
@@ -5274,7 +5832,7 @@ class CypherTaskbar {
         const itemKey = it.uuid || it.img || it.name;
         const ov = itemOverrides[itemKey] || {};
         const displayName = ov.name || it.name || "Unknown";
-        return `<div class="ct-mini-item" data-mini-idx="${idx}" draggable="true" title="${esc(displayName)}">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(displayName)}</span><span class="ct-item-hand" data-mini-drag="${idx}" title="Drag: ${esc(displayName)}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
+        return `<div class="ct-mini-item" data-mini-idx="${idx}" draggable="true">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(displayName)}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${JSON.stringify({ uuid: it.uuid || null, name: displayName, img: it.img || "" }).replace(/"/g, '&quot;')}" title="Drag: ${esc(displayName)}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
       }).join('');
 
       // Click to open — scenes navigate, everything else opens sheet
@@ -5602,6 +6160,100 @@ class CypherTaskbar {
   _openPlacesPanel(btn)   { this._openMiniContainer("places",  "PLACES",  "fas fa-map-marker-alt", "#c4a86b", btn); }
   _openDocumentsPanel(btn) { this._openMiniContainer("documents", "DOCUMENTS", "fas fa-book", "#4a90d9", btn); }
   _openSecretsPanel(btn)  { this._openMiniContainer("secrets", "SECRETS", "fas fa-user-secret", "#9b59b6", btn); }
+  _openScenesPanel(btn)   { this._openMiniContainer("scenes",  "SCENES",  "fas fa-map", "#e74c3c", btn); }
+  _openNotesPanel(btn)    { this._openMiniContainer("notes",   "NOTES",   "fas fa-sticky-note", "#f39c12", btn); }
+
+  /* ─── Portrait Menu — reads shared docs from GM Taskbar ─── */
+  _openPortraitMenu(sourceBtn) {
+    const existing = document.querySelector("#ct-portrait-menu-popup");
+    if (existing) { existing.remove(); return; }
+    const actor = this.actor;
+    if (!actor) { ui.notifications.warn("No character assigned."); return; }
+    const esc = foundry.utils.escapeHTML;
+
+    // Read shared documents from GM taskbar world setting
+    let sharedDocs = [];
+    try {
+      const gmMod = game.modules.get("cypher-gm-taskbar");
+      if (gmMod?.active) {
+        const raw = game.settings.get("cypher-gm-taskbar", "gmMenuDocs");
+        const parsed = JSON.parse(raw || "{}");
+        sharedDocs = parsed.shared || [];
+      }
+    } catch {
+      sharedDocs = [];
+    }
+
+    const popup = document.createElement("div");
+    popup.id = "ct-portrait-menu-popup";
+    popup.className = "ct-popup ct-portrait-menu-popup";
+    popup.style.position = "fixed";
+    popup.style.width = "260px";
+    popup.style.maxHeight = "360px";
+    popup.style.overflow = "hidden";
+    popup.style.display = "flex";
+    popup.style.flexDirection = "column";
+
+    const itemsHtml = sharedDocs.length === 0
+      ? `<div class="ct-portrait-menu-empty">No shared documents</div>`
+      : sharedDocs.map(uuid => {
+          try {
+            const doc = fromUuidSync(uuid);
+            if (!doc) return null;
+            const img = doc.img || "icons/svg/book.svg";
+            return `<div class="ct-portrait-menu-item" data-uuid="${uuid}">
+              <img src="${img}" alt="" draggable="false">
+              <span>${esc(doc.name)}</span>
+            </div>`;
+          } catch { return null; }
+        }).filter(Boolean).join("");
+
+    popup.innerHTML = `
+      <div class="ct-popup-header">
+        <span style="color:#4ade80"><i class="fas fa-book-open"></i> SHARED</span>
+        <button class="ct-popup-close" id="ct-portrait-menu-close" title="Close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="ct-popup-body" style="overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;">
+        ${itemsHtml}
+      </div>`;
+    document.body.appendChild(popup);
+
+    // Position above the source button
+    if (sourceBtn) {
+      const rect = sourceBtn.getBoundingClientRect();
+      popup.style.left = `${rect.left}px`;
+      popup.style.bottom = `${window.innerHeight - rect.top + 6}px`;
+      popup.style.top = "auto";
+      popup.style.transform = "none";
+    } else {
+      popup.style.left = "50%";
+      popup.style.top = "50%";
+      popup.style.transform = "translate(-50%, -50%)";
+    }
+
+    requestAnimationFrame(() => popup.classList.add("is-open"));
+
+    // Close on click outside
+    const _onDocClick = (e) => {
+      if (!popup.contains(e.target) && !sourceBtn?.contains(e.target)) {
+        popup.remove();
+        document.removeEventListener("click", _onDocClick);
+      }
+    };
+    requestAnimationFrame(() => document.addEventListener("click", _onDocClick));
+    popup.querySelector("#ct-portrait-menu-close")?.addEventListener("click", () => {
+      popup.remove();
+      document.removeEventListener("click", _onDocClick);
+    });
+
+    // Click to open journal
+    popup.querySelectorAll(".ct-portrait-menu-item").forEach(item => {
+      item.addEventListener("click", () => {
+        const doc = fromUuidSync(item.dataset.uuid);
+        if (doc) doc.sheet.render(true);
+      });
+    });
+  }
 
   /**
    * Make a mini-grid button into a drop target.
@@ -5612,7 +6264,7 @@ class CypherTaskbar {
     if (!key || btn._ctDropBound) return;
     btn._ctDropBound = true;
     const title = key.toUpperCase();
-    const color = { People: "#8fbc8f", Places: "#c4a86b", Documents: "#4a90d9", Secrets: "#9b59b6" }[key] || "#c8a96e";
+    const color = { People: "#8fbc8f", Places: "#c4a86b", Documents: "#4a90d9", Secrets: "#9b59b6", Scenes: "#e74c3c", Notes: "#f39c12" }[key] || "#c8a96e";
     const _onDragOver = (e) => { e.preventDefault(); e.stopPropagation(); btn.classList.add("is-dragover"); };
     const _onDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); btn.classList.remove("is-dragover"); };
     const _onDrop = async (e) => {
@@ -5662,7 +6314,7 @@ class CypherTaskbar {
               : it.icon
                 ? `<i class="${it.icon} ct-book-fa-icon" style="color:${it.color || color}"></i>`
                 : `<img src="icons/svg/book.svg" alt="" draggable="false">`;
-            return `<div class="ct-mini-item" data-mini-idx="${idx}">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(it.name || 'Unknown')}</span><span class="ct-item-hand" data-mini-drag="${idx}" title="Drag: ${esc(it.name || 'Unknown')}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
+            return `<div class="ct-mini-item" data-mini-idx="${idx}">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(it.name || 'Unknown')}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${JSON.stringify({ uuid: it.uuid || null, name: it.name || 'Unknown', img: it.img || '' }).replace(/"/g, '&quot;')}" title="Drag: ${esc(it.name || 'Unknown')}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
           }).join('');
         }
       }
@@ -6336,96 +6988,53 @@ class CypherTaskbar {
     if (this._suppressRender) return;
     const actor   = this.actor;
     const noActor = !actor || actor.type !== "pc";
+    // ── Update stat bars without touching the portrait element ──
+    const floatEl = this.element?.querySelector("#ct-char-float");
+    if (floatEl && actor) {
+      const sys = actor.system ?? {};
+      const pools = sys.pools ?? {};
+      const might = pools.might ?? {};
+      const speed = pools.speed ?? {};
+      const intellect = pools.intellect ?? {};
+      const mV = Number(might.value ?? might.current ?? 0);
+      const mM = Number(might.max ?? 0);
+      const sV = Number(speed.value ?? speed.current ?? 0);
+      const sM = Number(speed.max ?? 0);
+      const iV = Number(intellect.value ?? intellect.current ?? 0);
+      const iM = Number(intellect.max ?? 0);
+      const pct = (v, m) => m > 0 ? Math.round((v/m)*100) : 0;
 
-    // Rebuild floating portrait/stats — preserve outer element so CSS transitions keep running
-    const old = this.element?.querySelector("#ct-char-float");
-    if (old) {
-      const tmp = document.createElement("div");
-      tmp.innerHTML = this._buildFloating(actor, noActor);
-      const newFloat = tmp.firstElementChild;
-      // Preserve slide-away class to keep any ongoing transition alive
-      const hadSlideAway = old.classList.contains("ct-portrait-slide-away");
-      const hadCollapsed = old.classList.contains("ct-char-float-collapsed");
-      // Replace inner HTML only, keeping the outer element (and its transitions)
-      old.innerHTML = newFloat.innerHTML;
-      // Re-apply classes from new build (sync with current setting) while preserving transition class
-      old.className = newFloat.className;
-      if (hadSlideAway) old.classList.add("ct-portrait-slide-away");
-      if (hadCollapsed) old.classList.add("ct-char-float-collapsed");
+      // Update stat values and bar widths only — never touch portrait
+      const statRows = floatEl.querySelectorAll(".ct-stat-row");
+      const poolVals = [[mV, mM], [sV, sM], [iV, iM]];
+      statRows.forEach((row, idx) => {
+        if (idx >= 3) return; // Skip XP bar row
+        const [val, max] = poolVals[idx];
+        const bar = row.querySelector(".ct-stat-bar");
+        const valueSpan = row.querySelector(".ct-stat-value");
+        if (bar) bar.style.width = `${pct(val, max)}%`;
+        if (valueSpan) valueSpan.textContent = String(val);
+      });
 
-      // Re-bind portrait events
-      old.querySelector(".ct-portrait")?.addEventListener("click",e=>{e.stopPropagation();this.actor?.sheet?.render(true);});
-      old.querySelector(".ct-portrait-wrap")?.addEventListener("contextmenu",e=>{e.preventDefault();e.stopPropagation();this._openPortraitSettings(e);});
-      old.querySelectorAll(".ct-stat-bar-wrap[data-pool]").forEach(el => {
-        el.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          await this._adjustPool(el.dataset.pool, -1);
-        });
-        el.addEventListener("contextmenu", async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          await this._adjustPool(el.dataset.pool, 1);
-        });
-      });
-      old.querySelectorAll(".ct-roll-btn[data-roll-stat]").forEach(el => {
-        el.addEventListener("click", async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          await this._openStatRoll(el.dataset.rollStat);
-        });
-      });
-      // Re-bind dice button events
-      old.querySelectorAll(".ct-dice-btn").forEach(btn => {
-        btn.addEventListener("click", async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const die = btn.dataset.die;
-          if (!die) return;
-          try {
-            const roll = new Roll(`1${die}`);
-            await roll.evaluate();
-            await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: this.actor }) });
-          } catch (err) {
-            console.error(`${MODULE_ID} | Dice roll failed:`, err);
-            ui.notifications.error("Dice roll failed.");
-          }
-        });
-      });
-      // Re-bind recovery drops
-      old.querySelectorAll(".ct-recovery-drop[data-recovery-index]").forEach(btn => {
-        btn.addEventListener("click", async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const idx = parseInt(btn.dataset.recoveryIndex);
-          if (Number.isNaN(idx)) return;
-          await this._spendRecoveryRoll(idx);
-        });
-      });
-      // Re-bind focused arc widget
-      const focusedArcWidgetBtn = old.querySelector("[data-open-focused-arc]");
-      if (focusedArcWidgetBtn) {
-        const openFocusedArcDialog = async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (this._arcDialogOpening) return;
-          this._arcDialogOpening = true;
-          const targetActor = this.actor;
-          if (!targetActor) { this._arcDialogOpening = false; return; }
-          try {
-            await this._openFocusedArcWidgetDialog(targetActor);
-          } catch (err) {
-            console.error(`${MODULE_ID} | Failed to open focused arc dialog (refresh):`, err);
-          } finally {
-            this._arcDialogOpening = false;
-          }
-        };
-        focusedArcWidgetBtn.onclick = openFocusedArcDialog;
-        focusedArcWidgetBtn.querySelectorAll("[data-open-focused-arc-title]").forEach((el) => {
-          el.onclick = openFocusedArcDialog;
+      // Update XP bar
+      const xpContainer = floatEl.querySelector(".ct-xp-container");
+      if (xpContainer) {
+        const xpBar = xpContainer.querySelector(".ct-xp-bar");
+        const xp = Number(sys.basic?.xp ?? sys.advancement?.xp ?? 0);
+        const xpDisplay = Math.max(0, Math.min(10, xp));
+        if (xpBar) xpBar.style.width = `${(xpDisplay / 10) * 100}%`;
+        const segments = xpContainer.querySelectorAll(".ct-xp-segment");
+        segments.forEach((seg, idx) => {
+          seg.classList.toggle("filled", idx < xpDisplay);
         });
       }
     }
 
+    // If no float exists yet, do a full render
+    if (!floatEl) {
+      this.render();
+      return;
+    }
     // Rebuild bar meta + eye + xp buttons
     const s1 = this.element?.querySelector(".ct-section-1");
     const xpBtnActive = this._cypherXpActive();
@@ -6482,6 +7091,15 @@ class CypherTaskbar {
           }
         };
       }
+      // Re-bind portrait menu button (Character Documents)
+      const newPortraitMenuBtn = s1.querySelector("[data-portrait-menu]");
+      if (newPortraitMenuBtn) {
+        newPortraitMenuBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this._openPortraitMenu(newPortraitMenuBtn);
+        });
+      }
     }
 
     // Rebuild gallery strip (above the bar)
@@ -6523,8 +7141,8 @@ class CypherTaskbar {
         this._applyMenuIconStyles(btn);
       });
       // Re-bind mini category grid buttons
-      const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", documents: "_openDocumentsPanel", secrets: "_openSecretsPanel" };
-      const miniKeyToSetting = { people: "People", places: "Places", documents: "Documents", secrets: "Secrets" };
+      const miniMap = { people: "_openPeoplePanel", places: "_openPlacesPanel", documents: "_openDocumentsPanel", secrets: "_openSecretsPanel", scenes: "_openScenesPanel", notes: "_openNotesPanel" };
+      const miniKeyToSetting = { people: "People", places: "Places", documents: "Documents", secrets: "Secrets", scenes: "Scenes", notes: "Notes" };
       s2.querySelectorAll(".ct-mini-btn[data-mini]").forEach(btn => {
         btn.addEventListener("click", (e) => {
           e.preventDefault();
@@ -6546,6 +7164,7 @@ class CypherTaskbar {
     }
 
     this.applySettings();
+    this._setupPortraitAnim();
     // Re-apply settings after a short delay to catch any async actor flag loading
     setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 100);
   }
@@ -6784,6 +7403,28 @@ class CypherTaskbar {
     return null;
   }
 
+  /** Build the fancy SUCCESS / FAILURE / GM INTRUSION result HTML for chat flavor */
+  _buildRollResultHtml(total, achievedDifficulty, targetDifficulty, specialEvent) {
+    const isSuccess = achievedDifficulty >= targetDifficulty;
+    const isNat1 = total === 1;
+    const isSpecial = total >= 17 && total <= 20;
+    const achLabel = `<div class="ct-native-skill-roll-flavor-result">Achieved Difficulty ${achievedDifficulty}</div>`;
+
+    if (isNat1) {
+      return `<div class="ct-roll-result-outcome"><div class="ct-roll-gm-intrusion">FAIL - GM INTRUSION!!!</div>${achLabel}</div>`;
+    }
+
+    if (isSuccess) {
+      const flashClass = isSpecial ? ' flash' : '';
+      const subText = isSpecial && specialEvent
+        ? `<div class="ct-roll-success-sub">${foundry.utils.escapeHTML(specialEvent.text)}</div>`
+        : '';
+      return `<div class="ct-roll-result-outcome"><div class="ct-roll-success${flashClass}">SUCCESS!</div>${subText}${achLabel}</div>`;
+    }
+
+    return `<div class="ct-roll-result-outcome"><div class="ct-roll-failure">FAILURE!!!</div>${achLabel}</div>`;
+  }
+
   _skillRollSummary(actor, item, data = {}) {
     const pool = String(data.pool || this._defaultSkillPool(item));
     const baseDifficulty = Math.max(0, Math.min(15, Number(data.baseDifficulty ?? 0) || 0));
@@ -6802,6 +7443,18 @@ class CypherTaskbar {
   }
 
   async _performNativeSkillRoll(actor, item, options = {}) {
+    // Store roll data for potential reroll
+    this._lastRollData = {
+      skillItemId: item?.id,
+      skillName: item?.name,
+      pool: item?.system?.pool || options?.pool || "Might",
+      baseDifficulty: Number(options.baseDifficulty ?? options.difficulty ?? 0),
+      assets: Number(options.assets ?? 0),
+      effort: Number(options.effort ?? 0),
+      easedBy: Number(options.easedBy ?? 0),
+      hinderedBy: Number(options.hinderedBy ?? 0),
+      timestamp: Date.now()
+    };
     const summary = this._skillRollSummary(actor, item, options);
     const roll = await (new Roll('1d20')).evaluate();
     const total = Number(roll.total ?? 0);
@@ -6821,7 +7474,7 @@ class CypherTaskbar {
         <div class="ct-native-skill-roll-flavor-meta">Final Difficulty ${summary.finalDifficulty} · Target ${summary.target || 0}</div>
         <div class="ct-native-skill-roll-flavor-meta">${foundry.utils.escapeHTML(summary.pool)} Pool ${summary.poolValue} → ${Math.max(0, summary.poolValue - spent)}${spent !== summary.effortCost ? ` (spent ${spent})` : ''}</div>
         ${specialEvent ? `<div class="ct-native-skill-roll-flavor-event"><strong>${foundry.utils.escapeHTML(specialEvent.title)}:</strong> ${foundry.utils.escapeHTML(specialEvent.text)}</div>` : ''}
-        <div class="ct-native-skill-roll-flavor-result">Achieved Difficulty ${achievedDifficulty}</div>
+        ${this._buildRollResultHtml(total, achievedDifficulty, summary.finalDifficulty, specialEvent)}
       </div>`;
     await roll.toMessage({
       speaker: ChatMessage.getSpeaker({ actor }),
@@ -6980,6 +7633,18 @@ class CypherTaskbar {
   }
 
   async _performNativeAttackRoll(actor, item, options = {}) {
+    // Store roll data for potential reroll
+    this._lastRollData = {
+      skillItemId: item?.id,
+      skillName: item?.name,
+      pool: item?.system?.pool || options?.pool || "Might",
+      baseDifficulty: Number(options.baseDifficulty ?? options.difficulty ?? 0),
+      assets: Number(options.assets ?? 0),
+      effort: Number(options.effort ?? 0),
+      easedBy: Number(options.easedBy ?? 0),
+      hinderedBy: Number(options.hinderedBy ?? 0),
+      timestamp: Date.now()
+    };
     const summary = this._skillRollSummary(actor, item, options);
     const baseDamage = Number(options.baseDamage ?? item?.system?.basic?.damage ?? item?.system?.damage ?? 0) || 0;
     const effortDmg = Math.max(0, Number(options.effortDamage ?? 0));
@@ -7019,7 +7684,7 @@ class CypherTaskbar {
         <div class="ct-native-skill-roll-flavor-meta">Final Difficulty ${summary.finalDifficulty} · Target ${summary.target || 0}</div>
         <div class="ct-native-skill-roll-flavor-meta">${foundry.utils.escapeHTML(summary.pool)} Pool ${summary.poolValue} → ${Math.max(0, summary.poolValue - spent)}${spent !== summary.effortCost ? ` (spent ${spent})` : ''}</div>
         ${specialEvent ? `<div class="ct-native-skill-roll-flavor-event"><strong>${foundry.utils.escapeHTML(specialEvent.title)}:</strong> ${foundry.utils.escapeHTML(specialEvent.text)}</div>` : ''}
-        <div class="ct-native-skill-roll-flavor-result">Achieved Difficulty ${achievedDifficulty}</div>
+        ${this._buildRollResultHtml(total, achievedDifficulty, summary.finalDifficulty, specialEvent)}
         <div class="ct-native-attack-damage-block">
           <div class="ct-native-attack-damage-label">Damage</div>
           <div class="ct-native-attack-damage-breakdown">
@@ -7202,14 +7867,35 @@ class CypherTaskbar {
   /* ─── GM Taskbar Difficulty Integration ─── */
   _getGMDifficulty(actor) {
     if (!actor) return null;
+
     // 1. Individual actor difficulty (set via GM Taskbar Target button)
     const individual = actor.getFlag("cypher-gm-taskbar", "targetDifficulty");
-    if (Number.isFinite(individual)) return Math.max(0, Math.min(15, individual));
-    // 2. Global difficulty from GM Taskbar settings
-    try {
-      const global = game.settings.get("cypher-gm-taskbar", "globalDifficulty");
-      if (Number.isFinite(global)) return Math.max(0, Math.min(15, global));
-    } catch (e) { /* GM Taskbar not loaded or setting not registered */ }
+    const hasIndividual = Number.isFinite(individual);
+
+    // 2. Global difficulty — read from GM Taskbar instance FIRST (always current),
+    //    then fall back to settings
+    let global = null;
+    if (window.cypherGMTaskbar) {
+      global = window.cypherGMTaskbar._globalDifficulty;
+    }
+    if (!Number.isFinite(global)) {
+      try {
+        global = game.settings.get("cypher-gm-taskbar", "globalDifficulty");
+      } catch (e) { /* GM Taskbar not loaded */ }
+    }
+    if (!Number.isFinite(global)) {
+      try {
+        global = game.settings.get("cyphersystem", "rollDifficulty");
+      } catch (e) { /* Cypher System setting not available */ }
+    }
+    const hasGlobal = Number.isFinite(global);
+
+    // If individual is set and HIGHER than global, use individual; otherwise use global
+    if (hasIndividual && hasGlobal) {
+      return Math.max(0, Math.min(15, Math.max(individual, global)));
+    }
+    if (hasIndividual) return Math.max(0, Math.min(15, individual));
+    if (hasGlobal) return Math.max(0, Math.min(15, global));
     return null;
   }
 
@@ -7390,7 +8076,7 @@ class CypherTaskbar {
         <div class="ct-native-skill-roll-flavor-meta">Final Difficulty ${summary.finalDifficulty} \u00b7 Target ${summary.target || 0}</div>
         <div class="ct-native-skill-roll-flavor-meta">${foundry.utils.escapeHTML(summary.pool)} Pool ${summary.poolValue} \u2192 ${Math.max(0, summary.poolValue - spent)}${spent !== summary.effortCost ? ` (spent ${spent})` : ''}</div>
         ${specialEvent ? `<div class="ct-native-skill-roll-flavor-event"><strong>${foundry.utils.escapeHTML(specialEvent.title)}:</strong> ${foundry.utils.escapeHTML(specialEvent.text)}</div>` : ''}
-        <div class="ct-native-skill-roll-flavor-result">Achieved Difficulty ${achievedDifficulty}</div>
+        ${this._buildRollResultHtml(total, achievedDifficulty, summary.finalDifficulty, specialEvent)}
       </div>`;
     await roll.toMessage({
       speaker: ChatMessage.getSpeaker({ actor }),
@@ -7421,6 +8107,18 @@ class CypherTaskbar {
     if (!actor) return ui.notifications.warn("Select a character first.");
     if (!this._cypherXpActive()) return ui.notifications.warn("Cypher XP module is not active.");
 
+    // For reroll, ensure we have roll data and it's not stale (>10 min old)
+    if (spendType === "reroll") {
+      if (!this._lastRollData) {
+        return ui.notifications.warn("No recent roll to reroll. Make a roll first!");
+      }
+      const rollAge = Date.now() - (this._lastRollData.timestamp ?? 0);
+      if (rollAge > 600000) { // 10 minutes
+        this._lastRollData = null;
+        return ui.notifications.warn("Roll data is too old. Make a new roll first!");
+      }
+    }
+
     const xp = Number(actor.system?.basic?.xp ?? actor.system?.advancement?.xp ?? 0);
     if (xp < 1) return ui.notifications.warn("Not enough XP! You need at least 1 XP.");
 
@@ -7436,6 +8134,10 @@ class CypherTaskbar {
     // GM spends directly — no approval needed
     if (game.user?.isGM) {
       await this._doXpSpend(actor, spendType, label);
+      // If this was a reroll, perform it immediately for the GM
+      if (spendType === "reroll" && this._lastRollData) {
+        await this._performRerollFromData(this._lastRollData);
+      }
       return;
     }
 
@@ -7464,8 +8166,10 @@ class CypherTaskbar {
     // Include roll data for reroll so the player can perform it after approval
     if (spendType === "reroll" && this._lastRollData) {
       payload.rollData = foundry.utils.duplicate(this._lastRollData);
+      console.log(`[CT] Sending reroll request with rollData:`, payload.rollData);
     }
     game.socket.emit(`module.${MODULE_ID}`, payload);
+    console.log(`[CT] Socket emitted to module.${MODULE_ID}:`, payload);
     ui.notifications?.info?.(`XP spend request sent to GM: ${label} (1 XP).`);
   }
 
@@ -7496,8 +8200,14 @@ class CypherTaskbar {
   /** GM receives XP spend approval request from player */
   async _openGMXpSpendRequest(payload) {
     if (!game.user?.isGM) return;
-    const actor = game.actors?.get(payload.actorId);
-    if (!actor) return;
+
+    // Try to find actor — world actor first, then token actor
+    let actor = game.actors?.get(payload.actorId);
+    if (!actor) {
+      // Search canvas tokens for synthetic actor
+      const token = canvas?.tokens?.placeables?.find(t => t.actor?.id === payload.actorId);
+      actor = token?.actor;
+    }
 
     const spendIcons = {
       'reroll': 'fa-dice',
@@ -7509,18 +8219,27 @@ class CypherTaskbar {
     const iconClass = spendIcons[payload.spendType] || 'fa-star';
 
     const result = await this._showCustomModal({
-      width: 380,
+      width: 400,
       title: "XP Spend Request",
       content: `
-        <div class="ct-snark" style="padding:12px 4px 4px;">
-          <div class="ct-snark-frame" style="animation:none; padding:20px 16px 16px;">
-            <div class="ct-snark-icon" style="font-size:2em; animation:none; color:#ffd700;"><i class="fas ${iconClass}"></i></div>
-            <div class="ct-snark-title" style="font-size:1.2em;">${foundry.utils.escapeHTML(payload.userName)} wants to spend XP</div>
-            <div class="ct-snark-line">Character: <strong style="color:#c8a96e;">${foundry.utils.escapeHTML(payload.actorName)}</strong></div>
-            <div class="ct-snark-line">Action: <strong style="color:#f0d68a;">${foundry.utils.escapeHTML(payload.label)}</strong></div>
-            <div class="ct-snark-line">Cost: <strong style="color:#ffd700;">${payload.xpCost} XP</strong></div>
-            <div class="ct-snark-line" style="font-size:0.85em; color:#7a7a7a; margin-top:8px;">Approve to deduct XP and log the spend.</div>
+        <div class="ct-xp-request-body">
+          <div class="ct-xp-request-icon"><i class="fas ${iconClass}"></i></div>
+          <div class="ct-xp-request-user">${foundry.utils.escapeHTML(payload.userName)}</div>
+          <div class="ct-xp-request-sub">wants to spend XP</div>
+          <div class="ct-xp-request-divider"></div>
+          <div class="ct-xp-request-detail">
+            <span class="ct-xp-request-label">Character</span>
+            <span class="ct-xp-request-value">${foundry.utils.escapeHTML(payload.actorName)}</span>
           </div>
+          <div class="ct-xp-request-detail">
+            <span class="ct-xp-request-label">Action</span>
+            <span class="ct-xp-request-value">${foundry.utils.escapeHTML(payload.label)}</span>
+          </div>
+          <div class="ct-xp-request-detail">
+            <span class="ct-xp-request-label">Cost</span>
+            <span class="ct-xp-request-value ct-xp-request-cost">${payload.xpCost} XP</span>
+          </div>
+          <div class="ct-xp-request-hint">Approve to deduct XP and log the spend.</div>
         </div>`,
       buttons: [
         { label: "Allow", action: "approve", className: "ct-modal-btn ct-modal-btn-primary" },
@@ -7529,6 +8248,10 @@ class CypherTaskbar {
     });
 
     if (result === "approve") {
+      if (!actor) {
+        ui.notifications?.warn?.(`Cannot approve XP spend: actor "${payload.actorName}" not found on canvas.`);
+        return;
+      }
       await this._doXpSpend(actor, payload.spendType, payload.label);
       // Notify player
       const approvalPayload = {
@@ -7557,11 +8280,15 @@ class CypherTaskbar {
 
   _onXpSpendApproved(payload) {
     if (game.user.id !== payload.targetUserId) return;
+    console.log(`[CT] XP spend approved:`, payload);
     ui.notifications?.info?.(`GM approved: Spent 1 XP on ${payload.label} for ${payload.actorName}.`);
     this._pendingXpRequests?.delete?.(payload.requestId);
     // If this was a reroll approval, perform the reroll now
     if (payload.spendType === "reroll" && payload.rollData) {
+      console.log(`[CT] Performing reroll with data:`, payload.rollData);
       this._performRerollFromData(payload.rollData);
+    } else {
+      console.log(`[CT] Not a reroll or no rollData. spendType=${payload.spendType}, hasRollData=${!!payload.rollData}`);
     }
   }
 
@@ -7571,28 +8298,34 @@ class CypherTaskbar {
     this._pendingXpRequests?.delete?.(payload.requestId);
   }
 
-  /** Reroll last attribute check, spending 1 XP */
-  async _rerollLast() {
+  /** Perform reroll from saved roll data (GM approval path — no additional XP spend) */
+  async _performRerollFromData(rollData) {
+    console.log(`[CT] _performRerollFromData called with:`, rollData);
     const actor = this.actor;
     if (!actor) return ui.notifications.warn("Select a character first.");
-    if (!this._lastRollData) return ui.notifications.warn("No recent roll to reroll.");
-    const xp = Number(actor.system?.basic?.xp ?? actor.system?.advancement?.xp ?? 0);
-    if (xp < 1) return ui.notifications.warn("Not enough XP! You need at least 1 XP to reroll.");
+    if (!rollData) return ui.notifications.warn("No roll data available for reroll.");
 
-    const api = this._getXpApi();
-    if (api?.logSpend) {
-      try {
-        await api.logSpend(actor, {
-          spendType: 'reroll',
-          amount: 1,
-          note: `Reroll ${this._lastRollData.pool}`
+    // If this was a skill/attack roll, reroll with the same skill item
+    if (rollData.skillItemId) {
+      const skillItem = actor.items.get(rollData.skillItemId);
+      if (skillItem) {
+        console.log(`[CT] Rerolling skill: ${skillItem.name}`);
+        await this._performNativeSkillRoll(actor, skillItem, {
+          baseDifficulty: rollData.baseDifficulty,
+          assets: rollData.assets,
+          effort: rollData.effort,
+          easedBy: rollData.easedBy,
+          hinderedBy: rollData.hinderedBy
         });
-      } catch (err) {
-        console.error(`${MODULE_ID} | XP spend for reroll failed:`, err);
+        ui.notifications.info(`Rerolled ${skillItem.name} (XP already spent).`);
+        return;
+      } else {
+        ui.notifications.warn(`Skill "${rollData.skillName ?? 'Unknown'}" no longer exists. Falling back to attribute roll.`);
       }
     }
 
-    const { pool, baseDifficulty, assets, effort, easedBy, hinderedBy } = this._lastRollData;
+    const { pool, baseDifficulty, assets, effort, easedBy, hinderedBy } = rollData;
+    console.log(`[CT] Rerolling ${pool} with difficulty ${baseDifficulty}`);
     await this._performAttributeRoll(actor, pool, {
       baseDifficulty,
       assets,
@@ -7600,7 +8333,7 @@ class CypherTaskbar {
       easedBy,
       hinderedBy
     });
-    ui.notifications.info(`Rerolled ${pool} (1 XP spent).`);
+    ui.notifications.info(`Rerolled ${pool} (XP already spent).`);
   }
 
   async _adjustPool(poolKey, delta) {
@@ -7679,26 +8412,56 @@ class CypherTaskbar {
     if (!this._isHandEligible(app, element)) return;
     const el = element || (app?.element?.[0] ?? app?.element);
     if (!el) return;
-    const header = el.querySelector(".window-header") ?? el.querySelector("header");
+
+    // ── Cypher Almanach support: custom .almanach-header ──
+    const isAlmanach = el.classList?.contains("cypher-almanach-window") ||
+                       el.querySelector(".almanach-header") !== null ||
+                       app?.constructor?.name === "CypherAlmanachSheet";
+    let header = null;
+    if (isAlmanach) {
+      header = el.querySelector(".almanach-header");
+    }
+    if (!header) {
+      header = el.querySelector(".window-header") ?? el.querySelector("header");
+    }
     if (!header || header.querySelector(".ct-hand-btn")) return;
+
     const hand = document.createElement("a");
     hand.className = "header-button ct-hand-btn";
     hand.title = "Drag to add to People/Places/Assets/Secrets";
     hand.draggable = true;
     hand.innerHTML = '<i class="fas fa-hand-paper"></i>';
     const docInfo = this._resolveWindowDoc(app, el);
+    if (docInfo) hand.dataset.docInfo = JSON.stringify(docInfo);
+
     hand.addEventListener("dragstart", (e) => {
       e.stopPropagation();
+      // ── Remove any image overlay so drop isn't blocked ──
+      this._removeImageOverlays(el);
       if (docInfo) {
         e.dataTransfer.setData("text/plain", JSON.stringify(docInfo));
         e.dataTransfer.effectAllowed = "copy";
       }
     });
     // Prevent window drag: block all pointer/mouse events from reaching header drag handlers
-    const _block = (e) => { e.stopPropagation(); };
     hand.addEventListener("mousedown", (e) => { e.stopPropagation(); });
     hand.addEventListener("pointerdown", (e) => { e.stopPropagation(); });
     hand.addEventListener("touchstart", (e) => { e.stopPropagation(); }, { passive: false });
+
+    // ── Placement logic ──
+    if (isAlmanach) {
+      // Almanach: place hand before the close button inside .almanach-controls
+      const closeBtn = header.querySelector("[data-action='closeWindow']");
+      if (closeBtn) {
+        closeBtn.before(hand);
+      } else {
+        const controls = header.querySelector(".almanach-controls");
+        if (controls) controls.appendChild(hand);
+        else header.appendChild(hand);
+      }
+      return;
+    }
+
     // Journal: place hand between close button and copy UUID button
     const isJournal = (docInfo?.type === "JournalEntry") ||
       (app?.constructor?.name?.includes("Journal"));
@@ -7855,6 +8618,7 @@ class CypherTaskbar {
     hand.draggable = true;
     hand.innerHTML = '<i class="fas fa-hand-paper"></i>';
     const payload = { uuid: scene.uuid, name: scene.name, img: scene.thumbnail, type: "Scene" };
+    hand.dataset.docInfo = JSON.stringify(payload);
     hand.addEventListener("dragstart", (e) => {
       e.stopPropagation();
       e.dataTransfer.setData("text/plain", JSON.stringify(payload));
@@ -7862,6 +8626,151 @@ class CypherTaskbar {
     });
     hand.addEventListener("mousedown", (e) => e.stopPropagation());
     activeEntry.appendChild(hand);
+  }
+
+  /**
+   * Remove any overlay elements that block drag/drop on image windows.
+   * Called when hand drag starts so the image can be dropped on mini menus.
+   */
+  _removeImageOverlays(windowEl) {
+    if (!windowEl) return;
+    // Common overlay selectors in Foundry image viewers / lightboxes
+    const overlaySelectors = [
+      ".image-popout-overlay",
+      ".lightbox-overlay",
+      ".image-overlay",
+      ".dark-overlay",
+      ".overlay",
+      ".journal-image-overlay",
+      "[data-overlay]",
+      ".fullscreen-overlay"
+    ];
+    for (const sel of overlaySelectors) {
+      windowEl.querySelectorAll(sel).forEach(overlay => {
+        overlay.style.pointerEvents = "none";
+        overlay.style.display = "none";
+      });
+    }
+    // Also check for any absolutely-positioned dark overlays inside the window
+    windowEl.querySelectorAll("div").forEach(div => {
+      const style = window.getComputedStyle(div);
+      const isOverlayLike =
+        style.position === "fixed" || style.position === "absolute" ||
+        (style.backgroundColor && style.backgroundColor !== "rgba(0, 0, 0, 0)" &&
+         parseFloat(style.opacity) > 0.3 &&
+         div !== windowEl);
+      if (isOverlayLike && div.clientWidth > window.innerWidth * 0.5 && div.clientHeight > window.innerHeight * 0.5) {
+        // Likely a fullscreen overlay — disable pointer events but keep visible
+        div.style.pointerEvents = "none";
+      }
+    });
+  }
+
+  /**
+   * Show context menu on right-click of the blue hand.
+   * Allows transferring the object to a mini container without dragging.
+   */
+  _showHandContextMenu(event, docInfo) {
+    // Remove any existing hand context menu
+    document.querySelectorAll(".ct-hand-context-menu").forEach(m => m.remove());
+
+    if (!docInfo) return;
+
+    const menu = document.createElement("div");
+    menu.className = "ct-hand-context-menu";
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+
+    const options = [
+      { key: "People", label: "People", icon: "fa-users", color: "#8fbc8f" },
+      { key: "Places", label: "Places", icon: "fa-map-marker-alt", color: "#c4a86b" },
+      { key: "Documents", label: "Documents", icon: "fa-book", color: "#4a90d9" },
+      { key: "Secrets", label: "Secrets", icon: "fa-user-secret", color: "#9b59b6" },
+      { key: "Scenes", label: "Scenes", icon: "fa-map", color: "#e74c3c" },
+      { key: "Notes", label: "Notes", icon: "fa-sticky-note", color: "#f39c12" }
+    ];
+
+    options.forEach(opt => {
+      const item = document.createElement("div");
+      item.className = "ct-hand-context-item";
+      item.innerHTML = `<i class="fas ${opt.icon}" style="color:${opt.color}"></i> <span>${opt.label}</span>`;
+      item.addEventListener("click", async () => {
+        menu.remove();
+        document.removeEventListener("click", outsideClick);
+        await this._transferToMiniContainer(docInfo, opt.key);
+      });
+      menu.appendChild(item);
+    });
+
+    document.body.appendChild(menu);
+
+    // Close on outside click
+    const outsideClick = (e) => {
+      if (!menu.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener("click", outsideClick);
+      }
+    };
+    setTimeout(() => document.addEventListener("click", outsideClick), 0);
+  }
+
+  /**
+   * Transfer an object (from hand drag or context menu) to a mini container.
+   */
+  async _transferToMiniContainer(data, key) {
+    if (!data || (!data.uuid && !data.img)) return;
+    const actor = this.actor;
+    if (!actor) { ui.notifications.warn("No character assigned."); return; }
+
+    const title = key.toUpperCase();
+    const color = { People: "#8fbc8f", Places: "#c4a86b", Documents: "#4a90d9", Secrets: "#9b59b6", Scenes: "#e74c3c", Notes: "#f39c12" }[key] || "#c8a96e";
+    const stored = this._gjson(`mini${key}`) || [];
+
+    // Deduplicate
+    if (data.uuid && stored.some(s => s.uuid === data.uuid)) { ui.notifications.info("Already in this container."); return; }
+    if (!data.uuid && data.img && stored.some(s => s.img === data.img)) { ui.notifications.info("Already in this container."); return; }
+
+    let name = data.name || "Unknown";
+    let img = data.img || "icons/svg/book.svg";
+    let itemIcon = null;
+
+    if (data.uuid) {
+      try {
+        const doc = await fromUuid(data.uuid);
+        if (doc) {
+          name = doc.name || name;
+          img = await this._resolveMiniItemImage(doc);
+        }
+      } catch { /* ignore */ }
+      if (!img || img === "icons/svg/book.svg") {
+        const typeIcons = { Actor: "fas fa-user", JournalEntry: "fas fa-book", Scene: "fas fa-map", Item: "fas fa-box", Macro: "fas fa-play-circle", RollTable: "fas fa-dice-d20" };
+        itemIcon = typeIcons[data.uuid.split(".")[0]] || "fas fa-tag";
+      }
+    }
+
+    stored.push({ uuid: data.uuid || null, name, img, icon: itemIcon, color });
+    this._ss(`mini${key}`, JSON.stringify(stored));
+    ui.notifications?.info?.(`"${name}" added to ${title}.`);
+
+    // If popup is open for this container, refresh it
+    const popup = document.querySelector("#ct-mini-popup");
+    if (popup) {
+      const itemsEl = popup.querySelector("#ct-mini-items");
+      if (itemsEl) {
+        const esc = foundry.utils.escapeHTML;
+        const showT = this._gs("miniMenuShowTitle") !== false;
+        const titleAttr = showT ? '' : ' style="display:none;"';
+        itemsEl.innerHTML = stored.map((it, idx) => {
+          const hasImg = it.img && it.img !== "icons/svg/book.svg";
+          const iconHtml = hasImg
+            ? `<img src="${it.img}" alt="" draggable="false" onerror="this.src='icons/svg/book.svg'">`
+            : it.icon
+              ? `<i class="${it.icon} ct-book-fa-icon" style="color:${it.color || color}"></i>`
+              : `<img src="icons/svg/book.svg" alt="" draggable="false">`;
+          return `<div class="ct-mini-item" data-mini-idx="${idx}">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(it.name || 'Unknown')}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${JSON.stringify({ uuid: it.uuid || null, name: it.name || 'Unknown', img: it.img || '' }).replace(/"/g, '&quot;')}" title="Drag: ${esc(it.name || 'Unknown')}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
+        }).join('');
+      }
+    }
   }
 
   _minimizeWindow(app) {
@@ -8010,7 +8919,12 @@ class CypherTaskbar {
         // File pickers
         html.find("[data-file-picker]").on("click", async function() {
           const key = this.dataset.filePicker;
-          const fp = new FilePicker({
+          const FilePickerClass = foundry.applications?.apps?.FilePicker?.implementation;
+          if (!FilePickerClass) {
+            ui.notifications?.error?.("File picker not available.");
+            return;
+          }
+          const fp = new FilePickerClass({
             type: "image",
             current: html.find(`#ct-bg-image-${key}`).val(),
             callback: (path) => {
@@ -8019,7 +8933,7 @@ class CypherTaskbar {
               preview.css({ "background-image": `url('${path.replace(/'/g, "%27")}')`, display: "block" });
             }
           });
-          await fp.browse();
+          fp.render(true);
         });
       }
     }, { width: 520, classes: ["dialog", "cypher-taskbar-dialog"] });
@@ -8131,6 +9045,7 @@ Hooks.once("ready", () => {
       return;
     }
     if (payload.type === "xpSpendApproved") {
+      console.log(`[CT] Received xpSpendApproved:`, payload);
       CypherTaskbar.instance?._onXpSpendApproved(payload);
       return;
     }
@@ -8167,6 +9082,56 @@ Hooks.once("ready", () => {
         ui.notifications.error("Roll dialog failed to open. Check console (F12) for details.");
       }
       return;
+    }
+  });
+
+  /* ── GM Taskbar GROUP ROLL REQUESTS ── */
+  game.socket.on("module.cypher-gm-taskbar", async (payload) => {
+    if (!payload || payload.action !== "groupRollRequest") return;
+    if (game.user?.isGM) return; // Only players respond
+
+    const actor = game.user?.character;
+    if (!actor || actor.type !== "pc") return;
+    if (!actor.isOwner) return;
+
+    const { type, subtype, difficulty } = payload;
+    const gmDiff = Number.isFinite(difficulty) ? Math.max(0, Math.min(15, difficulty)) : null;
+
+    try {
+      if (type === "attribute" || type === "defense") {
+        const poolName = subtype.charAt(0).toUpperCase() + subtype.slice(1).toLowerCase();
+        const title = type === "defense" ? `${poolName} Defense` : poolName;
+        ui.notifications.info(`GM is calling for a ${title} roll!`);
+        await CypherTaskbar.instance?._openNativeAttributeRollDialog(actor, poolName, {
+          title: `Roll ${title}`,
+          presetDifficulty: gmDiff
+        });
+      } else if (type === "skill") {
+        const skillName = subtype.charAt(0).toUpperCase() + subtype.slice(1).toLowerCase();
+        const skill = actor.items.find(i => i.type === "skill" && i.name.toLowerCase() === skillName.toLowerCase());
+        if (skill) {
+          ui.notifications.info(`GM is calling for a ${skill.name} roll!`);
+          await CypherTaskbar.instance?._openNativeSkillRollDialog(actor, skill, gmDiff);
+        } else {
+          ui.notifications.warn(`You don't have a skill named "${skillName}". Opened a raw ${skillName} attribute roll instead.`);
+          await CypherTaskbar.instance?._openNativeAttributeRollDialog(actor, skillName, {
+            title: `Roll ${skillName}`,
+            presetDifficulty: gmDiff
+          });
+        }
+      } else if (type === "free") {
+        const die = subtype === "d100" ? "d100" : (subtype === "d6" ? "d6" : "d20");
+        ui.notifications.info(`GM is calling for a ${die} roll!`);
+        const roll = await new Roll(`1${die}`).evaluate();
+        await roll.toMessage({
+          speaker: ChatMessage.getSpeaker({ actor }),
+          flavor: `GM Group Roll — ${die}`,
+          rollMode: "publicroll"
+        });
+      }
+    } catch (err) {
+      console.warn("[CypherTaskbar] GM Group Roll request failed:", err);
+      ui.notifications.error("Roll request failed. Check console (F12) for details.");
     }
   });
 
@@ -8313,6 +9278,72 @@ Hooks.on("renderApplication", (app) => { CypherTaskbar.instance?._injectMinimize
 Hooks.on("closeApplication", () => CypherTaskbar.instance?.refreshTray());
 Hooks.on("renderApplicationV2", (app) => { CypherTaskbar.instance?._injectMinimizeButton(app); CypherTaskbar.instance?.refreshTray(); });
 Hooks.on("closeApplicationV2", () => CypherTaskbar.instance?.refreshTray());
+
+Hooks.on("renderRollEngineDialogSheet", (app, html, data) => {
+  const actor = fromUuidSync(app.object?.actorUuid);
+  if (!actor) return;
+  // Only apply to the current player's owned actor
+  if (!actor.isOwner) return;
+
+  // Determine target difficulty: individual vs global — use the HIGHER of the two
+  const individual = actor.getFlag("cypher-gm-taskbar", "targetDifficulty");
+  let global = null;
+  if (window.cypherGMTaskbar) {
+    global = window.cypherGMTaskbar._globalDifficulty;
+  }
+  if (!Number.isFinite(global)) {
+    try { global = game.settings.get("cypher-gm-taskbar", "globalDifficulty"); } catch (e) {}
+  }
+  if (!Number.isFinite(global)) {
+    try { global = game.settings.get("cyphersystem", "rollDifficulty"); } catch (e) {}
+  }
+
+  let difficulty;
+  if (Number.isFinite(individual) && Number.isFinite(global)) {
+    difficulty = Math.max(individual, global);
+  } else if (Number.isFinite(individual)) {
+    difficulty = individual;
+  } else if (Number.isFinite(global)) {
+    difficulty = global;
+  } else {
+    return;
+  }
+
+  difficulty = parseInt(difficulty, 10);
+  if (isNaN(difficulty) || difficulty < 0 || difficulty > 15) return;
+
+  // Prevent infinite loops
+  if (app._ctAppliedActor === actor.id && app._ctAppliedDifficulty === difficulty) return;
+
+  // Respect user's manual changes
+  const dom = html[0] || html;
+  const select = dom.querySelector?.('select[name="baseDifficulty"]') || dom.querySelector?.('select.base-difficulty');
+  if (select) {
+    const currentVal = parseInt(select.value, 10);
+    if (app._ctAppliedActor === actor.id &&
+        app._ctAppliedDifficulty !== undefined &&
+        !isNaN(currentVal) &&
+        currentVal !== app._ctAppliedDifficulty) {
+      app._ctUserChanged = true;
+    }
+  }
+  if (app._ctUserChanged) return;
+
+  app._ctAppliedActor = actor.id;
+  app._ctAppliedDifficulty = difficulty;
+
+  // Apply to backing data
+  app.object.baseDifficulty = difficulty;
+
+  // Apply to DOM
+  if (select) {
+    const strVal = String(difficulty);
+    if (select.value !== strVal) {
+      select.value = strVal;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+});
 
 // Catch-all hooks for specific sheet types to ensure minimize button appears on every window
 const _ctInjectMinimize = (app) => CypherTaskbar.instance?._injectMinimizeButton(app);

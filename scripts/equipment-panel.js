@@ -1347,7 +1347,13 @@ export function applyEquipmentPanel(CypherTaskbar) {
       const isWeaponActive = subTab === "weapon" && !this._combatFloatingOpen;
       const isArmorActive = subTab === "armor";
 
-      return `<div class="ct-equipment-tabs-wrapper"><div class="ct-equipment-main">${equipmentPanel}</div><div class="ct-equipment-side-tabs"><div class="ct-equipment-side-tab${isHomeActive ? ' active' : ''}" data-equipment-tab="home" title="All Equipment"><i class="fas fa-house"></i><span>Home</span></div><div class="ct-equipment-side-tab${isEquipActive ? ' active' : ''}" data-equipment-tab="equip" title="Equipment Doll"><i class="fas fa-shirt"></i><span>Equip</span></div><div class="ct-equipment-side-tab${isWeaponActive ? ' active' : ''}" data-equipment-tab="weapon" title="Weapons & Ammo"><i class="fas fa-khanda"></i><span>Weapon</span></div><div class="ct-equipment-side-tab${isArmorActive ? ' active' : ''}" data-equipment-tab="armor" title="Armor & Shields"><i class="fas fa-shield-halved"></i><span>Armor</span></div></div></div>`;
+      const hideTabs = game.settings.get(MODULE_ID, "hideEquipmentTabs") && !game.user.isGM;
+      const subTabsHtml = hideTabs ? "" : `
+        <div class="ct-equipment-side-tab${isEquipActive ? ' active' : ''}" data-equipment-tab="equip" title="Equipment Doll"><i class="fas fa-shirt"></i><span>Equip</span></div>
+        <div class="ct-equipment-side-tab${isWeaponActive ? ' active' : ''}" data-equipment-tab="weapon" title="Weapons & Ammo"><i class="fas fa-khanda"></i><span>Weapon</span></div>
+        <div class="ct-equipment-side-tab${isArmorActive ? ' active' : ''}" data-equipment-tab="armor" title="Armor & Shields"><i class="fas fa-shield-halved"></i><span>Armor</span></div>`;
+
+      return `<div class="ct-equipment-tabs-wrapper"><div class="ct-equipment-main">${equipmentPanel}</div><div class="ct-equipment-side-tabs"><div class="ct-equipment-side-tab${isHomeActive ? ' active' : ''}" data-equipment-tab="home" title="All Equipment"><i class="fas fa-house"></i><span>Home</span></div>${subTabsHtml}</div></div>`;
     },
 
     _bindEquipmentDnD(bar) {
