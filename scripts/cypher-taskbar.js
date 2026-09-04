@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v4.1.10
+ * Cypher Taskbar v4.1.65
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -6165,7 +6165,7 @@ class CypherTaskbar {
 
   /* ─── Portrait Menu — reads shared docs from GM Taskbar ─── */
   _openPortraitMenu(sourceBtn) {
-    const existing = document.querySelector("#ct-portrait-menu-popup");
+    const existing = document.querySelector("#ct-portrait-menu-wrapper");
     if (existing) { existing.remove(); return; }
     const actor = this.actor;
     if (!actor) { ui.notifications.warn("No character assigned."); return; }
@@ -6184,12 +6184,21 @@ class CypherTaskbar {
       sharedDocs = [];
     }
 
+    // Wrapper holds popup + side buttons (horizontal layout)
+    const wrapper = document.createElement("div");
+    wrapper.id = "ct-portrait-menu-wrapper";
+    wrapper.style.position = "fixed";
+    wrapper.style.zIndex = "10001";
+    wrapper.style.display = "flex";
+    wrapper.style.flexDirection = "row";
+    wrapper.style.alignItems = "flex-start";
+
     const popup = document.createElement("div");
     popup.id = "ct-portrait-menu-popup";
     popup.className = "ct-popup ct-portrait-menu-popup";
-    popup.style.position = "fixed";
-    popup.style.width = "260px";
-    popup.style.maxHeight = "360px";
+    popup.style.position = "relative";
+    popup.style.width = "500px";
+    popup.style.height = "600px";
     popup.style.overflow = "hidden";
     popup.style.display = "flex";
     popup.style.flexDirection = "column";
@@ -6216,34 +6225,52 @@ class CypherTaskbar {
       <div class="ct-popup-body" style="overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;">
         ${itemsHtml}
       </div>`;
-    document.body.appendChild(popup);
+
+    // Side buttons attached to right border of popup (vertical tabs)
+    const btnContainer = document.createElement("div");
+    btnContainer.className = "ct-portrait-menu-side-btns";
+    btnContainer.innerHTML = `
+      <button class="ct-portrait-side-btn ct-portrait-btn-gm" id="ct-portrait-gm-tasks" title="Open GM Tasks"><i class="fas fa-user-shield"></i><span>GM TASKS</span></button>
+      <button class="ct-portrait-side-btn ct-portrait-btn-my" id="ct-portrait-my-tasks" title="Open My Tasks"><i class="fas fa-clipboard-list"></i><span>MY TASKS</span></button>
+    `;
+
+    wrapper.appendChild(popup);
+    wrapper.appendChild(btnContainer);
+    document.body.appendChild(wrapper);
 
     // Position above the source button
     if (sourceBtn) {
       const rect = sourceBtn.getBoundingClientRect();
-      popup.style.left = `${rect.left}px`;
-      popup.style.bottom = `${window.innerHeight - rect.top + 6}px`;
-      popup.style.top = "auto";
-      popup.style.transform = "none";
+      wrapper.style.left = `${rect.left}px`;
+      wrapper.style.bottom = `${window.innerHeight - rect.top + 6}px`;
+      wrapper.style.top = "auto";
     } else {
-      popup.style.left = "50%";
-      popup.style.top = "50%";
-      popup.style.transform = "translate(-50%, -50%)";
+      wrapper.style.left = "50%";
+      wrapper.style.top = "50%";
+      wrapper.style.transform = "translate(-50%, -50%)";
     }
 
     requestAnimationFrame(() => popup.classList.add("is-open"));
 
+    // Slide-out helper
+    const _closePopup = () => {
+      popup.classList.remove("is-open");
+      popup.classList.add("is-closing");
+      popup.addEventListener("transitionend", () => {
+        wrapper.remove();
+      }, { once: true });
+      document.removeEventListener("click", _onDocClick);
+    };
+
     // Close on click outside
     const _onDocClick = (e) => {
-      if (!popup.contains(e.target) && !sourceBtn?.contains(e.target)) {
-        popup.remove();
-        document.removeEventListener("click", _onDocClick);
+      if (!wrapper.contains(e.target) && !sourceBtn?.contains(e.target)) {
+        _closePopup();
       }
     };
     requestAnimationFrame(() => document.addEventListener("click", _onDocClick));
     popup.querySelector("#ct-portrait-menu-close")?.addEventListener("click", () => {
-      popup.remove();
-      document.removeEventListener("click", _onDocClick);
+      _closePopup();
     });
 
     // Click to open journal
@@ -6252,6 +6279,26 @@ class CypherTaskbar {
         const doc = fromUuidSync(item.dataset.uuid);
         if (doc) doc.sheet.render(true);
       });
+    });
+
+    // GM TASKS button
+    btnContainer.querySelector("#ct-portrait-gm-tasks")?.addEventListener("click", () => {
+      _closePopup();
+      if (game.cypherGMTaskbar?.instance) {
+        game.cypherGMTaskbar.instance.toggleTaskbar();
+      } else {
+        ui.notifications.warn("GM Taskbar not available.");
+      }
+    });
+
+    // MY TASKS button
+    btnContainer.querySelector("#ct-portrait-my-tasks")?.addEventListener("click", () => {
+      _closePopup();
+      if (game.cypherTaskbar?.instance?._toggleTasksPanel) {
+        game.cypherTaskbar.instance._toggleTasksPanel();
+      } else {
+        ui.notifications.warn("Task panel not available.");
+      }
     });
   }
 

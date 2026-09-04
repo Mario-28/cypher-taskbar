@@ -11273,12 +11273,24 @@ backdrop-filter: blur(8px);
 
 /* ─── Portrait Menu Popup ─── */
 .ct-portrait-menu-popup {
-  background: rgba(12,12,16,0.95);
-  border: 1px solid rgba(200,169,110,0.35);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  background: rgba(12,12,16,0.92);
+  border: 1px solid rgba(200,169,110,0.25);
+  border-right: none;
+  border-radius: 12px 0 0 12px;
+  box-shadow: 0 0 40px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
   z-index: 9999;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(16px) saturate(1.2);
+  opacity: 0;
+  transform: translateX(-20px);
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ct-portrait-menu-popup.is-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+.ct-portrait-menu-popup.is-closing {
+  opacity: 0;
+  transform: translateX(-20px);
 }
 .ct-portrait-menu-popup .ct-popup-header {
   display: flex;
@@ -11326,6 +11338,100 @@ backdrop-filter: blur(8px);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ── Side buttons — sleek modern vertical tabs ── */
+.ct-portrait-menu-side-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-left: -1px;
+  filter: drop-shadow(4px 0 12px rgba(0,0,0,0.4));
+}
+.ct-portrait-side-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 64px;
+  padding: 28px 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.85);
+  cursor: pointer;
+  font-size: 0.58em;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  line-height: 1.35;
+  backdrop-filter: blur(12px);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  position: relative;
+  overflow: hidden;
+}
+.ct-portrait-side-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.ct-portrait-side-btn:hover::before {
+  opacity: 1;
+}
+.ct-portrait-side-btn:hover {
+  color: #fff;
+  transform: translateX(3px);
+  filter: brightness(1.1);
+}
+.ct-portrait-side-btn:first-child {
+  border-radius: 0 12px 0 0;
+}
+.ct-portrait-side-btn:last-child {
+  border-radius: 0 0 12px 0;
+  border-top: none;
+}
+.ct-portrait-side-btn i {
+  font-size: 1.5em;
+  writing-mode: horizontal-tb;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+  transition: transform 0.3s ease;
+}
+.ct-portrait-side-btn:hover i {
+  transform: scale(1.15);
+}
+.ct-portrait-btn-gm {
+  background: linear-gradient(180deg, rgba(200, 150, 60, 0.75), rgba(160, 110, 30, 0.85));
+}
+.ct-portrait-btn-gm::before {
+  background: linear-gradient(180deg, rgba(220, 180, 80, 0.3), transparent);
+}
+.ct-portrait-btn-gm:hover {
+  box-shadow: inset 0 0 20px rgba(220, 180, 80, 0.25), 0 0 16px rgba(200, 150, 60, 0.3);
+}
+.ct-portrait-btn-my {
+  background: linear-gradient(180deg, rgba(50, 130, 200, 0.75), rgba(30, 90, 160, 0.85));
+}
+.ct-portrait-btn-my::before {
+  background: linear-gradient(180deg, rgba(80, 170, 240, 0.3), transparent);
+}
+.ct-portrait-btn-my:hover {
+  box-shadow: inset 0 0 20px rgba(80, 170, 240, 0.25), 0 0 16px rgba(50, 130, 200, 0.3);
+}
+  font-size: 1.6em;
+  color: var(--ct-accent);
+}
+.ct-portrait-outside-btn:hover {
+  background: rgba(200, 169, 110, 0.15);
+  border-color: var(--ct-accent);
+  color: var(--ct-text-main);
+  transform: translateX(2px);
+}
+.ct-portrait-outside-btn:active {
+  transform: scale(0.97);
 }
 
 /* ═══ Custom Portrait Settings ═══════════════════════════════════════════ */
