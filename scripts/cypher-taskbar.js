@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v4.1.65
+ * Cypher Taskbar v4.1.75
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -42,12 +42,19 @@ class CypherTaskbar {
     this._cashPanelLocked = false;
     this._lastRollData = null; // Store last roll parameters for reroll
     this._xpApi = null;        // Cached Cypher XP API
+    this._acknowledgedTasks = new Set(); // Task IDs hovered/acknowledged by player
 
     // Listen for Cypher XP ready hook
     Hooks.on("cypher-xp.ready", (api) => {
       this._xpApi = api;
       console.log(`${MODULE_ID} | Cypher XP API ready`);
     });
+
+    // Listen for Cypher XP changes to update portrait panel immediately
+    Hooks.on("cypher-xp.immediateSpend", ({ actor }) => { this._onXpChanged(actor); });
+    Hooks.on("cypher-xp.xpAwarded", ({ actor }) => { this._onXpChanged(actor); });
+    Hooks.on("cypher-xp.intrusionRecorded", ({ actor }) => { this._onXpChanged(actor); });
+    Hooks.on("cypher-xp.purchaseApplied", ({ actor }) => { this._onXpChanged(actor); });
 
     // ── Global right-click handler for ALL blue hands (works even through overlays) ──
     document.addEventListener("contextmenu", (e) => {
@@ -308,6 +315,7 @@ class CypherTaskbar {
       this.refreshTray();
       this._refreshCombatPlaceholder();
       this._setupPortraitAnim();
+      this._updatePortraitTaskFlash();
       this._adjustCanvasPadding(
         this._gs("locked") || !this._gs("autoHide")
       );
@@ -611,6 +619,35 @@ class CypherTaskbar {
         <div class="ct-xp-counter" title="Current XP"><i class="fas fa-star"></i><span>${xp}</span></div>
         <div class="ct-xp-spend-buttons">${buttons}</div>
       </div>`;
+  }
+
+  /** Called when Cypher XP changes — update portrait XP counter immediately */
+  _onXpChanged(actor) {
+    if (!actor || actor.id !== this.actor?.id) return;
+    this.actor = actor; // sync ref
+    this._refreshXpCounter();
+  }
+
+  /** Refresh just the XP counter in the portrait panel (no full re-render) */
+  _refreshXpCounter() {
+    const floatEl = this.element?.querySelector("#ct-char-float");
+    if (!floatEl || !this.actor) return;
+    const xp = Number(this.actor.system?.basic?.xp ?? this.actor.system?.advancement?.xp ?? 0);
+    // Update XP spend bar counter
+    const spendBar = floatEl.querySelector(".ct-xp-spend-bar");
+    if (spendBar) {
+      const counter = spendBar.querySelector(".ct-xp-counter span");
+      if (counter) counter.textContent = String(xp);
+    }
+    // Also update legacy XP container if present
+    const xpContainer = floatEl.querySelector(".ct-xp-container");
+    if (xpContainer) {
+      const xpBar = xpContainer.querySelector(".ct-xp-bar");
+      const xpDisplay = Math.max(0, Math.min(10, xp));
+      if (xpBar) xpBar.style.width = `${(xpDisplay / 10) * 100}%`;
+      const segments = xpContainer.querySelectorAll(".ct-xp-segment");
+      segments.forEach((seg, idx) => seg.classList.toggle("filled", idx < xpDisplay));
+    }
   }
 
   _getActorDamageStatus(actor) {
@@ -6282,13 +6319,10 @@ class CypherTaskbar {
     });
 
     // GM TASKS button
+    // GM TASKS button — open GM Tasks panel
     btnContainer.querySelector("#ct-portrait-gm-tasks")?.addEventListener("click", () => {
       _closePopup();
-      if (game.cypherGMTaskbar?.instance) {
-        game.cypherGMTaskbar.instance.toggleTaskbar();
-      } else {
-        ui.notifications.warn("GM Taskbar not available.");
-      }
+      this._openGMTasksPanel();
     });
 
     // MY TASKS button
@@ -7063,7 +7097,7 @@ class CypherTaskbar {
         if (valueSpan) valueSpan.textContent = String(val);
       });
 
-      // Update XP bar
+      // Update XP bar (legacy container)
       const xpContainer = floatEl.querySelector(".ct-xp-container");
       if (xpContainer) {
         const xpBar = xpContainer.querySelector(".ct-xp-bar");
@@ -7074,6 +7108,20 @@ class CypherTaskbar {
         segments.forEach((seg, idx) => {
           seg.classList.toggle("filled", idx < xpDisplay);
         });
+      }
+
+      // Update Cypher XP spend bar counter immediately
+      this._refreshXpCounter();
+
+      // Update recovery drops
+      const oldRecBar = floatEl.querySelector(".ct-recovery-bar");
+      if (oldRecBar) {
+        const newRecHtml = this._buildRecoveryRolls(actor);
+        if (newRecHtml) {
+          const tmp = document.createElement("div");
+          tmp.innerHTML = newRecHtml;
+          oldRecBar.replaceWith(tmp.firstElementChild);
+        }
       }
     }
 
@@ -8181,6 +8229,7 @@ class CypherTaskbar {
     // GM spends directly — no approval needed
     if (game.user?.isGM) {
       await this._doXpSpend(actor, spendType, label);
+      this.render(); // Refresh XP bar
       // If this was a reroll, perform it immediately for the GM
       if (spendType === "reroll" && this._lastRollData) {
         await this._performRerollFromData(this._lastRollData);
@@ -8330,6 +8379,8 @@ class CypherTaskbar {
     console.log(`[CT] XP spend approved:`, payload);
     ui.notifications?.info?.(`GM approved: Spent 1 XP on ${payload.label} for ${payload.actorName}.`);
     this._pendingXpRequests?.delete?.(payload.requestId);
+    // Refresh the XP bar to show updated XP count
+    this.render();
     // If this was a reroll approval, perform the reroll now
     if (payload.spendType === "reroll" && payload.rollData) {
       console.log(`[CT] Performing reroll with data:`, payload.rollData);
@@ -8986,6 +9037,412 @@ class CypherTaskbar {
     }, { width: 520, classes: ["dialog", "cypher-taskbar-dialog"] });
     dialog.render(true);
   }
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  //  GM TASKS SYSTEM — Player → GM task management
+  // ═════════════════════════════════════════════════════════════════════════════
+
+  /** Get GM tasks from actor flags */
+  _getGMTasks() {
+    return this.actor?.getFlag(MODULE_ID, "gmTasks") ?? [];
+  }
+
+  /** Save GM tasks to actor flags */
+  async _setGMTasks(tasks) {
+    if (!this.actor) return;
+    await this.actor.setFlag(MODULE_ID, "gmTasks", tasks);
+  }
+
+  /** Update portrait menu button flash state based on unacknowledged GM task notes/resolutions */
+  _updatePortraitTaskFlash() {
+    const btn = this.element?.querySelector(".ct-portrait-menu-btn");
+    if (!btn) return;
+    const tasks = this._getGMTasks();
+    const unackNote = tasks.some(t => t.gmNote && t.gmNote.trim() && !this._acknowledgedTasks.has(t.id));
+    const unackResolved = tasks.some(t => t.resolved && !this._acknowledgedTasks.has(t.id));
+    btn.classList.toggle("ct-portrait-note-flash", unackNote);
+    btn.classList.toggle("ct-portrait-resolved-flash", !unackNote && unackResolved);
+  }
+
+  /** Open the GM Tasks panel */
+  _openGMTasksPanel() {
+    const existing = document.querySelector("#ct-gm-tasks-wrapper");
+    if (existing) { existing.remove(); return; }
+
+    const wrapper = document.createElement("div");
+    wrapper.id = "ct-gm-tasks-wrapper";
+    wrapper.style.cssText = "position:fixed;z-index:10002;left:50%;top:50%;transform:translate(-50%,-50%);";
+
+    const panel = document.createElement("div");
+    panel.id = "ct-gm-tasks-panel";
+    panel.className = "ct-popup ct-gm-tasks-panel";
+    panel.style.cssText = "position:relative;width:520px;height:640px;display:flex;flex-direction:column;overflow:hidden;";
+
+    const tasks = this._getGMTasks();
+    const esc = foundry.utils.escapeHTML;
+
+    panel.innerHTML = `
+      <div class="ct-popup-header">
+        <span style="color:#c8a96e"><i class="fas fa-tasks"></i> GM TASKS</span>
+        <div class="ct-popup-header-actions">
+          <button class="ct-popup-action-btn" id="ct-gm-tasks-add" title="New Task"><i class="fas fa-plus"></i></button>
+          <button class="ct-popup-close" id="ct-gm-tasks-close" title="Close"><i class="fas fa-times"></i></button>
+        </div>
+      </div>
+      <div class="ct-popup-body ct-gm-tasks-body" id="ct-gm-tasks-list" style="flex:1;overflow-y:auto;min-height:0;">
+        ${tasks.length === 0 ? `<div class="ct-gm-tasks-empty"><i class="fas fa-clipboard-list"></i><p>No tasks yet. Click + to create one!</p></div>` : ""}
+      </div>`;
+
+    wrapper.appendChild(panel);
+    document.body.appendChild(wrapper);
+
+    requestAnimationFrame(() => {
+      panel.classList.add("is-open");
+      this._renderGMTasksList(panel.querySelector("#ct-gm-tasks-list"));
+      this._updatePortraitTaskFlash();
+    });
+
+    const _closePanel = () => {
+      panel.classList.remove("is-open");
+      panel.classList.add("is-closing");
+      const tt = document.querySelector("#ct-gm-task-tooltip");
+      if (tt) tt.classList.remove("ct-gm-task-tt-visible");
+      panel.addEventListener("transitionend", () => wrapper.remove(), { once: true });
+    };
+
+    panel.querySelector("#ct-gm-tasks-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      _closePanel();
+    });
+
+    panel.querySelector("#ct-gm-tasks-add")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._openGMTaskForm();
+    });
+  }
+
+  /** Render the GM tasks list into a container */
+  _renderGMTasksList(container) {
+    const tasks = this._getGMTasks();
+    const esc = foundry.utils.escapeHTML;
+    if (!container) return;
+
+    if (tasks.length === 0) {
+      container.innerHTML = `<div class="ct-gm-tasks-empty"><i class="fas fa-clipboard-list"></i><p>No tasks yet. Click + to create one!</p></div>`;
+      return;
+    }
+
+    const priorityConfig = {
+      high:   { label: "YESTERDAY", color: "#ff4444", icon: "fa-exclamation-circle" },
+      medium: { label: "NOT SO MUCH", color: "#ffaa00", icon: "fa-clock" },
+      low:    { label: "CAN WAIT", color: "#44cc44", icon: "fa-coffee" }
+    };
+
+    const typeIcons = {
+      message: "fa-comment",
+      reminder: "fa-bell",
+      "generate image": "fa-image",
+      create: "fa-plus-circle",
+      delete: "fa-trash",
+      explain: "fa-question-circle",
+      write: "fa-pen",
+      other: "fa-ellipsis-h"
+    };
+
+    container.innerHTML = tasks.map((task, idx) => {
+      const p = priorityConfig[task.priority] || priorityConfig.medium;
+      const tIcon = typeIcons[task.type] || "fa-ellipsis-h";
+      const hasNote = task.gmNote && task.gmNote.trim();
+      const isResolved = !!task.resolved;
+      const rowClasses = [
+        "ct-gm-task-item",
+        hasNote ? "has-gm-note" : "",
+        isResolved ? "is-resolved" : ""
+      ].filter(Boolean).join(" ");
+      const noteHtml = hasNote
+        ? `<div class="ct-gm-task-note-box"><i class="fas fa-sticky-note"></i> <strong>GM Note:</strong> ${esc(task.gmNote)}</div>`
+        : "";
+      const resolvedLabel = isResolved
+        ? `<span class="ct-gm-task-resolved-label"><i class="fas fa-check-circle"></i> RESOLVED</span>`
+        : "";
+      return `
+        <div class="${rowClasses}" data-task-idx="${idx}" data-task-id="${task.id}">
+          <div class="ct-gm-task-priority" style="--ct-priority-color:${p.color}" title="${p.label}">
+            <i class="fas ${p.icon}"></i>
+          </div>
+          <div class="ct-gm-task-content">
+            <div class="ct-gm-task-title">${esc(task.title || "Untitled")}${resolvedLabel}</div>
+            <div class="ct-gm-task-desc-short">${esc(task.description || "")}</div>
+            ${noteHtml}
+            <div class="ct-gm-task-meta">
+              <span class="ct-gm-task-type"><i class="fas ${tIcon}"></i> ${esc(task.type || "other")}</span>
+              <span class="ct-gm-task-date">${new Date(task.createdAt).toLocaleDateString()}</span>
+            </div>
+          </div>
+          <div class="ct-gm-task-actions">
+            <button class="ct-gm-task-edit" data-edit-idx="${idx}" title="Edit"><i class="fas fa-pen"></i></button>
+            <button class="ct-gm-task-delete" data-delete-idx="${idx}" title="Delete"><i class="fas fa-trash"></i></button>
+          </div>
+        </div>`;
+    }).join("");
+
+    // Shared body tooltip (never clipped by parent overflow)
+    let tooltip = document.querySelector("#ct-gm-task-tooltip");
+    if (!tooltip) {
+      tooltip = document.createElement("div");
+      tooltip.id = "ct-gm-task-tooltip";
+      document.body.appendChild(tooltip);
+    }
+
+    container.querySelectorAll(".ct-gm-task-item").forEach(item => {
+      const idx = parseInt(item.dataset.taskIdx);
+      const task = tasks[idx];
+      const p = priorityConfig[task.priority] || priorityConfig.medium;
+      const tIcon = typeIcons[task.type] || "fa-ellipsis-h";
+
+      item.addEventListener("mouseenter", () => {
+        // Mark task as acknowledged — stops portrait flashing for this task
+        if (task.id) this._acknowledgedTasks.add(task.id);
+        this._updatePortraitTaskFlash();
+        tooltip.innerHTML = `
+          <div class="ct-gm-task-tt-header" style="--ct-priority-color:${p.color}">
+            <i class="fas ${p.icon}"></i>
+            <span>${esc(task.title || "Untitled")}</span>
+          </div>
+          <div class="ct-gm-task-tt-type"><i class="fas ${tIcon}"></i> ${esc(task.type || "other")}</div>
+          <div class="ct-gm-task-tt-priority" style="color:${p.color}">${p.label}</div>
+          <div class="ct-gm-task-tt-desc">${esc(task.description || "")}</div>
+          ${task.gmNote ? `<div class="ct-gm-task-tt-note" style="color:#ff8888;border:1px solid rgba(255,68,68,0.4);padding:4px 8px;border-radius:6px;margin-top:4px;background:rgba(255,0,0,0.06)"><i class="fas fa-sticky-note"></i> <strong>GM Note:</strong> ${esc(task.gmNote)}</div>` : ""}
+          <div class="ct-gm-task-tt-date">Created: ${new Date(task.createdAt).toLocaleString()}</div>
+        `;
+        tooltip.classList.add("ct-gm-task-tt-visible");
+      });
+
+      item.addEventListener("mouseleave", () => {
+        tooltip.classList.remove("ct-gm-task-tt-visible");
+      });
+
+      item.addEventListener("mousemove", (ev) => {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const tw = tooltip.offsetWidth || 280;
+        const th = tooltip.offsetHeight || 140;
+        let left = ev.clientX + 14;
+        let top = ev.clientY - th - 10;
+        if (left + tw > vw - 8) left = ev.clientX - tw - 14;
+        if (top < 8) top = ev.clientY + 18;
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+      });
+    });
+
+    container.querySelectorAll("[data-edit-idx]").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.editIdx);
+        this._openGMTaskForm(idx);
+      });
+    });
+
+    container.querySelectorAll("[data-delete-idx]").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.deleteIdx);
+        const tasks = this._getGMTasks();
+        tasks.splice(idx, 1);
+        await this._setGMTasks(tasks);
+        this._renderGMTasksList(container);
+        this._updatePortraitTaskFlash();
+      });
+    });
+  }
+
+  /** Open task add/edit form */
+  _openGMTaskForm(editIdx = null) {
+    const existing = document.querySelector("#ct-gm-task-form-wrapper");
+    if (existing) existing.remove();
+
+    const tasks = this._getGMTasks();
+    const task = editIdx !== null ? tasks[editIdx] : null;
+    const esc = foundry.utils.escapeHTML;
+
+    const wrapper = document.createElement("div");
+    wrapper.id = "ct-gm-task-form-wrapper";
+
+    // Position outside GM Tasks panel if it exists
+    const gmPanel = document.querySelector("#ct-gm-tasks-panel");
+    let formLeft = "50%";
+    let formTop = "50%";
+    let formTransform = "translate(-50%,-50%)";
+    if (gmPanel) {
+      const rect = gmPanel.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const formWidth = 520;
+      const formHeight = 580;
+      // Try right side first
+      if (rect.right + formWidth + 20 < vw) {
+        formLeft = `${rect.right + 20}px`;
+        formTop = `${Math.max(10, Math.min(rect.top, vh - formHeight - 10))}px`;
+        formTransform = "none";
+      } else if (rect.left - formWidth - 20 > 0) {
+        // Place to the left
+        formLeft = `${rect.left - formWidth - 20}px`;
+        formTop = `${Math.max(10, Math.min(rect.top, vh - formHeight - 10))}px`;
+        formTransform = "none";
+      }
+    }
+    wrapper.style.cssText = `position:fixed;z-index:10004;left:${formLeft};top:${formTop};transform:${formTransform};`;
+
+    const form = document.createElement("div");
+    form.id = "ct-gm-task-form";
+    form.className = "ct-popup ct-gm-task-form";
+    form.style.cssText = "position:relative;width:520px;display:flex;flex-direction:column;overflow:hidden;";
+
+    const priorities = [
+      { key: "high", label: "YESTERDAY", color: "#ff4444" },
+      { key: "medium", label: "NOT SO MUCH", color: "#ffaa00" },
+      { key: "low", label: "CAN WAIT A CENTURY", color: "#44cc44" }
+    ];
+
+    const types = ["message", "reminder", "generate image", "create", "delete", "explain", "write", "other"];
+
+    form.innerHTML = `
+      <div class="ct-popup-header">
+        <span style="color:#c8a96e"><i class="fas fa-${task ? 'pen' : 'plus'}"></i> ${task ? 'EDIT' : 'NEW'} TASK</span>
+        <button class="ct-popup-close" id="ct-gm-task-form-close" title="Close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="ct-popup-body" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto;max-height:560px;">
+        <label class="ct-gm-task-label">
+          <span>Title</span>
+          <input type="text" id="ct-gm-task-title" value="${esc(task?.title || "")}" placeholder="Task title..." maxlength="80">
+        </label>
+        <label class="ct-gm-task-label">
+          <span>Priority</span>
+          <div class="ct-gm-task-priority-options">
+            ${priorities.map(p => `
+              <button type="button" class="ct-gm-task-priority-btn ${task?.priority === p.key ? 'is-selected' : ''}" data-priority="${p.key}" style="--ct-prio-color:${p.color}">
+                <i class="fas fa-circle"></i> ${p.label}
+              </button>
+            `).join("")}
+          </div>
+        </label>
+        <label class="ct-gm-task-label">
+          <span>Type</span>
+          <select id="ct-gm-task-type">
+            ${types.map(t => `<option value="${t}" ${task?.type === t ? 'selected' : ''}>${t}</option>`).join("")}
+          </select>
+        </label>
+        <label class="ct-gm-task-label">
+          <span>Description <small>(<span id="ct-gm-task-charcount">0</span>/500)</small></span>
+          <textarea id="ct-gm-task-desc" rows="8" maxlength="500" placeholder="Describe what you need from the GM..." style="width:100%;min-height:140px;">${esc(task?.description || "")}</textarea>
+        </label>
+      </div>
+      <div class="ct-popup-actions-row">
+        <button class="ct-popup-btn ct-popup-btn-primary" id="ct-gm-task-save"><i class="fas fa-save"></i> Save</button>
+      </div>`;
+
+    wrapper.appendChild(form);
+    document.body.appendChild(wrapper);
+
+    requestAnimationFrame(() => form.classList.add("is-open"));
+
+    // Draggable header
+    const header = form.querySelector(".ct-popup-header");
+    let isDragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+    header.style.cursor = "grab";
+
+    header.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button")) return;
+      isDragging = true;
+      const rect = wrapper.getBoundingClientRect();
+      dragOffsetX = e.clientX - rect.left;
+      dragOffsetY = e.clientY - rect.top;
+      wrapper.style.transform = "none";
+      header.style.cursor = "grabbing";
+    });
+
+    const onMouseMove = (e) => {
+      if (!isDragging) return;
+      wrapper.style.left = `${e.clientX - dragOffsetX}px`;
+      wrapper.style.top = `${e.clientY - dragOffsetY}px`;
+    };
+    const onMouseUp = () => {
+      if (isDragging) {
+        isDragging = false;
+        header.style.cursor = "grab";
+      }
+    };
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+
+    const descArea = form.querySelector("#ct-gm-task-desc");
+    const charCount = form.querySelector("#ct-gm-task-charcount");
+    const updateCount = () => { charCount.textContent = descArea.value.length; };
+    descArea.addEventListener("input", updateCount);
+    updateCount();
+
+    let selectedPriority = task?.priority || "medium";
+    form.querySelectorAll("[data-priority]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        form.querySelectorAll("[data-priority]").forEach(b => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+        selectedPriority = btn.dataset.priority;
+      });
+    });
+
+    const _closeForm = () => {
+      form.classList.remove("is-open");
+      form.classList.add("is-closing");
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      form.addEventListener("transitionend", () => wrapper.remove(), { once: true });
+    };
+
+    form.querySelector("#ct-gm-task-form-close")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      _closeForm();
+    });
+
+    form.querySelector("#ct-gm-task-save")?.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const title = form.querySelector("#ct-gm-task-title").value.trim();
+      const type = form.querySelector("#ct-gm-task-type").value;
+      const description = form.querySelector("#ct-gm-task-desc").value.trim();
+
+      if (!title) {
+        ui.notifications.warn("Please enter a task title.");
+        return;
+      }
+
+      const tasks = this._getGMTasks();
+      const taskData = {
+        id: task?.id || foundry.utils.randomID(),
+        title,
+        priority: selectedPriority,
+        type,
+        description,
+        createdAt: task?.createdAt || Date.now()
+      };
+
+      if (editIdx !== null) {
+        tasks[editIdx] = taskData;
+      } else {
+        tasks.push(taskData);
+      }
+
+      await this._setGMTasks(tasks);
+      _closeForm();
+
+      const list = document.querySelector("#ct-gm-tasks-list");
+      if (list) this._renderGMTasksList(list);
+      this._updatePortraitTaskFlash();
+
+      ui.notifications.info(`Task "${title}" ${editIdx !== null ? 'updated' : 'created'}.`);
+    });
+  }
 }
 
 // Apply panel mixins
@@ -9301,9 +9758,14 @@ function _getDebouncedRefresh(tb) {
   return _debouncedRefresh;
 }
 
-Hooks.on("updateActor", (actor) => { 
+Hooks.on("updateActor", (actor, changes) => { 
   const tb = CypherTaskbar.instance; 
   if (tb?._suppressRender) return;
+  // Immediate XP update (bypass debounce)
+  if (tb?.actor?.id === actor.id && changes?.system?.basic?.xp !== undefined) {
+    tb.actor = actor;
+    tb._refreshXpCounter();
+  }
   if (tb?.actor?.id === actor.id) { 
     tb.actor = actor;
     _getDebouncedRefresh(tb)();
