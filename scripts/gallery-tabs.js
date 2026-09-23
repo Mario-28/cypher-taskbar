@@ -20,6 +20,8 @@ const MAX_TABS = 10;
 const FAVORITES_TAB_ID = "__cgt_favorites__";
 const CLOTHES_TAB_ID = "__cgt_clothes__";
 const VIDEO_TAB_ID = "__cgt_videos__";
+const TOKENS_TAB_ID = "__cgt_tokens__";
+const TOKENS_STYLE_DEFAULTS = { bgColor: "#000000", iconColor: "#ffffff", iconClass: "fa-solid fa-chess-pawn" };
 const WARDROBE_ALL = "all";
 const WARDROBE_DEFAULT_SUBTABS = ["All", "Casual", "Fancy", "Work", "Special"];
 const WARDROBE_MAX_CUSTOM = 3;
@@ -32,6 +34,7 @@ const ICON_POOL = [
   "fa-solid fa-image", "fa-solid fa-images", "fa-solid fa-book",
   "fa-solid fa-book-open", "fa-solid fa-scroll", "fa-solid fa-map",
   "fa-solid fa-map-location-dot", "fa-solid fa-star",
+  "fa-solid fa-chess-pawn",
   "fa-solid fa-heart", "fa-solid fa-shield-halved",
   "fa-solid fa-skull", "fa-solid fa-skull-crossbones",
   "fa-solid fa-dragon", "fa-solid fa-feather-pointed",
@@ -302,6 +305,53 @@ async function saveVideoItems(actor, items) {
   await actor.setFlag(GALLERY_MODULE_ID, "videoItems", items.map(normalizeImageData));
 }
 
+/* -- Tokens tab storage (mirrors cypher-gallery-tabs v1.13.0) -- */
+
+function getTokensImages(actor) {
+  const data = actor.getFlag(GALLERY_MODULE_ID, "tokensImages");
+  return Array.isArray(data) ? data.map(normalizeImageData).filter(img => img.url) : [];
+}
+
+async function saveTokensImages(actor, images) {
+  await actor.setFlag(GALLERY_MODULE_ID, "tokensImages", images.map(normalizeImageData));
+}
+
+function getTokensLayout(actor) {
+  const raw = foundry.utils.deepClone(actor.getFlag(GALLERY_MODULE_ID, "tokensLayout") ?? {});
+  return {
+    columns: Math.min(5, Math.max(1, parseInt(raw?.columns, 10) || 3)),
+    gap: [0, 4, 8, 12, 18].includes(parseInt(raw?.gap, 10)) ? parseInt(raw.gap, 10) : 8,
+    fit: ["natural", "cover", "contain"].includes(raw?.fit) ? raw.fit : "natural"
+  };
+}
+
+async function saveTokensLayout(actor, layout) {
+  const clean = {
+    columns: Math.min(5, Math.max(1, parseInt(layout?.columns, 10) || 3)),
+    gap: [0, 4, 8, 12, 18].includes(parseInt(layout?.gap, 10)) ? parseInt(layout.gap, 10) : 8,
+    fit: ["natural", "cover", "contain"].includes(layout?.fit) ? layout.fit : "natural"
+  };
+  await actor.setFlag(GALLERY_MODULE_ID, "tokensLayout", clean);
+}
+
+function getTokensStyle(actor) {
+  const raw = foundry.utils.deepClone(actor.getFlag(GALLERY_MODULE_ID, "tokensStyle") ?? {});
+  return {
+    bgColor: /^#[0-9a-fA-F]{6}$/.test(raw?.bgColor ?? "") ? raw.bgColor : TOKENS_STYLE_DEFAULTS.bgColor,
+    iconColor: /^#[0-9a-fA-F]{6}$/.test(raw?.iconColor ?? "") ? raw.iconColor : TOKENS_STYLE_DEFAULTS.iconColor,
+    iconClass: typeof raw?.iconClass === "string" && raw.iconClass.startsWith("fa-") ? raw.iconClass : TOKENS_STYLE_DEFAULTS.iconClass
+  };
+}
+
+async function saveTokensStyle(actor, style) {
+  const clean = {
+    bgColor: /^#[0-9a-fA-F]{6}$/.test(style?.bgColor ?? "") ? style.bgColor : TOKENS_STYLE_DEFAULTS.bgColor,
+    iconColor: /^#[0-9a-fA-F]{6}$/.test(style?.iconColor ?? "") ? style.iconColor : TOKENS_STYLE_DEFAULTS.iconColor,
+    iconClass: typeof style?.iconClass === "string" && style.iconClass.startsWith("fa-") ? style.iconClass : TOKENS_STYLE_DEFAULTS.iconClass
+  };
+  await actor.setFlag(GALLERY_MODULE_ID, "tokensStyle", clean);
+}
+
 function getFavoritesLayout(actor) {
   const raw = foundry.utils.deepClone(actor.getFlag(GALLERY_MODULE_ID, "favoritesLayout") ?? DEFAULT_FAVORITES_LAYOUT);
   return {
@@ -395,39 +445,19 @@ export function buildGalleryStrip(taskbar) {
     html += _renderTabButton(tab, taskbar);
   });
 
-  // Favorites button (only when favorites exist)
+  // Favorites button (only when favorites exist) — module look: crimson gradient + pink heart
   if (showFav) {
     html += `
       <button class="cgt-strip-btn cgt-strip-fav"
               data-cgt-tab="${FAVORITES_TAB_ID}"
-              style="background:#c44b4b;"
+              style="background:linear-gradient(180deg, rgba(90, 24, 44, 0.96), rgba(54, 12, 24, 0.98));border-color:rgba(220, 95, 125, 0.28);"
               title="Favorites (${favCount})">
-        <i class="fa-solid fa-heart" style="color:#f0e6d3;"></i>
+        <i class="fa-solid fa-heart" style="color:#ff8ea7;"></i>
         <span class="cgt-strip-badge">${favCount}</span>
       </button>`;
   }
 
-  // Wardrobe / Clothes button — ALWAYS show
-  html += `
-    <button class="cgt-strip-btn cgt-strip-clothes"
-            data-cgt-tab="${CLOTHES_TAB_ID}"
-            style="background:#8a5a3a;"
-            title="Wardrobe">
-      <i class="fa-solid fa-shirt" style="color:#f0e6d3;"></i>
-    </button>`;
-
-  // Videos button
-  if (showVideos) {
-    html += `
-      <button class="cgt-strip-btn cgt-strip-videos"
-              data-cgt-tab="${VIDEO_TAB_ID}"
-              style="background:#3a5a8a;"
-              title="Videos">
-        <i class="fa-solid fa-film" style="color:#f0e6d3;"></i>
-      </button>`;
-  }
-
-  // Add tab button
+  // Add tab button (before the fixed system tabs, mirroring the module strip)
   if (canAdd) {
     html += `
       <button class="cgt-strip-btn cgt-strip-add"
@@ -435,6 +465,38 @@ export function buildGalleryStrip(taskbar) {
               style="background:#555;"
               title="Add Tab">
         <i class="fa-solid fa-plus" style="color:#f0e6d3;"></i>
+      </button>`;
+  }
+
+  // Wardrobe / Clothes button — ALWAYS show (black plate, count tooltip)
+  const wardrobeCount = getClothesImages(actor).length;
+  html += `
+    <button class="cgt-strip-btn cgt-strip-clothes"
+            data-cgt-tab="${CLOTHES_TAB_ID}"
+            style="background:#000000;border-color:rgba(255, 255, 255, 0.22);"
+            title="Wardrobe (${wardrobeCount})">
+      <i class="fa-solid fa-shirt" style="color:#ffffff;"></i>
+    </button>`;
+
+  // Tokens button — ALWAYS show (configurable colors/icon, never deletable)
+  const tokensStyle = getTokensStyle(actor);
+  html += `
+    <button class="cgt-strip-btn cgt-strip-tokens"
+            data-cgt-tab="${TOKENS_TAB_ID}"
+            style="background:${esc(tokensStyle.bgColor)};border-color:rgba(255, 255, 255, 0.35);"
+            title="Tokens">
+      <i class="${esc(tokensStyle.iconClass)}" style="color:${esc(tokensStyle.iconColor)};"></i>
+    </button>`;
+
+  // Videos button
+  if (showVideos) {
+    const videoCount = getVideoItems(actor).length;
+    html += `
+      <button class="cgt-strip-btn cgt-strip-videos"
+              data-cgt-tab="${VIDEO_TAB_ID}"
+              style="background:#1a1a2e;border-color:rgba(192, 132, 252, 0.35);"
+              title="Videos (${videoCount})">
+        <i class="fa-solid fa-film" style="color:#c084fc;"></i>
       </button>`;
   }
 
@@ -470,6 +532,12 @@ export function bindGalleryStripEvents(taskbar) {
   const bar = taskbar.element;
   if (!bar) return;
 
+  // Bind once per bar element. Handlers delegate via closest() and read live
+  // state from the taskbar instance, so rebinding on every strip rebuild
+  // would stack duplicate listeners (one set per rebuild).
+  if (bar._cgtGalleryEventsBound) return;
+  bar._cgtGalleryEventsBound = true;
+
   // Left-click on tab button → open panel
   bar.addEventListener("click", async (e) => {
     const btn = e.target.closest(".cgt-strip-btn[data-cgt-tab]");
@@ -481,8 +549,9 @@ export function bindGalleryStripEvents(taskbar) {
     const actor = taskbar.actor;
     if (!actor) return;
 
-    // Close existing panel if clicking same tab
-    const existing = document.querySelector(".cgt-panel");
+    // Close existing panel if clicking same tab (taskbar-owned panels only —
+    // the cypher-gallery-tabs module owns its own sheet panels)
+    const existing = document.querySelector('.cgt-panel[data-cgt-owner="taskbar"]');
     if (existing && existing.dataset.cgtTabId === tabId) {
       existing.remove();
       return;
@@ -506,6 +575,13 @@ export function bindGalleryStripEvents(taskbar) {
     const actor = taskbar.actor;
     if (!canManageActor(actor)) return;
 
+    // Tokens: color + icon settings only; the tab is fixed and never deletable
+    // (mirrors cypher-gallery-tabs v1.13.0)
+    if (tabId === TOKENS_TAB_ID) {
+      _openTokensSettingsDialog(actor);
+      return;
+    }
+
     _openTabSettingsDialog(actor, tabId);
   });
 
@@ -527,7 +603,7 @@ export function bindGalleryStripEvents(taskbar) {
     const newTab = getDefaultTab(tabs.length);
     tabs.push(newTab);
     await saveTabs(actor, tabs);
-    taskbar.renderGallery();
+    taskbar.renderGallery?.();
   });
 }
 
@@ -658,24 +734,16 @@ async function _openTabSettingsDialog(actor, tabId) {
   }).render(true);
 }
 
-/** Refresh the gallery strip and any open panel */
+/** Refresh the gallery strip and any open TASKBAR-owned panel */
 async function _refreshGallery(actor) {
-  // Find any taskbar instance for this actor and re-render the strip
-  if (window.cypherTaskbar && window.cypherTaskbar.instances) {
-    for (const t of window.cypherTaskbar.instances) {
-      if (t.actor?.id === actor.id) {
-        t.renderGallery();
-      }
-    }
-  }
-  // Refresh open panel
-  const panel = document.querySelector(".cgt-panel");
-  if (panel) {
-    const tabId = panel.dataset.cgtTabId;
-    if (tabId) {
-      panel.remove();
-    }
-  }
+  // Rebuild the strip on the live taskbar instance for this actor
+  // (window.cypherTaskbar is registered by cypher-taskbar.js at ready)
+  const tb = window.cypherTaskbar?.instance;
+  if (tb?.actor?.id === actor.id) tb.renderGallery?.();
+
+  // Close any open taskbar-owned panel so it re-renders fresh next open
+  const panel = document.querySelector('.cgt-panel[data-cgt-owner="taskbar"]');
+  if (panel?.dataset.cgtTabId) panel.remove();
 }
 
 /* ------------------------------------------------------------------ */
@@ -703,14 +771,16 @@ class GalleryPanel {
   get isClothesPanel() { return this.tabId === CLOTHES_TAB_ID; }
   get isFavoritesPanel() { return this.tabId === FAVORITES_TAB_ID; }
   get isVideoPanel() { return this.tabId === VIDEO_TAB_ID; }
+  get isTokensPanel() { return this.tabId === TOKENS_TAB_ID; }
 
   /* -- Public API -- */
 
   async render(open = true) {
     if (!open) return;
 
-    // Remove any existing panel
-    const existing = document.querySelector(".cgt-panel");
+    // Remove any existing TASKBAR-owned panel (the gallery module's sheet
+    // panels share the .cgt-panel class but belong to it)
+    const existing = document.querySelector('.cgt-panel[data-cgt-owner="taskbar"]');
     if (existing) existing.remove();
 
     // Build and position
@@ -718,6 +788,7 @@ class GalleryPanel {
     const wrapper = document.createElement("div");
     wrapper.innerHTML = html;
     this.element = wrapper.firstElementChild;
+    if (this.element) this.element.dataset.cgtOwner = "taskbar";
     document.body.appendChild(this.element);
 
     this._positionPanel();
@@ -756,7 +827,7 @@ class GalleryPanel {
   /* -- HTML generation -- */
 
   async _buildHTML() {
-    const { title, isFav, isClothes, isVideos, config, images } = await this._resolveTabData();
+    const { title, isFav, isClothes, isVideos, isTokens, config, images } = await this._resolveTabData();
 
     let toolbar = this._buildToolbar(title, isFav, isClothes, isVideos, config);
     let sortPanel = this._buildSortPanel();
@@ -783,18 +854,22 @@ class GalleryPanel {
     let isFav = this.tabId === FAVORITES_TAB_ID;
     let isClothes = this.tabId === CLOTHES_TAB_ID;
     let isVideos = this.tabId === VIDEO_TAB_ID;
+    let isTokens = this.tabId === TOKENS_TAB_ID;
     let config = getDefaultLayout();
     let images = [];
 
     if (isFav) {
+      // Mirrors the gallery module: favorites lists regular-tab favorites only
       title = "Favorites";
       config = getFavoritesLayout(this.actor);
       const tabs = getTabs(this.actor);
       tabs.forEach(t => {
         (t.images || []).forEach(img => { if (img.favorite) images.push({ ...img, _sourceTabId: t.id, _sourceTabTitle: t.title }); });
       });
-      const clothes = getClothesImages(this.actor);
-      clothes.forEach(img => { if (img.favorite) images.push({ ...img, _sourceTabId: CLOTHES_TAB_ID, _sourceTabTitle: "Wardrobe" }); });
+    } else if (isTokens) {
+      title = "Tokens";
+      config = getTokensLayout(this.actor);
+      images = getTokensImages(this.actor);
     } else if (isClothes) {
       title = "Wardrobe";
       config = getClothesLayout(this.actor);
@@ -824,7 +899,7 @@ class GalleryPanel {
     // Store images for click handlers
     this._currentImages = images;
 
-    return { title, isFav, isClothes, isVideos, config, images };
+    return { title, isFav, isClothes, isVideos, isTokens, config, images };
   }
 
   _buildToolbar(title, isFav, isClothes, isVideos, config) {
@@ -985,7 +1060,7 @@ class GalleryPanel {
 
     if (!images.length) {
       return `<div class="cgt-grid cgt-grid-empty" style="--cols:${cols};--gap:${gap}px;" data-fit="${fit}">
-        <div class="cgt-empty-msg">No images yet.</div>
+        <div class="cgt-empty-msg">${this.isTokensPanel ? "No token art yet." : "No images yet."}</div>
       </div>`;
     }
 
@@ -1323,6 +1398,10 @@ class GalleryPanel {
       const layout = getFavoritesLayout(this.actor);
       layout[key] = value;
       await saveFavoritesLayout(this.actor, layout);
+    } else if (this.tabId === TOKENS_TAB_ID) {
+      const layout = getTokensLayout(this.actor);
+      layout[key] = value;
+      await saveTokensLayout(this.actor, layout);
     } else if (this.tabId === CLOTHES_TAB_ID) {
       const layout = getClothesLayout(this.actor);
       layout[key] = value;
@@ -1338,7 +1417,7 @@ class GalleryPanel {
   }
 
   async _saveDisplayOption(key, value) {
-    if (this.tabId === FAVORITES_TAB_ID || this.tabId === CLOTHES_TAB_ID || this.tabId === VIDEO_TAB_ID) return;
+    if (this.tabId === FAVORITES_TAB_ID || this.tabId === CLOTHES_TAB_ID || this.tabId === VIDEO_TAB_ID || this.tabId === TOKENS_TAB_ID) return;
     const tabs = getTabs(this.actor);
     const tab = tabs.find(t => t.id === this.tabId);
     if (tab) {
@@ -1465,7 +1544,15 @@ class GalleryPanel {
 
   async _reorderImage(srcId, dstId) {
     if (this.tabId === FAVORITES_TAB_ID) return; // Can't reorder favorites
-    if (this.tabId === VIDEO_TAB_ID) {
+    if (this.tabId === TOKENS_TAB_ID) {
+      const items = getTokensImages(this.actor);
+      const srcIdx = items.findIndex(i => i.id === srcId);
+      const dstIdx = items.findIndex(i => i.id === dstId);
+      if (srcIdx < 0 || dstIdx < 0) return;
+      const [moved] = items.splice(srcIdx, 1);
+      items.splice(dstIdx, 0, moved);
+      await saveTokensImages(this.actor, items);
+    } else if (this.tabId === VIDEO_TAB_ID) {
       const items = getVideoItems(this.actor);
       const srcIdx = items.findIndex(i => i.id === srcId);
       const dstIdx = items.findIndex(i => i.id === dstId);
@@ -1550,6 +1637,11 @@ class GalleryPanel {
       rows.push(`<div class="cgt-ctx-item js-ctx-hover-art"><i class="fa-solid fa-image"></i> Change Hover Art</div>`);
     }
 
+    // Tokens: token art only (mirrors the gallery module)
+    if (this.isTokensPanel && canManageActor(this.actor)) {
+      rows.push(`<div class="cgt-ctx-item js-ctx-token-art"><i class="fa-solid fa-chess-pawn"></i> Change Current Token Art</div>`);
+    }
+
     // Close Image
     rows.push(`<div class="cgt-ctx-item js-ctx-close"><i class="fa-solid fa-xmark"></i> Close Image</div>`);
 
@@ -1563,7 +1655,7 @@ class GalleryPanel {
     menu.className = "cgt-context-menu";
     menu.innerHTML = rows.join("");
 
-    const menuWidth = this.isClothesPanel ? 236 : 196;
+    const menuWidth = (this.isClothesPanel || this.isTokensPanel) ? 236 : 196;
     const menuHeight = rows.length * 42 + 12;
     const pos = clampMenuToViewport(event.clientX, event.clientY, menuWidth, menuHeight);
     menu.style.position = "fixed";
@@ -1704,6 +1796,8 @@ class GalleryPanel {
     if (clothes.some(i => i.id === imgId)) return { type: "clothes" };
     const videos = getVideoItems(this.actor);
     if (videos.some(i => i.id === imgId)) return { type: "videos" };
+    const tokens = getTokensImages(this.actor);
+    if (tokens.some(i => i.id === imgId)) return { type: "tokens" };
     return null;
   }
 
@@ -1722,6 +1816,11 @@ class GalleryPanel {
       const img = items.find(i => i.id === imgId);
       if (img) img.favorite = !img.favorite;
       await saveClothesImages(this.actor, items);
+    } else if (src.type === "tokens") {
+      const items = getTokensImages(this.actor);
+      const img = items.find(i => i.id === imgId);
+      if (img) img.favorite = !img.favorite;
+      await saveTokensImages(this.actor, items);
     } else if (src.type === "videos") {
       // Videos don't have favorites
       return;
@@ -1793,7 +1892,11 @@ class GalleryPanel {
           icon: `<i class="fa-solid fa-trash"></i>`,
           label: "Remove",
           callback: async () => {
-            if (this.isClothesPanel) {
+            if (this.isTokensPanel) {
+              const check = getTokensImages(this.actor);
+              if (!check.some(i => i.id === imgId)) { ui.notifications.warn("This image no longer exists."); return; }
+              await this._removeImageTokens(imgId);
+            } else if (this.isClothesPanel) {
               const check = getClothesImages(this.actor);
               if (!check.some(i => i.id === imgId)) { ui.notifications.warn("This image no longer exists."); return; }
               await this._removeImageClothes(imgId);
@@ -1821,6 +1924,13 @@ class GalleryPanel {
     _refreshGallery(this.actor);
   }
 
+  async _removeImageTokens(imgId) {
+    const images = getTokensImages(this.actor).filter(img => img.id !== imgId);
+    await saveTokensImages(this.actor, images);
+    this._refreshGrid();
+    _refreshGallery(this.actor);
+  }
+
   async _removeVideoItem(imgId) {
     await saveVideoItems(this.actor, getVideoItems(this.actor).filter(i => i.id !== imgId));
     this._refreshGrid();
@@ -1842,17 +1952,41 @@ class GalleryPanel {
   }
 
   async _setCurrentTokenArtFromImage(img) {
-    if (!this.isClothesPanel || !canManageActor(this.actor)) {
-      ui.notifications.warn("Only the actor owner or Game Master can change current token art from the Wardrobe tab.");
+    if ((!this.isClothesPanel && !this.isTokensPanel) || !canManageActor(this.actor)) {
+      ui.notifications.warn("Only the actor owner or Game Master can change current token art from the Wardrobe or Tokens tab.");
       return;
     }
     const src = String(img?.url ?? "").trim();
     if (!src) { ui.notifications.warn("This image has no valid source."); return; }
+
     const controlled = canvas?.tokens?.controlled ?? [];
     const matching = controlled.filter(t => t.actor?.id === this.actor.id);
-    if (!matching.length) { ui.notifications.warn("Select the current token for this actor on the canvas first."); return; }
-    for (const token of matching) { await token.document.update({ "texture.src": src }); }
-    ui.notifications.info(`Current token art updated for ${matching.length} selected token${matching.length === 1 ? "" : "s"}.`);
+
+    // Explicit selection wins: only the selected token(s) for this actor.
+    if (matching.length) {
+      for (const token of matching) { await token.document.update({ "texture.src": src }); }
+      ui.notifications.info(`Current token art updated for ${matching.length} selected token${matching.length === 1 ? "" : "s"}.`);
+      return;
+    }
+
+    // No selection needed: update the prototype token so every future
+    // placement uses this art, plus every token of this actor already on
+    // the canvas so the change is visible immediately.
+    await this.actor.update({ "prototypeToken.texture.src": src });
+
+    const activeTokens = typeof this.actor.getActiveTokens === "function"
+      ? this.actor.getActiveTokens()
+      : (canvas?.tokens?.placeables ?? []).filter(t => t.actor?.id === this.actor.id);
+
+    for (const token of activeTokens) {
+      await token.document.update({ "texture.src": src });
+    }
+
+    ui.notifications.info(
+      activeTokens.length
+        ? `Token art updated for ${this.actor.name} — prototype and ${activeTokens.length} placed token${activeTokens.length === 1 ? "" : "s"}.`
+        : `Prototype token art updated for ${this.actor.name}.`
+    );
   }
 
   async _setActorHoverArtFromImage(img) {
@@ -2021,7 +2155,11 @@ class GalleryPanel {
       updatedAt: Date.now()
     });
 
-    if (this.tabId === CLOTHES_TAB_ID) {
+    if (this.tabId === TOKENS_TAB_ID) {
+      const items = getTokensImages(this.actor);
+      items.push(img);
+      await saveTokensImages(this.actor, items);
+    } else if (this.tabId === CLOTHES_TAB_ID) {
       const items = getClothesImages(this.actor);
       items.push(img);
       await saveClothesImages(this.actor, items);
@@ -2039,7 +2177,7 @@ class GalleryPanel {
       }
     }
 
-    ui.notifications.info("Image added.");
+    ui.notifications.info(this.isTokensPanel ? "Token art added to gallery." : "Image added.");
     this._refreshGrid();
     _refreshGallery(this.actor);
   }
@@ -2400,7 +2538,7 @@ function _shareImageToPlayers(src, title, userIds, sendToGM = true) {
     userIds: userIds || [],
     senderId: game.user.id,
     senderName: game.user.name,
-    shareMode: userIds?.length ? "select" : "all",
+    shareMode: userIds?.length ? "selected" : "all",
     sendToGM: sendToGM !== false
   };
 
@@ -2429,31 +2567,12 @@ export function initGallerySocket() {
     console.error("[cypher-taskbar] CSS injection failed:", e);
   }
 
-  if (!game.socket) return;
-
-  game.socket.on("module.cypher-gallery-tabs", (data) => {
-    if (!data || data.type !== "showImage") return;
-
-    // Only show if we're in the target users list (or if it's "all" and we're a player)
-    const isTarget = !data.userIds?.length || data.userIds.includes(game.user.id);
-    if (!isTarget) return;
-
-    // GM gets a chat message instead of popup if sendToGM is true
-    if (game.user.isGM && data.sendToGM) {
-      ChatMessage.create({
-        content: `<div class="cgt-share-notice">
-          <p><i class="fa-solid fa-share-nodes"></i> <strong>${esc(data.senderName)}</strong> shared an image:</p>
-          <p><a href="${esc(data.src)}" target="_blank">${esc(data.title || "Image")}</a></p>
-          <img src="${esc(data.src)}" style="max-width:200px;max-height:150px;border-radius:4px;" onerror="this.style.display='none'" />
-        </div>`,
-        whisper: [game.user.id]
-      });
-      return;
-    }
-
-    // Show lightbox for the shared image
-    _showSharedImageLightbox(data.src, data.title);
-  });
+  // Share handling lives in cypher-taskbar.js (richer validation + GM relay).
+  // Historically this function registered a SECOND listener on the same
+  // socket event, which produced duplicate lightboxes/chat messages — the
+  // socket.on here was removed so there is exactly one taskbar listener,
+  // and it no-ops entirely while the cypher-gallery-tabs module is active
+  // (the module then owns share handling end to end).
 }
 
 function destroyLightbox(lb) {
@@ -3586,12 +3705,85 @@ const GALLERY_CSS = `
 .cgt-share-notice img { margin-top: 6px; }
 `;
 
-/** Inject gallery CSS into the document head */
+/* Tokens tab settings — colors + icon only; fixed tab, never deletable */
+function _openTokensSettingsDialog(actor) {
+  const style = getTokensStyle(actor);
+
+  const content = `
+    <form class="cgt-dialog-form">
+      <div class="form-group">
+        <label>Background Color</label>
+        <input type="color" name="bgColor" value="${esc(style.bgColor)}" />
+      </div>
+      <div class="form-group">
+        <label>Icon Color</label>
+        <input type="color" name="iconColor" value="${esc(style.iconColor)}" />
+      </div>
+      <div class="form-group">
+        <label>Icon</label>
+        <select name="iconClass">
+          ${ICON_POOL.map(ic => `
+            <option value="${esc(ic)}" ${style.iconClass === ic ? "selected" : ""}>
+              ${esc(ic.replace("fa-solid fa-", ""))}
+            </option>
+          `).join("")}
+        </select>
+      </div>
+    </form>`;
+
+  new Dialog({
+    title: "Tokens Tab Settings",
+    content,
+    buttons: {
+      save: {
+        icon: '<i class="fa-solid fa-save"></i>',
+        label: "Save",
+        callback: async (html) => {
+          const form = html[0].querySelector("form");
+          const fd = new FormDataExtended(form).object;
+          await saveTokensStyle(actor, {
+            bgColor: fd.bgColor || style.bgColor,
+            iconColor: fd.iconColor || style.iconColor,
+            iconClass: fd.iconClass || style.iconClass
+          });
+          ui.notifications.info("Tokens tab settings saved.");
+          _refreshGallery(actor);
+        }
+      },
+      cancel: { icon: '<i class="fa-solid fa-times"></i>', label: "Cancel" }
+    },
+    default: "save"
+  }).render(true);
+}
+
+// Selectors the real cypher-gallery-tabs module owns when it is active —
+// forked rules for these would pollute the module's panel/lightbox/context menu.
+const MODULE_OWNED_SELECTORS = [
+  "cgt-lightbox", "cgt-lb-", "cgt-ctx-", "cgt-float-btn",
+  "cgt-filter-", "cgt-is-dragging", "cgt-is-pannable",
+  "cgt-tag-chip", "cgt-tag-input-wrap"
+];
+
+function _forkOnlyCSS(css) {
+  // GALLERY_CSS contains no @media/@keyframes, so a plain rule scan is safe.
+  // Strip structural comments first so they can't leak into selector groups.
+  const cleaned = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return cleaned.replace(/([^{}]+)\{([^{}]*)\}/g, (match, selector) => {
+    return MODULE_OWNED_SELECTORS.some(cls => selector.includes(cls)) ? "" : match;
+  });
+}
+
+/** Inject gallery CSS into the document head (full fork CSS, or module-safe subset) */
 function _injectGalleryCSS() {
+  // When the real module is active it ships the canonical styles for the
+  // shared cgt-* classes, but NOT for the taskbar-only pieces (strip,
+  // dialogs, panel chrome). Inject our CSS minus the module-owned rules so
+  // the taskbar strip stays styled without fighting the module's sheet.
   if (document.getElementById("cgt-gallery-styles")) return;
   const style = document.createElement("style");
   style.id = "cgt-gallery-styles";
-  style.textContent = GALLERY_CSS;
+  const moduleActive = !!game.modules?.get(GALLERY_MODULE_ID)?.active;
+  style.textContent = moduleActive ? _forkOnlyCSS(GALLERY_CSS) : GALLERY_CSS;
   document.head.appendChild(style);
 }
 
@@ -3606,4 +3798,4 @@ GalleryPanel.prototype.render = async function(open = true) {
 /*  EXPORTS                                                            */
 /* ------------------------------------------------------------------ */
 
-export { GALLERY_MODULE_ID, MAX_TABS, FAVORITES_TAB_ID, CLOTHES_TAB_ID, VIDEO_TAB_ID };
+export { GALLERY_MODULE_ID, MAX_TABS, FAVORITES_TAB_ID, CLOTHES_TAB_ID, VIDEO_TAB_ID, TOKENS_TAB_ID };

@@ -154,7 +154,7 @@
   image-rendering: high-quality;
   transform-origin: bottom center;
   will-change: transform, filter;
-  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), filter 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), filter 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 0.45s ease;
 }
 .ct-portrait-video {
   width: var(--ct-portrait-w, 180px);
@@ -166,7 +166,7 @@
   filter: var(--ct-portrait-filter, none);
   transform-origin: bottom center;
   will-change: transform;
-  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 0.45s ease;
 }
 .ct-portrait-wrap:hover .ct-portrait-video {
   transform: scale(1.06);
@@ -175,6 +175,22 @@
 .ct-portrait-wrap:hover .ct-portrait,
 .ct-portrait-wrap:focus-within .ct-portrait {
   transform: scale(1.06);
+}
+
+/* ── Cypher PC Combat integration ────────────────────────────────────
+   While the PC combat bar is on screen the taskbar portrait fades out
+   so the two portraits don't stack. `body.ct-combat-bar-active` is set
+   by a DOM observer in cypher-taskbar.js — no hard dependency on the
+   other module. Hover peeks the portrait back in.                   */
+body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait,
+body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-video {
+  opacity: 0.12;
+}
+
+body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .ct-portrait,
+body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:focus-within .ct-portrait,
+body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .ct-portrait-video {
+  opacity: 1;
 }
 
 /* ── Dice Bar (floating at bottom of portrait) ── */

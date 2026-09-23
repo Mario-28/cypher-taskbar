@@ -277,7 +277,9 @@ class CypherTaskbar {
     try {
       this._clearPortraitAnim();
       document.querySelector(`#${MODULE_ID}-bar`)?.remove();
-      document.querySelector(".cgt-panel")?.remove();
+      // Only remove TASKBAR-owned gallery panels — the cypher-gallery-tabs
+      // module's sheet panels share the .cgt-panel class but belong to it
+      document.querySelector('.cgt-panel[data-cgt-owner="taskbar"]')?.remove();
 
       // Ensure actor is resolved before building DOM
       this._resolveActor();
@@ -7065,6 +7067,22 @@ class CypherTaskbar {
     }
   }
 
+  /* Rebuild the gallery strip above the bar (used by the gallery-tabs
+     integration — replaces the old broken taskbar.renderGallery calls). */
+  renderGallery() {
+    const el = this.element;
+    if (!el) return;
+    const oldStrip = el.querySelector(".cgt-strip-wrapper");
+    if (oldStrip) oldStrip.remove();
+    const html = buildGalleryStrip(this);
+    if (!html) return;
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    const anchor = el.querySelector(".ct-inner");
+    if (anchor) anchor.before(tmp.firstElementChild);
+    bindGalleryStripEvents(this);
+  }
+
   refresh(options = {}) {
     if (this._suppressRender) return;
     const actor   = this.actor;
@@ -7198,17 +7216,7 @@ class CypherTaskbar {
     }
 
     // Rebuild gallery strip (above the bar)
-    const oldStrip = this.element?.querySelector(".cgt-strip-wrapper");
-    if (oldStrip) {
-      oldStrip.remove();
-      const newStripHtml = buildGalleryStrip(this);
-      if (newStripHtml) {
-        const tmp = document.createElement("div");
-        tmp.innerHTML = newStripHtml;
-        this.element?.insertBefore(tmp.firstElementChild, this.element?.querySelector(".ct-inner"));
-        bindGalleryStripEvents(this);
-      }
-    }
+    this.renderGallery();
 
     // Rebuild section 2 buttons
     const s2 = this.element?.querySelector(".ct-section-2");
@@ -8083,8 +8091,9 @@ class CypherTaskbar {
               const form = root?.querySelector('.ct-native-attribute-roll-form');
               if (!form) return resolve(null);
               const data = Object.fromEntries(new FormData(form).entries());
-              await this._performAttributeRoll(actor, defaultPool, data);
-              resolve(true);
+              // Resolve with the achieved total (die + modifiers) so callers
+              // can judge success against the target number.
+              resolve(await this._performAttributeRoll(actor, defaultPool, data));
             }
           },
           cancel: {
@@ -8177,6 +8186,9 @@ class CypherTaskbar {
       speaker: ChatMessage.getSpeaker({ actor }),
       flavor
     }, { rollMode: game.settings.get('core', 'rollMode') });
+    // Return the achieved total (die + assets/effort/ease modifiers) so
+    // callers can compare it against the target number (difficulty × 3).
+    return total + modifier;
   }
 
 
@@ -9457,6 +9469,25 @@ applyCombatPanel(CypherTaskbar);
 //  Hooks
 // ══════════════════════════════════════════
 
+/* ── Cypher PC Combat integration ────────────────────────────────────
+   While the PC combat bar is rendered, fade the taskbar portrait so
+   the two portraits don't compete. Purely DOM-based: a body class is
+   toggled whenever `#cypher-pc-combat-bar` enters/leaves the DOM, so
+   there is no dependency on that module being installed.            */
+function _initCombatBarFadeSync() {
+  const SELECTOR = "#cypher-pc-combat-bar";
+  const CLASS = "ct-combat-bar-active";
+  let active = null;
+  const apply = () => {
+    const now = !!document.querySelector(SELECTOR);
+    if (now === active) return;
+    active = now;
+    document.body.classList.toggle(CLASS, now);
+  };
+  apply();
+  new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+}
+
 Hooks.once("init", () => {
   registerSettings();
   
@@ -9492,6 +9523,10 @@ Hooks.once("init", () => {
 
 Hooks.once("ready", () => {
   try {
+    // Register the class so companion files (gallery-tabs.js) can reach the
+    // live instance without a circular import
+    window.cypherTaskbar = CypherTaskbar;
+
     if (game.system.id !== "cyphersystem") {
       console.warn(`${MODULE_ID} | Requires the Cypher System.`);
       return;
@@ -9503,6 +9538,10 @@ Hooks.once("ready", () => {
 
     // Migrate old client-scoped actorPreferences to actor flags (one-time)
     migrateActorPreferences();
+
+    // Fade the taskbar portrait while the Cypher PC Combat bar is on screen.
+    // DOM-watched and decoupled — safe when the other module isn't installed.
+    _initCombatBarFadeSync();
 
     const modVer = game.modules.get(MODULE_ID)?.version ?? "?";
     if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | v${modVer} loaded | Cypher System ${game.system.version || '?'}`);
@@ -9639,8 +9678,12 @@ Hooks.once("ready", () => {
     }
   });
 
-  // Gallery image sharing socket (compatible with cypher-gallery-tabs)
+  // Gallery image sharing socket (compatible with cypher-gallery-tabs).
+  // Sole taskbar listener — initGallerySocket() no longer registers one.
+  // When the cypher-gallery-tabs module is active it owns share handling
+  // end to end, so we stay out of the way to avoid duplicate lightboxes.
   game.socket.on("module.cypher-gallery-tabs", async (data) => {
+    if (game.modules?.get("cypher-gallery-tabs")?.active) return;
     if (!data || data.type !== "showImage") return;
     if (typeof data.src !== "string" || typeof data.title !== "string") return;
     if (!Array.isArray(data.userIds)) return;
