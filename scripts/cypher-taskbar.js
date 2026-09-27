@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v4.1.75
+ * Cypher Taskbar v4.1.125
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -13,6 +13,7 @@ import { applyEquipmentPanel } from "./equipment-panel.js";
 import { applyAbilitiesPanel } from "./abilities-panel.js";
 import { applySpellsPanel } from "./spells-panel.js";
 import { applyCombatPanel } from "./combat-panel.js";
+import { applyCombatBar } from "./combat-bar.js";
 import { buildGalleryStrip, bindGalleryStripEvents, initGallerySocket } from "./gallery-tabs.js";
 
 class CypherTaskbar {
@@ -508,23 +509,23 @@ class CypherTaskbar {
             <div class="ct-stat-row">
               <div class="ct-stat-bar-wrap might" data-pool="might" title="Left click: -1 Might | Right click: +1 Might">
                 <div class="ct-stat-bar might" style="width:${pct(mV,mM)}%"></div>
-                <span class="ct-stat-label might"><span class="ct-attr-name">Might</span>${mE > 0 ? `<span class="ct-edge-dots">${'<span class="ct-edge-dot"></span>'.repeat(mE)}</span>` : ``}</span>
+                <span class="ct-stat-label might"><span class="ct-attr-name">Might</span></span>
               </div>
-              <span class="ct-stat-value">${mV}</span><button class="ct-roll-btn" data-roll-stat="might" title="Roll Might"><i class="fas fa-dice-d20"></i></button>
+              ${mE > 0 ? `<span class="ct-edge-dots">${'<span class="ct-edge-dot"></span>'.repeat(mE)}</span>` : ``}<span class="ct-stat-value">${mV}</span><button class="ct-roll-btn" data-roll-stat="might" title="Roll Might"><i class="fas fa-dice-d20"></i></button>
             </div>
             <div class="ct-stat-row">
               <div class="ct-stat-bar-wrap speed" data-pool="speed" title="Left click: -1 Speed | Right click: +1 Speed">
                 <div class="ct-stat-bar speed" style="width:${pct(sV,sM)}%"></div>
-                <span class="ct-stat-label speed"><span class="ct-attr-name">Speed</span>${sE > 0 ? `<span class="ct-edge-dots">${'<span class="ct-edge-dot"></span>'.repeat(sE)}</span>` : ``}</span>
+                <span class="ct-stat-label speed"><span class="ct-attr-name">Speed</span></span>
               </div>
-              <span class="ct-stat-value">${sV}</span><button class="ct-roll-btn" data-roll-stat="speed" title="Roll Speed"><i class="fas fa-dice-d20"></i></button>
+              ${sE > 0 ? `<span class="ct-edge-dots">${'<span class="ct-edge-dot"></span>'.repeat(sE)}</span>` : ``}<span class="ct-stat-value">${sV}</span><button class="ct-roll-btn" data-roll-stat="speed" title="Roll Speed"><i class="fas fa-dice-d20"></i></button>
             </div>
             <div class="ct-stat-row">
               <div class="ct-stat-bar-wrap intellect" data-pool="intellect" title="Left click: -1 Intellect | Right click: +1 Intellect">
                 <div class="ct-stat-bar intellect" style="width:${pct(iV,iM)}%"></div>
-                <span class="ct-stat-label intellect"><span class="ct-attr-name">Intellect</span>${iE > 0 ? `<span class="ct-edge-dots">${'<span class="ct-edge-dot"></span>'.repeat(iE)}</span>` : ``}</span>
+                <span class="ct-stat-label intellect"><span class="ct-attr-name">Intellect</span></span>
               </div>
-              <span class="ct-stat-value">${iV}</span><button class="ct-roll-btn" data-roll-stat="intellect" title="Roll Intellect"><i class="fas fa-dice-d20"></i></button>
+              ${iE > 0 ? `<span class="ct-edge-dots">${'<span class="ct-edge-dot"></span>'.repeat(iE)}</span>` : ``}<span class="ct-stat-value">${iV}</span><button class="ct-roll-btn" data-roll-stat="intellect" title="Roll Intellect"><i class="fas fa-dice-d20"></i></button>
             </div>
             ${this._buildXpSpendBar(actor)}
           </div>
@@ -548,6 +549,7 @@ class CypherTaskbar {
               </button>
             </div>
             ${this._buildRecoveryRolls(actor)}
+            ${this._buildCombatBar(actor ?? null)}
           </div>
           ${this._buildFocusedArcWidget(actor)}
         </div>
@@ -1275,58 +1277,14 @@ class CypherTaskbar {
       </div>`;
   }
 
-  _bindEvents() {
-    const bar = this.element;
-    if (!bar) return;
-      const actor = this.actor;
-
+  /**
+   * Bind events for the floating portrait area (portrait, stat bars, dice bar,
+   * recovery drops, XP spend buttons, focused-arc widget). Extracted from
+   * _bindEvents so _rebuildFloat() can re-bind after rebuilding the float.
+   */
+  _bindFloatEvents(bar) {
+    const actor = this.actor;
     const portrait = bar.querySelector(".ct-portrait");
-    const eyeBtn = bar.querySelector("#ct-btn-eye");
-    if (eyeBtn) {
-      eyeBtn.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (this._portraitToggleBusy) return;
-        this._portraitToggleBusy = true;
-        this._suppressRender = true;
-        try {
-          const collapsed = !!(this._gs("portraitAreaCollapsed") ?? false);
-          const newCollapsed = !collapsed;
-          // Toggle slide animation class on float FIRST (before save triggers render)
-          const floatEl = document.querySelector("#ct-char-float");
-          if (floatEl) {
-            floatEl.classList.toggle("ct-portrait-slide-away", newCollapsed);
-          }
-          // Update section-1 collapsed state
-          const s1 = bar.querySelector(".ct-section-1");
-          if (s1) {
-            s1.classList.toggle("ct-section-1-collapsed", newCollapsed);
-          }
-          // Update eye button appearance
-          const icon = eyeBtn.querySelector("i");
-          if (icon) {
-            icon.className = `fas ${newCollapsed ? 'fa-eye-slash' : 'fa-eye'}`;
-          }
-          eyeBtn.classList.toggle("ct-eye-collapsed", newCollapsed);
-          eyeBtn.title = newCollapsed ? "Show portrait" : "Hide portrait";
-          // Save setting LAST (triggers updateActor hook → render, but _suppressRender blocks it)
-          await this._ss("portraitAreaCollapsed", newCollapsed);
-        } finally {
-          this._portraitToggleBusy = false;
-          this._suppressRender = false;
-        }
-      };
-    }
-
-    const xpBtn = bar.querySelector("#ct-btn-xp");
-    if (xpBtn) {
-      xpBtn.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._openCypherXpApp(xpBtn);
-      };
-    }
-
     const focusedArcWidgetBtn = bar.querySelector("[data-open-focused-arc]");
     if (focusedArcWidgetBtn) {
       const openFocusedArcDialog = async (e) => {
@@ -1349,31 +1307,10 @@ class CypherTaskbar {
         el.onclick = openFocusedArcDialog;
       });
     }
-    const barPortraitRestoreBtn = bar.querySelector(".ct-bar-portrait-restore");
     if (portrait) portrait.onclick = (e) => {
       e.stopPropagation();
       this.actor?.sheet?.render(true);
     };
-
-    if (barPortraitRestoreBtn) {
-      barPortraitRestoreBtn.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (this._portraitToggleBusy) return;
-        this._portraitToggleBusy = true;
-        try {
-          await this._ss("portraitAreaCollapsed", false);
-          this._closePanel();
-          this.render();
-        } finally {
-          this._portraitToggleBusy = false;
-        }
-      };
-      barPortraitRestoreBtn.oncontextmenu = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
-    }
 
     bar.querySelectorAll(".ct-stat-bar-wrap[data-pool]").forEach(el => {
       el.onclick = async (e) => {
@@ -1439,6 +1376,126 @@ class CypherTaskbar {
         await this._spendRecoveryRoll(idx);
       });
     });
+  }
+
+  /**
+   * Rebuild only the floating portrait area in place — live preview for the
+   * Portrait Space Settings popup. render() is overkill (whole bar rebuild,
+   * minimize re-injection, panel close) and refresh() deliberately never
+   * touches the float, so slider changes never showed until a reload. The
+   * live portrait <img>/<video> node is preserved to avoid flicker and webm
+   * animation restarts on every input tick.
+   */
+  _rebuildFloat() {
+    const bar = this.element;
+    if (!bar) return;
+    const oldFloat = bar.querySelector("#ct-char-float");
+    if (!oldFloat) { this.render(); return; }
+    const actor = this.actor;
+    const noActor = !actor || actor.type !== "pc";
+    const tmp = document.createElement("div");
+    tmp.innerHTML = this._buildFloating(actor, noActor);
+    const newFloat = tmp.firstElementChild;
+    if (!newFloat) return;
+
+    // Keep the live media node when the source is unchanged (avoids reload
+    // flicker / webm restart); adopt the rebuilt node when the portrait path
+    // actually changed. Style always comes from the fresh build (width/shadow).
+    const oldMedia = oldFloat.querySelector(".ct-portrait, .ct-portrait-video");
+    const newMedia = newFloat.querySelector(".ct-portrait, .ct-portrait-video");
+    if (oldMedia && newMedia) {
+      if ((oldMedia.getAttribute("src") ?? "") === (newMedia.getAttribute("src") ?? "")) {
+        const style = newMedia.getAttribute("style") ?? "";
+        const timerAnim = newMedia.getAttribute("data-timer-anim");
+        newMedia.replaceWith(oldMedia);
+        oldMedia.setAttribute("style", style);
+        if (timerAnim !== null) oldMedia.setAttribute("data-timer-anim", timerAnim);
+      }
+    }
+    oldFloat.replaceWith(newFloat);
+    this._buildElCache();
+    this._bindFloatEvents(bar);
+    this._bindStatusEffectTooltips();
+    this._setupPortraitAnim();
+    this._updatePortraitTaskFlash();
+  }
+
+  _bindEvents() {
+    const bar = this.element;
+    if (!bar) return;
+      const actor = this.actor;
+
+    const eyeBtn = bar.querySelector("#ct-btn-eye");
+    if (eyeBtn) {
+      eyeBtn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this._portraitToggleBusy) return;
+        this._portraitToggleBusy = true;
+        this._suppressRender = true;
+        try {
+          const collapsed = !!(this._gs("portraitAreaCollapsed") ?? false);
+          const newCollapsed = !collapsed;
+          // Toggle slide animation class on float FIRST (before save triggers render)
+          const floatEl = document.querySelector("#ct-char-float");
+          if (floatEl) {
+            floatEl.classList.toggle("ct-portrait-slide-away", newCollapsed);
+          }
+          // Update section-1 collapsed state
+          const s1 = bar.querySelector(".ct-section-1");
+          if (s1) {
+            s1.classList.toggle("ct-section-1-collapsed", newCollapsed);
+          }
+          // Update eye button appearance
+          const icon = eyeBtn.querySelector("i");
+          if (icon) {
+            icon.className = `fas ${newCollapsed ? 'fa-eye-slash' : 'fa-eye'}`;
+          }
+          eyeBtn.classList.toggle("ct-eye-collapsed", newCollapsed);
+          eyeBtn.title = newCollapsed ? "Show portrait" : "Hide portrait";
+          // Save setting LAST (triggers updateActor hook → render, but _suppressRender blocks it)
+          await this._ss("portraitAreaCollapsed", newCollapsed);
+        } finally {
+          this._portraitToggleBusy = false;
+          this._suppressRender = false;
+        }
+      };
+    }
+
+    const xpBtn = bar.querySelector("#ct-btn-xp");
+    if (xpBtn) {
+      xpBtn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        await this._openCypherXpApp(xpBtn);
+      };
+    }
+
+    const barPortraitRestoreBtn = bar.querySelector(".ct-bar-portrait-restore");
+    if (barPortraitRestoreBtn) {
+      barPortraitRestoreBtn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this._portraitToggleBusy) return;
+        this._portraitToggleBusy = true;
+        try {
+          await this._ss("portraitAreaCollapsed", false);
+          this._closePanel();
+          this.render();
+        } finally {
+          this._portraitToggleBusy = false;
+        }
+      };
+      barPortraitRestoreBtn.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+    }
+
+    // ── Floating portrait area (portrait, stat bars, dice, recovery, XP spend, arc widget) ──
+    // Extracted into _bindFloatEvents() so _rebuildFloat() can re-bind it.
+    this._bindFloatEvents(bar);
+
     bar.querySelectorAll(".ct-btn[data-panel]").forEach(btn => {
       btn.onclick = (e) => {
         e.preventDefault();
@@ -3651,7 +3708,8 @@ class CypherTaskbar {
         await this._ss("xpBarOffsetY", parseInt(popup.querySelector("#ps-xp-y").value));
         await this._ss("xpBarIconSize", parseInt(popup.querySelector("#ps-xp-icon").value));
         await this._ss("xpBarTooltipFontSize", parseInt(popup.querySelector("#ps-xp-tt").value));
-        this.refresh();
+        this._rebuildFloat(); // live preview: float HTML bakes in these settings
+        this.refresh();         // CSS vars via applySettings() + section rebuilds
         if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings applied successfully`);
       } catch (err) {
         console.error(`${MODULE_ID} | apply() failed:`, err);
@@ -7141,6 +7199,9 @@ class CypherTaskbar {
           oldRecBar.replaceWith(tmp.firstElementChild);
         }
       }
+
+      // Combat bar (combat-bar.js mixin): insert / refresh / remove in place
+      this._updateCombatBar?.();
     }
 
     // If no float exists yet, do a full render
@@ -8079,6 +8140,14 @@ class CypherTaskbar {
       </form>`;
 
     return await new Promise(resolve => {
+      // Foundry's V1 Dialog closes right after invoking a button callback and
+      // does NOT await it, so close() fires while the roll is still being
+      // performed. The callback's SYNCHRONOUS prologue runs before close(),
+      // though — so `rolled` flipped there tells close() a roll is in flight
+      // and it must not resolve(null). Covers both orderings.
+      let rolled = false;
+      let settled = false;
+      const done = (value) => { if (!settled) { settled = true; resolve(value); } };
       const dialog = new Dialog({
         title,
         content,
@@ -8087,19 +8156,25 @@ class CypherTaskbar {
             icon: '<i class="fas fa-dice-d20"></i>',
             label: 'Roll',
             callback: async html => {
+              rolled = true; // sync — runs before the dialog closes
               const root = html?.[0] ?? html;
               const form = root?.querySelector('.ct-native-attribute-roll-form');
-              if (!form) return resolve(null);
+              if (!form) return done(null);
               const data = Object.fromEntries(new FormData(form).entries());
               // Resolve with the achieved total (die + modifiers) so callers
               // can judge success against the target number.
-              resolve(await this._performAttributeRoll(actor, defaultPool, data));
+              try {
+                done(await this._performAttributeRoll(actor, defaultPool, data));
+              } catch (err) {
+                console.error(`${MODULE_ID} | attribute roll failed`, err);
+                done(null);
+              }
             }
           },
           cancel: {
             icon: '<i class="fas fa-times"></i>',
             label: 'Cancel',
-            callback: () => resolve(null)
+            callback: () => done(null)
           }
         },
         default: 'roll',
@@ -8123,7 +8198,7 @@ class CypherTaskbar {
           form.querySelectorAll('select').forEach(el => el.addEventListener('change', sync));
           sync();
         },
-        close: () => resolve(null)
+        close: () => { if (!rolled) done(null); }
       }, {
         width: 560,
         classes: ['ct-skill-roll-dialog-app']
@@ -9464,6 +9539,7 @@ applyEquipmentPanel(CypherTaskbar);
 applyAbilitiesPanel(CypherTaskbar);
 applySpellsPanel(CypherTaskbar);
 applyCombatPanel(CypherTaskbar);
+applyCombatBar(CypherTaskbar);
 
 // ══════════════════════════════════════════
 //  Hooks
@@ -9577,6 +9653,23 @@ Hooks.once("ready", () => {
     }
     if (payload.type === "gmRestRequest" && game.user?.isGM) {
       CypherTaskbar.instance?._openGMRestRequest(payload);
+      return;
+    }
+    /* ── Combat Bar: player asks the GM to end the tracked PC's turn ── */
+    if (payload.type === "gmEndTurnRequest" && game.user?.isGM) {
+      try {
+        const combat = game.combat;
+        const requester = game.users.get(payload.userId);
+        if (combat && combat.id === payload.combatId && combat.started) {
+          const combatant = combat.combatant ?? null;
+          const ownedByRequester = combatant?.actor
+            ? (combatant.actor.testUserPermission?.(requester, "OWNER") ?? false)
+            : false;
+          if (ownedByRequester) await combat.nextTurn();
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | gmEndTurnRequest failed:`, err);
+      }
       return;
     }
     if (payload.type === "restApproved") {
@@ -9826,6 +9919,47 @@ Hooks.on("deleteItem", (item) => {
 Hooks.on("createActiveEffect", (effect) => { if (CypherTaskbar.instance?.actor?.id === effect.parent?.id) CypherTaskbar.instance._refreshStatusEffects(); });
 Hooks.on("updateActiveEffect", (effect) => { if (CypherTaskbar.instance?.actor?.id === effect.parent?.id) CypherTaskbar.instance._refreshStatusEffects(); });
 Hooks.on("deleteActiveEffect", (effect) => { if (CypherTaskbar.instance?.actor?.id === effect.parent?.id) CypherTaskbar.instance._refreshStatusEffects(); });
+
+// Combat Bar: re-evaluate the ATTACK button (target requirement) whenever this
+// user targets or untargets a token — covers the bar's own targeting mode too.
+Hooks.on("targetToken", () => { CypherTaskbar.instance?._cbSyncAttackBtn?.(); });
+
+// ── MOVE MODE: during combat, PC tokens can only move via the combat bar MOVE button ──
+Hooks.on("preUpdateToken", (doc, changes, options, userId) => {
+  if (!game.settings.get(MODULE_ID, "lockPcMovement")) return;
+  if (!game.combat?.started) return; // lock only while a combat is active
+  // The lock exists to police PLAYER input paths. The GM's drags and scripted
+  // updates stay free at all times — combat choreography is theirs.
+  if (game.user?.isGM) return;
+  // V14 documents that preUpdateToken fires only on the client that initiated the
+  // update (and userId is always game.user.id there). Keep the origin check as
+  // cheap defensive hardening — it costs nothing and guards against API drift.
+  if (userId !== game.user.id) return;
+  if (CypherTaskbar._cbInternalMove) return; // module's own FINISH MOVE commit
+  if (!changes || (changes.x === undefined && changes.y === undefined)) return;
+  const actor = doc.actor;
+  if (!actor || (actor.type !== "pc" && !actor.hasPlayerOwner)) return;
+  // MOVE MODE token: allowed, but clamped to the selected option's max distance
+  // (IMMEDIATE 3 m / SHORT 15 m / LONG 30 m) — no input path may exceed it.
+  const mm = CypherTaskbar.instance?._cbMoveMode;
+  if (mm?.token && mm.token.document.id === doc.id) {
+    // Same geometry snapshot the drag uses (rendered footprint captured at entry).
+    const w = mm.tw || mm.token.w || 0, h = mm.th || mm.token.h || 0;
+    if (!w || !h) return;
+    const scx = mm.start.x + w / 2, scy = mm.start.y + h / 2;
+    const cx = (changes.x ?? doc.x) + w / 2 - scx;
+    const cy = (changes.y ?? doc.y) + h / 2 - scy;
+    const d = Math.hypot(cx, cy);
+    if (d > mm.maxPx) {
+      const k = mm.maxPx / d;
+      changes.x = Math.round(scx + cx * k - w / 2);
+      changes.y = Math.round(scy + cy * k - h / 2);
+    }
+    return;
+  }
+  ui.notifications?.warn("Movement locked — use the MOVE button on the combat bar.");
+  return false;
+});
 Hooks.on("renderApplication", (app) => { CypherTaskbar.instance?._injectMinimizeButton(app); CypherTaskbar.instance?.refreshTray(); });
 Hooks.on("closeApplication", () => CypherTaskbar.instance?.refreshTray());
 Hooks.on("renderApplicationV2", (app) => { CypherTaskbar.instance?._injectMinimizeButton(app); CypherTaskbar.instance?.refreshTray(); });
@@ -9918,10 +10052,11 @@ Hooks.on("renderActiveEffectConfig", _ctInjectMinimize);
 Hooks.on("renderSceneNavigation", () => CypherTaskbar.instance?._injectSceneHand());
 Hooks.on("userConnected", () => CypherTaskbar.instance?.updateOnlineStatus());
 Hooks.on("createCombatant", () => CypherTaskbar.instance?.refresh());
-Hooks.on("updateCombatant", () => CypherTaskbar.instance?.refresh());
-Hooks.on("deleteCombatant", () => CypherTaskbar.instance?.refresh());
-Hooks.on("updateCombat", () => CypherTaskbar.instance?.refresh());
-Hooks.on("deleteCombat", () => CypherTaskbar.instance?.refresh());
+Hooks.on("updateCombatant", () => { CypherTaskbar.instance?.refresh(); CypherTaskbar.instance?._updateCombatBar?.(); });
+Hooks.on("deleteCombatant", () => { CypherTaskbar.instance?.refresh(); CypherTaskbar.instance?._updateCombatBar?.(); });
+Hooks.on("updateCombat", () => { CypherTaskbar.instance?.refresh(); CypherTaskbar.instance?._updateCombatBar?.(); });
+Hooks.on("deleteCombat", () => { CypherTaskbar.instance?.refresh(); CypherTaskbar.instance?._updateCombatBar?.(); });
+Hooks.on("combatStart", () => CypherTaskbar.instance?._updateCombatBar?.());
 
 // ── Cash & Values: GM interaction with USE chat cards ──
 Hooks.on("renderChatMessage", (message, html) => {

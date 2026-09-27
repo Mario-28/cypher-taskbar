@@ -383,4 +383,12 @@ function _registerMenuSettings(prefix) {
       restricted: true
     });
   }
+  game.settings.register(MODULE_ID, "lockPcMovement", {
+    name: "Lock PC Movement",
+    hint: "During combat, blocks ALL direct movement of PC tokens (drag, arrow keys, etc.). Movement is only possible via the combat bar MOVE menu. Outside combat, movement is free.",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: true
+  });
 }

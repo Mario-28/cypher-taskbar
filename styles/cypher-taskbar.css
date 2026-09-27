@@ -639,6 +639,7 @@ body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .c
   align-items: center;
   gap: calc(var(--ct-bars-gap, 4px) * var(--ct-bars-scale));
   transform-origin: left center;
+  position: relative; /* containing block for .ct-edge-dots, which sits outside the overflow-hidden bar wrap */
 }
 .ct-stat-label {
   position: absolute;
@@ -1116,14 +1117,14 @@ body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .c
 }
 .ct-edge-dots {
   position: absolute;
-  left: calc(6px * var(--ct-bars-scale));
-  top: 100%;
-  transform: translateY(-50%);
+  left: calc(14px * var(--ct-bars-scale));
+  top: calc(100% - 4px); /* straddle the bar's bottom-left edge, just outside the overflow-hidden wrap */
   display: inline-flex;
   align-items: center;
   gap: calc(3px * var(--ct-bars-scale));
   pointer-events: none;
-  z-index: 4;
+  /* Above the XP bar's z-index: 5 — the intellect row's dots protrude into the XP bar's top edge otherwise */
+  z-index: 6;
 }
 .ct-edge-dot {
   width: calc(8px * var(--ct-bars-scale));
@@ -11135,6 +11136,10 @@ backdrop-filter: blur(8px);
   height: var(--ct-xp-h, auto);
   transform: var(--ct-xp-s, scale(1)) translate(var(--ct-xp-ox, 0%), var(--ct-xp-oy, 0%));
   transform-origin: center center;
+  /* The transform creates a stacking context: without this z-index the whole bar
+     (tooltips included) paints below .ct-stat-label (z-index: 2) and hover
+     tooltips get covered by the attribute bar labels. */
+  z-index: 5;
 }
 
 /* XP Counter (stylized number) */
@@ -12097,4 +12102,739 @@ backdrop-filter: blur(8px);
   border-color: var(--ct-prio-color, #ffaa00);
   color: #e8e8e8;
   box-shadow: 0 0 12px var(--ct-prio-color, rgba(255,170,0,0.2));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   COMBAT BAR (v4.1.89) — horizontal action strip · combat-bar.js
+   Reference: Destiny 2 HUD tiles × FFXIV hotbar — dark glass,
+   luminous gold trim, springy hover/press.
+   ═══════════════════════════════════════════════════════════════ */
+.ct-combat-bar {
+  position: absolute;
+  bottom: 10px;
+  left: calc(50% + var(--ct-cb-off, 238px));
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(200, 169, 110, 0.22);
+  background: linear-gradient(180deg, rgba(16, 13, 24, 0.55) 0%, rgba(10, 8, 16, 0.8) 100%);
+  backdrop-filter: blur(10px) saturate(1.2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  pointer-events: all;
+  z-index: 5;
+  animation: ct-cb-in 0.25s cubic-bezier(0.2, 0.9, 0.25, 1.2);
+}
+@keyframes ct-cb-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* Icon tiles */
+.ct-cb-btn {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: linear-gradient(160deg, rgba(38, 32, 52, 0.9), rgba(18, 15, 28, 0.9));
+  border: 1px solid rgba(200, 169, 110, 0.22);
+  border-radius: 8px;
+  color: #d8cdb4;
+  cursor: pointer;
+  transition: transform 0.14s cubic-bezier(0.3, 1.4, 0.5, 1), border-color 0.14s, color 0.14s, box-shadow 0.14s, background 0.14s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.ct-cb-btn:hover {
+  transform: translateY(-2px) scale(1.07);
+  border-color: rgba(240, 214, 138, 0.65);
+  color: #ffd700;
+  background: linear-gradient(160deg, rgba(58, 48, 78, 0.95), rgba(28, 22, 42, 0.95));
+  box-shadow: 0 0 12px rgba(200, 169, 110, 0.35), 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.ct-cb-btn:active {
+  transform: scale(0.9);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.ct-cb-btn i {
+  pointer-events: none;
+  font-size: 13px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+/* TARGET — leading tile, crosshair in white over the red acquire glow */
+.ct-cb-target {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  color: #ffffff;
+  background: radial-gradient(circle at 50% 35%, rgba(120, 30, 30, 0.85), rgba(40, 10, 12, 0.92));
+  border-color: rgba(255, 110, 110, 0.45);
+  animation: ct-cb-idle 2.8s ease-in-out infinite;
+}
+.ct-cb-target i {
+  font-size: 24px;
+  line-height: 1;
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.35));
+}
+.ct-cb-target:hover {
+  transform: scale(1.05);
+  border-color: rgba(255, 140, 140, 0.8);
+  color: #ffffff;
+  box-shadow: 0 0 18px rgba(255, 80, 80, 0.45), 0 6px 14px rgba(0, 0, 0, 0.5);
+}
+/* MOVE — blue gradient tile next to TARGET, slightly larger than the action row */
+.ct-cb-move {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: #dbeaff;
+  background: linear-gradient(160deg, #2e6bd4 0%, #1d448f 55%, #122c5e 100%);
+  border-color: rgba(120, 180, 255, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 2px 8px rgba(20, 60, 140, 0.45);
+}
+.ct-cb-move i {
+  font-size: 16px;
+  filter: drop-shadow(0 1px 2px rgba(0, 20, 60, 0.6));
+}
+.ct-cb-move:hover {
+  border-color: rgba(160, 205, 255, 0.85);
+  color: #ffffff;
+  background: linear-gradient(160deg, #3f80ec 0%, #2456ad 55%, #173a7a 100%);
+  box-shadow: 0 0 14px rgba(80, 150, 255, 0.5), 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+/* MOVE — disabled while the move pool is empty */
+.ct-cb-move.ct-cb-disabled,
+.ct-cb-move.ct-cb-disabled:hover {
+  color: rgba(210, 215, 225, 0.35);
+  background: linear-gradient(160deg, rgba(52, 56, 66, 0.8), rgba(28, 30, 38, 0.9));
+  border-color: rgba(140, 150, 170, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 6px rgba(0, 0, 0, 0.3);
+  transform: none;
+  filter: grayscale(0.9);
+  cursor: not-allowed;
+}
+.ct-cb-move.ct-cb-disabled i {
+  opacity: 0.45;
+}
+/* ATTACK — disabled while no token is targeted or the action pool is empty */
+.ct-cb-attack.ct-cb-disabled,
+.ct-cb-attack.ct-cb-disabled:hover {
+  color: rgba(210, 215, 225, 0.35);
+  background: linear-gradient(160deg, rgba(52, 56, 66, 0.8), rgba(28, 30, 38, 0.9));
+  border-color: rgba(140, 150, 170, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 6px rgba(0, 0, 0, 0.3);
+  transform: none;
+  filter: grayscale(0.9);
+  cursor: not-allowed;
+}
+.ct-cb-attack.ct-cb-disabled i {
+  opacity: 0.45;
+}
+/* ATTACK — red tile */
+.ct-cb-attack {
+  color: #ffd7d7;
+  background: linear-gradient(160deg, rgba(150, 30, 30, 0.85), rgba(60, 12, 14, 0.92));
+  border-color: rgba(255, 110, 110, 0.45);
+}
+.ct-cb-attack:hover {
+  border-color: rgba(255, 140, 140, 0.8);
+  color: #ffe9e9;
+  background: linear-gradient(160deg, rgba(190, 40, 40, 0.9), rgba(90, 18, 20, 0.95));
+  box-shadow: 0 0 14px rgba(255, 80, 80, 0.45), 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+/* MOVE popup — two-column glass expenditure menu
+   Reference: Linear command palette × VisionOS glass, inside the bar's
+   Destiny 2 dark-gold language. Deep blur, layered ambient shadows,
+   specular top highlights, gradient title rules. */
+.ct-cb-move-menu {
+  position: fixed;
+  display: flex;
+  gap: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: linear-gradient(180deg, rgba(30, 26, 44, 0.82) 0%, rgba(13, 11, 20, 0.9) 100%);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.55),
+    0 6px 18px rgba(0, 0, 0, 0.4),
+    0 12px 40px rgba(56, 110, 200, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  z-index: 60;
+  transform-origin: bottom left;
+  animation: ct-mm-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  -webkit-font-smoothing: antialiased;
+}
+@keyframes ct-mm-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.ct-cb-mm-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 64px;
+}
+.ct-cb-mm-col + .ct-cb-mm-col {
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  padding-left: 14px;
+  margin-left: 14px;
+}
+.ct-cb-mm-title {
+  position: relative;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.26em;
+  color: rgba(226, 216, 196, 0.9);
+  text-align: center;
+  padding-bottom: 7px;
+}
+.ct-cb-mm-title::after {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(150, 195, 255, 0.55), transparent);
+}
+.ct-cb-mm-opt {
+  --acc: 96, 156, 250;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 64px;
+  height: 64px;
+  padding: 4px;
+  margin: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: center;
+  border: 1px solid rgba(var(--acc), 0.3);
+  background: linear-gradient(165deg, rgba(var(--acc), 0.28) 0%, rgba(15, 22, 40, 0.42) 100%);
+  color: #eef4ff;
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.16s, color 0.16s, box-shadow 0.16s, background 0.16s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13), 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+.ct-cb-mm-opt:hover {
+  transform: translateY(-2px);
+  border-color: rgba(var(--acc), 0.75);
+  color: #ffffff;
+  background: linear-gradient(165deg, rgba(var(--acc), 0.44) 0%, rgba(20, 30, 55, 0.5) 100%);
+  box-shadow:
+    0 8px 22px rgba(var(--acc), 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+/* Per-move color coding */
+.ct-mm-green { --acc: 74, 196, 120; }
+.ct-mm-teal  { --acc: 56, 189, 186; }
+.ct-mm-blue  { --acc: 96, 156, 250; }
+.ct-mm-amber { --acc: 232, 162, 68; }
+.ct-cb-mm-opt:active {
+  transform: translateY(0) scale(0.94);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+.ct-cb-mm-opt:focus-visible {
+  outline: 2px solid rgba(160, 200, 255, 0.65);
+  outline-offset: 2px;
+}
+.ct-cb-mm-name {
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  text-shadow: 0 1px 2px rgba(0, 10, 30, 0.5);
+}
+/* MOVE tooltip — glass card tinted by the hovered tile's --acc */
+.ct-mm-tip {
+  --acc: 150, 180, 220;
+  position: fixed;
+  max-width: 230px;
+  padding: 10px 12px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--acc), 0.4);
+  background: linear-gradient(180deg, rgba(27, 23, 39, 0.94) 0%, rgba(13, 11, 20, 0.96) 100%);
+  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.55),
+    0 0 18px rgba(var(--acc), 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  z-index: 70;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ct-mm-tip.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+.ct-mm-tip::after {
+  content: "";
+  position: absolute;
+  left: var(--tip-x, 50%);
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  transform: translateX(-50%) rotate(45deg);
+  background: rgba(15, 13, 22, 0.96);
+  border-right: 1px solid rgba(var(--acc), 0.4);
+  border-bottom: 1px solid rgba(var(--acc), 0.4);
+}
+.ct-mm-tip-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  color: rgb(var(--acc));
+  margin-bottom: 4px;
+}
+.ct-mm-tip-dist {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgba(226, 216, 196, 0.75);
+  border: 1px solid rgba(226, 216, 196, 0.25);
+  border-radius: 20px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.ct-mm-tip-body {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(232, 236, 246, 0.88);
+  margin-bottom: 6px;
+}
+.ct-mm-tip-cost {
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: rgba(var(--acc), 0.9);
+}
+/* Depleted resource pip */
+.ct-cb-res.ct-cb-res-empty {
+  color: #5a6472;
+  border-color: rgba(120, 120, 120, 0.25);
+}
+.ct-cb-res.ct-cb-res-empty .ct-cb-res-val {
+  color: #8a8a8a;
+  border-color: rgba(120, 120, 120, 0.35);
+}
+@keyframes ct-cb-idle {
+  0%, 100% { box-shadow: 0 0 8px rgba(255, 80, 80, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06); }
+  50%      { box-shadow: 0 0 18px rgba(255, 80, 80, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06); }
+}
+/* Spacer + separator */
+.ct-cb-spacer {
+  width: 8px;
+  height: 60%;
+  flex-shrink: 0;
+}
+.ct-cb-sep {
+  width: 1px;
+  height: 60%;
+  margin: 0 4px;
+  background: linear-gradient(180deg, transparent, rgba(200, 169, 110, 0.45), transparent);
+  flex-shrink: 0;
+}
+/* Resource pips — circular rings with value badge */
+.ct-cb-res-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+}
+.ct-cb-res {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(52, 44, 70, 0.9), rgba(16, 13, 24, 0.9));
+  border: 1px solid rgba(200, 169, 110, 0.3);
+  color: #9fb4c8;
+  font-size: 13px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 5px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.ct-cb-res-val {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 2px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(60, 48, 20, 0.95), rgba(24, 18, 8, 0.95));
+  border: 1px solid rgba(255, 215, 0, 0.5);
+  color: #ffd700;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 13px;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+/* END — red cap at the right end */
+.ct-cb-end {
+  width: auto;
+  height: 28px;
+  margin-left: 7px;
+  padding: 0 10px;
+  gap: 5px;
+  border-radius: 8px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: #ffd7d7;
+  background: linear-gradient(160deg, rgba(120, 24, 24, 0.8), rgba(50, 10, 12, 0.9));
+  border-color: rgba(255, 110, 110, 0.4);
+}
+.ct-cb-end i {
+  font-size: 12px;
+  filter: none;
+}
+.ct-cb-end span {
+  pointer-events: none;
+}
+.ct-cb-end:hover {
+  background: linear-gradient(160deg, rgba(170, 34, 34, 0.9), rgba(80, 16, 18, 0.95));
+  border-color: rgba(255, 140, 140, 0.7);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(255, 80, 80, 0.4), 0 4px 10px rgba(0, 0, 0, 0.4);
+}
+/* ── Targeting mode (combat-bar.js) ─────────────────────────── */
+body.ct-targeting #cypher-taskbar,
+body.ct-targeting #ct-char-float,
+body.ct-targeting #sidebar,
+body.ct-targeting #controls,
+body.ct-targeting #navigation,
+body.ct-targeting #players,
+body.ct-targeting #hotbar {
+  display: none !important;
+}
+body.ct-targeting,
+body.ct-targeting #board {
+  cursor: crosshair !important;
+}
+.ct-targeting-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9900;
+  pointer-events: none;
+}
+.ct-targeting-vignette {
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(7px) saturate(0.9);
+  -webkit-backdrop-filter: blur(7px) saturate(0.9);
+  background: radial-gradient(ellipse at center, transparent 42%, rgba(6, 4, 12, 0.5) 75%, rgba(6, 4, 12, 0.88) 100%);
+  mask-image: radial-gradient(ellipse at center, transparent 55%, black 82%);
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent 55%, black 82%);
+}
+.ct-targeting-window {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 420px;
+  max-width: 90vw;
+  text-align: center;
+  padding: 12px 30px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  background: linear-gradient(180deg, rgba(20, 16, 30, 0.85), rgba(10, 8, 16, 0.9));
+  backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  animation: ct-tgt-in 0.35s cubic-bezier(0.2, 0.9, 0.25, 1.2);
+}
+@keyframes ct-tgt-in {
+  from { opacity: 0; transform: translate(-50%, -18px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.ct-targeting-title {
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 24px;
+  letter-spacing: 0.32em;
+  color: rgba(240, 214, 138, 0.95);
+  text-shadow: 0 0 14px rgba(200, 169, 110, 0.5);
+}
+.ct-targeting-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(216, 205, 180, 0.75);
+}
+.ct-targeting-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-10px);
+  overflow: hidden;
+  margin-top: 0;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: #1a1408;
+  background: linear-gradient(180deg, #f0d68a, #b8933f);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: max-height 0.3s ease, opacity 0.3s ease, transform 0.3s cubic-bezier(0.3, 1.3, 0.5, 1), margin-top 0.3s ease;
+}
+.ct-targeting-window.has-multi .ct-targeting-finish {
+  max-height: 40px;
+  opacity: 1;
+  transform: translateY(0);
+  margin-top: 12px;
+  padding: 7px 18px;
+  border-color: rgba(255, 235, 170, 0.6);
+}
+.ct-targeting-finish:hover {
+  filter: brightness(1.12);
+  box-shadow: 0 0 16px rgba(240, 214, 138, 0.45);
+}
+
+/* ── MOVE mode (combat-bar.js) ──────────────────────────────── */
+body.ct-move-mode #cypher-taskbar,
+body.ct-move-mode #ct-char-float,
+body.ct-move-mode #sidebar,
+body.ct-move-mode #controls,
+body.ct-move-mode #navigation,
+body.ct-move-mode #players,
+body.ct-move-mode #hotbar {
+  display: none !important;
+}
+.ct-move-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9900;
+  pointer-events: none;
+}
+.ct-move-vignette {
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(7px) saturate(1.15);
+  -webkit-backdrop-filter: blur(7px) saturate(1.15);
+  background: radial-gradient(ellipse at center, transparent 42%, rgba(24, 68, 200, 0.26) 78%, rgba(12, 34, 120, 0.52) 100%);
+  mask-image: radial-gradient(ellipse at center, transparent 55%, black 82%);
+  -webkit-mask-image: radial-gradient(ellipse at center, transparent 55%, black 82%);
+}
+
+/* ── MOVE MODE drag ruler ─────────────────────────────────────────── */
+.ct-move-ruler {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  --mr: #46e0d4;
+}
+.ct-move-ruler.on { opacity: 1; }
+.ct-move-ruler[data-state="warn"] { --mr: #f5b942; }
+.ct-move-ruler[data-state="max"] { --mr: #ff5d5d; }
+.ct-move-ruler .ct-mr-line {
+  stroke: var(--mr);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 12 8;
+  animation: ct-mr-march 0.7s linear infinite;
+  filter: drop-shadow(0 0 6px var(--mr));
+}
+@keyframes ct-mr-march { to { stroke-dashoffset: -20; } }
+.ct-move-ruler .ct-mr-ticks line {
+  stroke: #eafffd;
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px var(--mr));
+}
+.ct-move-ruler .ct-mr-origin {
+  fill: none;
+  stroke: var(--mr);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 5px var(--mr));
+}
+.ct-move-ruler .ct-mr-dest {
+  fill: color-mix(in srgb, var(--mr) 22%, transparent);
+  stroke: var(--mr);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 6px var(--mr));
+}
+.ct-move-ruler .ct-mr-pill {
+  fill: rgba(10, 16, 32, 0.88);
+  stroke: color-mix(in srgb, var(--mr) 65%, transparent);
+  stroke-width: 1;
+}
+.ct-move-ruler .ct-mr-label {
+  fill: #fff;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.ct-move-window {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 380px;
+  max-width: 90vw;
+  text-align: center;
+  padding: 14px 30px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 170, 255, 0.4);
+  background: linear-gradient(180deg, rgba(22, 30, 54, 0.88) 0%, rgba(10, 14, 26, 0.92) 100%);
+  backdrop-filter: blur(14px) saturate(1.3);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.6),
+    0 0 30px rgba(60, 120, 240, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  animation: ct-move-in 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: auto;
+}
+@keyframes ct-move-in {
+  from { opacity: 0; transform: translate(-50%, -18px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.ct-move-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.ct-move-title {
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 26px;
+  letter-spacing: 0.3em;
+  color: rgba(190, 215, 255, 0.95);
+  text-shadow: 0 0 16px rgba(110, 160, 255, 0.55);
+}
+.ct-move-dist {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: rgba(226, 216, 196, 0.8);
+  border: 1px solid rgba(226, 216, 196, 0.28);
+  border-radius: 20px;
+  padding: 2px 9px;
+}
+.ct-move-body {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(216, 226, 246, 0.8);
+}
+.ct-move-cost {
+  margin-top: 6px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: rgba(150, 195, 255, 0.85);
+}
+.ct-move-live {
+  margin-top: 6px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  color: rgba(150, 195, 255, 0.65);
+  transition: color 0.2s, text-shadow 0.2s;
+}
+.ct-move-live.hot {
+  color: rgba(190, 220, 255, 0.95);
+  text-shadow: 0 0 10px rgba(110, 160, 255, 0.5);
+}
+.ct-move-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+.ct-move-undo,
+.ct-move-finish {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px) scale(0.95);
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.15s, border-color 0.15s, filter 0.15s;
+}
+.ct-move-undo.show,
+.ct-move-finish.show {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.ct-move-undo {
+  border: 1px solid rgba(170, 195, 230, 0.45);
+  color: #e8eef8;
+  background: linear-gradient(160deg, rgba(90, 110, 150, 0.4) 0%, rgba(35, 45, 70, 0.45) 100%);
+}
+.ct-move-undo:hover {
+  transform: translateY(-1px) scale(1);
+  border-color: rgba(200, 220, 250, 0.8);
+  filter: brightness(1.15);
+  box-shadow: 0 6px 18px rgba(90, 120, 170, 0.4);
+}
+.ct-move-finish {
+  border: 1px solid rgba(140, 240, 170, 0.5);
+  color: #eafff0;
+  background: linear-gradient(160deg, rgba(50, 170, 100, 0.45) 0%, rgba(18, 70, 40, 0.5) 100%);
+}
+.ct-move-finish:hover {
+  transform: translateY(-1px) scale(1);
+  border-color: rgba(170, 255, 195, 0.85);
+  filter: brightness(1.15);
+  box-shadow: 0 6px 18px rgba(60, 190, 110, 0.45);
+}
+.ct-move-exit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 22px;
+  border: 1px solid rgba(255, 140, 140, 0.5);
+  border-radius: 20px;
+  font-family: "Bebas Neue", "Oswald", "Signika", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  color: #ffe2e2;
+  background: linear-gradient(160deg, rgba(200, 60, 60, 0.4) 0%, rgba(90, 20, 20, 0.45) 100%);
+  cursor: pointer;
+  transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.15s, border-color 0.15s, filter 0.15s;
+}
+.ct-move-exit:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 170, 170, 0.8);
+  filter: brightness(1.15);
+  box-shadow: 0 6px 18px rgba(220, 70, 70, 0.4);
+}
+.ct-move-exit:active {
+  transform: scale(0.96);
 }
