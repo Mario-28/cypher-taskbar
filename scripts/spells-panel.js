@@ -166,6 +166,17 @@ export function applySpellsPanel(CypherTaskbar) {
       return cols.map(col => `<div class="ct-sp-masonry-column">${col.sections.join("")}</div>`).join("");
     },
 
+    /* ── SPELLS PER DAY (Cypher GM Taskbar → player taskbar) ──
+       GM sets the limit as an actor flag (cypher-gm-taskbar.spellsPerDayLimit);
+       0/unset = unlimited. Memorized (READY) spells deplete it; at 0 no more
+       spells can be memorized until one is removed from READY. */
+    _spellsPerDayLimit(actor) {
+      const raw = actor?.getFlag?.("cypher-gm-taskbar", "spellsPerDayLimit");
+      if (raw === undefined || raw === null || raw === "") return 0;
+      const v = Number(raw);
+      return Number.isFinite(v) ? Math.max(0, Math.min(99, Math.round(v))) : 0;
+    },
+
     _getMemorizedSpellIds(actorId) {
       const all = this._gjson("spellsReadyMemorized", {});
       const list = all?.[actorId];
@@ -173,6 +184,19 @@ export function applySpellsPanel(CypherTaskbar) {
     },
 
     async _setSpellMemorized(actorId, itemId, memorized) {
+      // SPELLS PER DAY guard: refuse new memorizations while the limit is spent.
+      if (memorized && this.actor) {
+        const limit = this._spellsPerDayLimit(this.actor);
+        if (limit > 0) {
+          const used = this._getMemorizedSpellIds(actorId)
+            .filter(id => id !== itemId && this.actor.items.has(id)).length;
+          if (used >= limit) {
+            ui.notifications?.warn?.(`Spells per day exhausted (${limit}/${limit}) — remove a spell from READY to memorize another.`);
+            this._refreshActivePanel();
+            return;
+          }
+        }
+      }
       try {
         const all = this._gjson("spellsReadyMemorized", {});
         const current = new Set(Array.isArray(all?.[actorId]) ? all[actorId] : []);
@@ -187,6 +211,21 @@ export function applySpellsPanel(CypherTaskbar) {
       this._refreshActivePanel();
     },
 
+    /** Grey out the cast buttons in the (open) SPELLS menu while the combat
+     *  bar's ACTION pool is spent. No-op without a live combat bar — casting
+     *  outside combat stays unrestricted. */
+    _syncSpellCastButtons(root) {
+      const bar = root || this.element?.querySelector?.("#ct-panel-container");
+      if (!bar) return;
+      const spent = !!this._cbState?.() && this._cbNoActionLeft();
+      bar.querySelectorAll("[data-cast-spell]").forEach(btn => {
+        if (btn.dataset.origTitle === undefined) btn.dataset.origTitle = btn.title || "";
+        btn.classList.toggle("ct-sp-cast-btn-dim", spent);
+        btn.disabled = spent || btn.classList.contains("ct-range-locked");
+        if (!btn.classList.contains("ct-range-locked")) btn.title = spent ? "No action remaining" : btn.dataset.origTitle;
+      });
+    },
+
     _getSpellPointCost(item) {
       const value = item?.system?.basic?.cost ?? item?.system?.cost ?? "";
       return value === null || value === undefined || value === "" ? "—" : String(value);
@@ -197,11 +236,23 @@ export function applySpellsPanel(CypherTaskbar) {
       return value === null || value === undefined || value === "" ? "—" : String(value);
     },
 
-    _renderSpellRow(item, { memorized = false, readyCopy = false } = {}) {
+    _renderSpellRow(item, { memorized = false, readyCopy = false, spdLocked = false } = {}) {
       const rowClass = ['ct-item-row', 'ct-sp-action-row'];
       if (!readyCopy) rowClass.push('ct-sp-draggable');
       if (memorized && !readyCopy) rowClass.push('is-ready');
-      return `<div class="${rowClass.join(' ')}" ${readyCopy ? '' : 'draggable="true"'} data-spell-id="${item.id}" ${readyCopy ? 'data-spell-ready-copy="true"' : ''}><div class="ct-sp-row-main"><img class="ct-item-img" src="${item.img || 'icons/svg/magic-swirl.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span></div><div class="ct-sp-row-meta"><span class="ct-sp-meta-pill ct-sp-cost" title="Point Cost">${this._getSpellPointCost(item)}</span><label class="ct-sp-ready-toggle" title="${memorized ? 'Remove from Ready' : 'Memorize spell'}"><input type="checkbox" data-ready-spell="${item.id}" ${memorized ? 'checked' : ''}><span class="ct-sp-ready-toggle-box"></span></label>${readyCopy ? `<button type="button" class="ct-sp-cast-btn" data-cast-spell="${item.id}" title="Cast ${item.name}"><i class="fas fa-sparkles"></i></button>` : ""}</div></div>`;
+      // SPELLS PER DAY exhausted: non-memorized listing rows are greyed out
+      // and cannot be memorized until a READY spell is removed.
+      if (spdLocked && !readyCopy && !memorized) rowClass.push('ct-sp-row-spd-locked');
+      // Only READY copies are castable — the category listings stay greyed
+      // (visual signal; their memorize checkbox / drag still work).
+      if (!readyCopy && this._cbState?.()) rowClass.push('ct-sp-row-disabled');
+      const targetLocked = readyCopy && !!(this._cbState?.() && this._ctCool?.(item).attack && !this._ctHasNPCTarget?.());
+      const rangeLocked = readyCopy && !targetLocked && !!(this._ctRangeLocked?.(item, "spell"));
+      const locked = targetLocked || rangeLocked;
+      const lockTitle = targetLocked ? "Select an NPC target to cast" : "Out of range";
+      const memorizeDisabled = spdLocked && !readyCopy && !memorized;
+      const memorizeTitle = memorized ? 'Remove from Ready' : (memorizeDisabled ? 'Spells per day exhausted — remove a spell from READY first' : 'Memorize spell');
+      return `<div class="${rowClass.join(' ')}" ${readyCopy ? '' : 'draggable="true"'} data-spell-id="${item.id}" ${readyCopy ? 'data-spell-ready-copy="true"' : ''}><div class="ct-sp-row-main"><img class="ct-item-img" src="${item.img || 'icons/svg/magic-swirl.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span></div><div class="ct-sp-row-meta"><span class="ct-sp-meta-pill ct-sp-cost" title="Point Cost">${this._getSpellPointCost(item)}</span><label class="ct-sp-ready-toggle" title="${memorizeTitle}"><input type="checkbox" data-ready-spell="${item.id}" ${memorized ? 'checked' : ''} ${memorizeDisabled ? 'disabled' : ''}><span class="ct-sp-ready-toggle-box"></span></label>${readyCopy ? `<button type="button" class="ct-sp-cast-btn${locked ? " ct-range-locked" : ""}" data-cast-spell="${item.id}" title="${locked ? lockTitle : `Cast ${item.name}`}"${locked ? " disabled" : ""}><i class="fas fa-sparkles"></i></button>` : ""}</div></div>`;
     },
 
     // ── Panel builder ────────────────────────
@@ -241,11 +292,21 @@ export function applySpellsPanel(CypherTaskbar) {
       const readyStyle = this._getSpellCategoryStyle('ready');
       const readyHtml = `<section class="ct-sp-category-section ct-sp-ready-section" data-sp-category-section="ready"><div class="ct-sp-category-header ct-sp-ready-header" data-sp-category-header="ready" style="${this._spellCategoryHeaderStyle(readyStyle)}" title="Right-click to edit category header"><span class="ct-sp-category-icon-wrap">${this._spellCategoryHeaderIconHtml(readyStyle)}</span><span class="ct-sp-category-title">READY</span></div><div class="ct-sp-ready-body ${readyEntries.length ? '' : 'ct-sp-ready-body-empty'}">${readyRows || `<div class="ct-sp-empty-drop ct-sp-ready-empty">Memorized spells appear here.</div>`}</div></section>`;
 
+      // ── SPELLS PER DAY: GM-set actor limit (0 = unlimited) ──
+      const spdLimit     = this._spellsPerDayLimit(actor);
+      const spdUsed      = readyEntries.length;
+      const spdRemaining = spdLimit > 0 ? Math.max(0, spdLimit - spdUsed) : 0;
+      const spdLocked    = spdLimit > 0 && spdRemaining <= 0;
+      const spdPct       = spdLimit > 0 ? Math.round((spdRemaining / spdLimit) * 100) : 0;
+      const spdHtml = spdLimit > 0
+        ? `<div class="ct-sp-spd${spdLocked ? ' ct-sp-spd-exhausted' : ''}" title="Spells per day — ${spdRemaining} of ${spdLimit} remaining (set by GM)"><i class="fas fa-hat-wizard"></i><span class="ct-sp-spd-value">${spdRemaining}/${spdLimit}</span><div class="ct-sp-spd-bar"><div class="ct-sp-spd-fill" style="width:${spdPct}%"></div></div></div>`
+        : "";
+
       const sectionData = visibleCats.filter(c => !hiddenCats.has(c.id)).map(category => {
         const entries = (grouped.get(category.id) ?? []).sort((a, b) => a.order - b.order || a.item.name.localeCompare(b.item.name));
         const bodyClass = entries.length ? "ct-sp-category-body" : "ct-sp-category-body ct-sp-category-body-empty";
         const rows = entries.length
-          ? entries.map(({ item }) => this._renderSpellRow(item, { memorized: memorizedIds.has(item.id), readyCopy: false })).join("")
+          ? entries.map(({ item }) => this._renderSpellRow(item, { memorized: memorizedIds.has(item.id), readyCopy: false, spdLocked })).join("")
           : `<div class="ct-sp-empty-drop">Drop spells here</div>`;
         const categoryStyle = this._getSpellCategoryStyle(category.id);
         const isSpellNamed  = this._isSpellName(category.name);
@@ -256,7 +317,7 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const sections = buildSpellsMasonryColumns(sectionData, this.actor?.id);
       const spellsGrid = sections ? `<div class="ct-sp-masonry-grid">${sections}</div>` : `<div class="ct-empty-msg">No spells found. Add abilities/skills to a category named Spell, Spells or Magic.</div>`;
-      return `<div class="ct-panel ct-panel-spells-custom" style="${this._spellsMenuStyleVars()};${this._getMenuBackgroundVars("spells")}"><div class="ct-panel-header ct-panel-header-spells-menu"><div class="ct-panel-title-wrap"><i class="fas fa-hat-wizard"></i> <span class="ct-sp-panel-title-text">Spells</span>${hiddenIndicator}</div><div class="ct-panel-action-group"><button class="ct-panel-settings-btn" data-sp-categories title="Spell Categories"><i class="fas fa-folder-plus"></i></button><button class="ct-panel-settings-btn" data-sp-settings title="Spells Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-sp-close title="Close Spells Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-panel-body ct-sp-panel-body"><div class="ct-sp-layout-wrap">${readyHtml}${spellsGrid}</div></div></div>`;
+      return `<div class="ct-panel ct-panel-spells-custom" style="${this._spellsMenuStyleVars()};${this._getMenuBackgroundVars("spells")}"><div class="ct-panel-header ct-panel-header-spells-menu"><div class="ct-panel-title-wrap"><i class="fas fa-hat-wizard"></i> <span class="ct-sp-panel-title-text">Spells</span>${spdHtml}${hiddenIndicator}</div><div class="ct-panel-action-group"><button class="ct-panel-settings-btn" data-sp-categories title="Spell Categories"><i class="fas fa-folder-plus"></i></button><button class="ct-panel-settings-btn" data-sp-settings title="Spells Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-sp-close title="Close Spells Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-panel-body ct-sp-panel-body"><div class="ct-sp-layout-wrap">${readyHtml}${spellsGrid}</div></div></div>`;
     },
 
     // ── DnD ─────────────────────────────────
@@ -323,6 +384,7 @@ export function applySpellsPanel(CypherTaskbar) {
         btn.onclick = async (e) => {
           e.preventDefault();
           e.stopPropagation();
+          if (btn.disabled) return;
           await this._openSpellCastDialog(btn.dataset.castSpell);
         };
       });
@@ -358,6 +420,9 @@ export function applySpellsPanel(CypherTaskbar) {
       bar.querySelectorAll("[data-sp-category-header]").forEach(header => {
         header.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); this._openSpellCategoryAppearanceSettings(e, header.dataset.spCategoryHeader); };
       });
+
+      // ACTION-lock: dim cast buttons when the combat bar's action pool is spent.
+      this._syncSpellCastButtons(bar);
     },
 
     // ── Settings popup ───────────────────────
@@ -395,7 +460,7 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-spells-settings-popup";
-      popup.classList.add("ct-popup");
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Spells Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -448,6 +513,7 @@ export function applySpellsPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
+      this._positionPopupRightOfMenu(popup, event, { fallbackSelector: '#cypher-taskbar-bar .ct-btn[data-panel="spells"]' });
 
       const collectState = () => ({
         spellsMenuShadowColor:     popup.querySelector("#sm-shadow-color").value,
@@ -557,9 +623,7 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id    = "ct-spell-category-appearance-popup";
-      popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top  = `${Math.max(8, event?.clientY ?? 120)}px`;
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -575,7 +639,7 @@ export function applySpellsPanel(CypherTaskbar) {
           <label>Header Color <input type="color" id="ct-sp-category-header-color" value="${state.headerColor}"></label>
         </div>`;
       document.body.appendChild(popup);
-      this._positionPopupAboveEvent(popup, event);
+      this._positionPopupRightOfMenu(popup, event);
 
       const previewTarget = () => this.element?.querySelector(`[data-sp-category-header="${categoryId}"]`);
       const syncVal = (id, fmt = v => v) => {
@@ -650,9 +714,7 @@ export function applySpellsPanel(CypherTaskbar) {
       document.querySelector("#ct-spell-category-popup")?.remove();
       const popup = document.createElement("div");
       popup.id    = "ct-spell-category-popup";
-      popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top  = `${Math.max(8, event?.clientY ?? 120)}px`;
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-folder-plus"></i> Spell Categories <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -665,6 +727,7 @@ export function applySpellsPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
+      this._positionPopupRightOfMenu(popup, event);
 
       const renderCategories = () => {
         const list       = popup.querySelector("#ct-spell-category-list");
@@ -729,6 +792,16 @@ export function applySpellsPanel(CypherTaskbar) {
       const item = actor.items.get(itemId);
       if (!item) return;
 
+      // ── Cool-items spell config ──
+      const cciData = item.getFlag?.("cypher-cool-items", "data") ?? {};
+      // "Roll for Cast" unchecked → automatic cast: dialog opens without the
+      // roll machinery (difficulty/assets/ease/hindrance) and no d20 is rolled.
+      const needsRoll = cciData?.rollForCast !== false;
+
+      // ── Target defense (combat + roll casts): presets the difficulty ──
+      const tgt = (needsRoll && this._cbState?.()) ? this._getTargetDefenseDifficulty?.() : null;
+      const diffDefault = tgt ? tgt.difficulty : 0;
+
       const effortCap = Math.max(0, Math.min(6, Number(actor?.system?.basic?.effort ?? actor?.system?.advancement?.effort ?? 0) || 0));
       const costStr = String(item.system?.basic?.cost ?? item.system?.cost ?? "").trim();
       const costNum = Number((costStr.match(/^(\d+)/)?.[1]) ?? 0);
@@ -742,6 +815,24 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const edge = this._edgeForPool(actor, detectedPool);
       const poolCurrent = this._poolValueForName(actor, detectedPool);
+
+      // ── Base damage from cypher-cool-items spell config ──
+      const rawDamage = String(cciData?.damage ?? "").trim();
+      let baseDamage = 0;
+      let damageFormula = "";
+      if (rawDamage) {
+        const asNum = Number(rawDamage);
+        if (Number.isFinite(asNum) && asNum > 0) {
+          baseDamage = asNum;
+        } else {
+          try {
+            const dmgRoll = await new Roll(rawDamage).evaluate();
+            baseDamage = Math.max(0, Number(dmgRoll.total ?? 0) || 0);
+            damageFormula = rawDamage;
+          } catch { /* unparseable formula → no base damage */ }
+        }
+      }
+      const hasDamage = baseDamage > 0;
 
       // ── Cypher System Ability/Spell Cost Rules ──
       // 1. Base cost is the spell's listed cost.
@@ -773,12 +864,15 @@ export function applySpellsPanel(CypherTaskbar) {
         const totalSpend = Math.max(0, subtotal - edge);
         const remainingPool = Math.max(0, poolCurrent - totalSpend);
         const canAfford = totalSpend <= poolCurrent;
+        const effortDmgBonus = effortDamage * 3;
+        const totalDamage = baseDamage + effortDmgBonus;
 
         return {
           baseDifficulty, assets, effortEffect, effortDamage, totalEffortLevels,
           effortEffectCost, effortDamageCost, totalEffortCost,
           easedBy, hinderedBy, edge, edgeDiscount, poolCurrent,
-          subtotal, finalDifficulty, target, costNum, totalSpend, remainingPool, canAfford
+          subtotal, finalDifficulty, target, costNum, totalSpend, remainingPool, canAfford,
+          baseDamage, effortDmgBonus, totalDamage
         };
       };
 
@@ -795,17 +889,22 @@ export function applySpellsPanel(CypherTaskbar) {
                 <span class="ct-skill-roll-badge">Cost: ${costNum}</span>
                 <span class="ct-skill-roll-badge">Edge (discount): ${edge}</span>
                 <span class="ct-skill-roll-badge">${foundry.utils.escapeHTML(detectedPool)} Pool: ${poolCurrent}</span>
+                ${hasDamage ? `<span class="ct-skill-roll-badge">Base Damage: ${baseDamage}${damageFormula ? ` (${foundry.utils.escapeHTML(damageFormula)})` : ''}</span>` : ''}
+                ${!needsRoll ? `<span class="ct-skill-roll-badge" style="background:rgba(124,252,160,0.15);border-color:rgba(124,252,160,0.4);color:#7cffa0;">AUTOMATIC — NO ROLL</span>` : ''}
+                ${tgt ? `<span class="ct-skill-roll-badge" style="background:rgba(124,160,252,0.15);border-color:rgba(124,160,252,0.4);color:#7cffa0;">Target: ${foundry.utils.escapeHTML(tgt.name)} — Defense ${tgt.difficulty}</span>` : ''}
               </div>
             </div>
             <div class="ct-skill-roll-grid">
+              ${needsRoll ? `
               <label class="ct-skill-roll-field">
                 <span>Difficulty</span>
-                <select name="baseDifficulty">${Array.from({length:11},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}${i===0?' – Routine':i===10?' – Impossible':''}</option>`).join('')}</select>
+                <select name="baseDifficulty">${Array.from({length:11},(_,i) => `<option value="${i}" ${i===diffDefault?'selected':''}>${i}${i===0?' – Routine':i===10?' – Impossible':''}</option>`).join('')}</select>
               </label>
               <label class="ct-skill-roll-field">
                 <span>Assets</span>
                 <select name="assets">${Array.from({length:3},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
               </label>
+              ` : ''}
               <label class="ct-skill-roll-field">
                 <span>Effort for Effect <small style="color:rgba(255,255,255,0.35);font-size:0.75em;">(max ${effortCap})</small></span>
                 <select name="effortEffect" data-effort-type="effect">${Array.from({length:effortCap+1},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
@@ -814,6 +913,7 @@ export function applySpellsPanel(CypherTaskbar) {
                 <span>Effort for Damage <small style="color:rgba(255,255,255,0.35);font-size:0.75em;">(max ${effortCap})</small></span>
                 <select name="effortDamage" data-effort-type="damage">${Array.from({length:effortCap+1},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
               </label>
+              ${needsRoll ? `
               <label class="ct-skill-roll-field">
                 <span>Other Ease</span>
                 <select name="easedBy">${Array.from({length:7},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
@@ -822,17 +922,27 @@ export function applySpellsPanel(CypherTaskbar) {
                 <span>Hindrance</span>
                 <select name="hinderedBy">${Array.from({length:7},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
               </label>
+              ` : ''}
             </div>
             <div class="ct-skill-roll-summary" data-spell-cast-summary>
+              ${needsRoll ? `
               <div class="ct-skill-roll-summary-item"><span>Base Difficulty</span><strong data-cast-base-diff>0</strong></div>
               <div class="ct-skill-roll-summary-item"><span>Final Difficulty</span><strong data-cast-final-diff>0</strong></div>
               <div class="ct-skill-roll-summary-item"><span>Target Number</span><strong data-cast-target>0</strong></div>
+              ` : ''}
               <div class="ct-skill-roll-summary-item"><span>Effort Levels</span><strong data-cast-effort-levels>0</strong></div>
               <div class="ct-skill-roll-summary-item"><span>Effort Cost</span><strong data-cast-effort-cost>0</strong></div>
               <div class="ct-skill-roll-summary-item ct-ab-total-cost"><span>Edge (discount)</span><strong data-cast-edge>-0</strong></div>
               <div class="ct-skill-roll-summary-item"><span>Total Spend</span><strong data-cast-total-spend style="color:${initialSummary.canAfford?'#7cffa0':'#ff6b6b'};">${initialSummary.totalSpend}</strong></div>
+              ${hasDamage ? `
+              <div class="ct-skill-roll-summary-item ct-atk-dmg-summary"><span>Base Damage</span><strong data-cast-base-damage>${baseDamage}</strong></div>
+              <div class="ct-skill-roll-summary-item ct-atk-dmg-summary"><span>Effort Dmg Bonus</span><strong data-cast-effort-dmg>+0</strong></div>
+              <div class="ct-skill-roll-summary-item ct-atk-dmg-summary ct-atk-total-dmg-row"><span>Total Damage</span><strong data-cast-total-damage>${baseDamage}</strong></div>
+              ` : ''}
             </div>
-            <div class="ct-skill-roll-note">Spell casting uses the ${foundry.utils.escapeHTML(detectedPool)} pool. Effort for effect and damage are calculated separately: 3 pts for the 1st level of each type, 2 pts for each additional level of that type. Edge reduces the total cost (spell cost + all effort costs). Minimum spend is 0.</div>
+            <div class="ct-skill-roll-note">${needsRoll
+              ? `Spell casting uses the ${foundry.utils.escapeHTML(detectedPool)} pool. Effort for effect and damage are calculated separately: 3 pts for the 1st level of each type, 2 pts for each additional level of that type. Edge reduces the total cost (spell cost + all effort costs). Minimum spend is 0.`
+              : `Automatic spell — no roll required. Only the pool cost (minus edge) is spent${hasDamage ? ', plus any effort for damage' : ''}. Spell casting uses the ${foundry.utils.escapeHTML(detectedPool)} pool.`}</div>
           </div>
         </form>`;
 
@@ -855,15 +965,20 @@ export function applySpellsPanel(CypherTaskbar) {
                   return resolve(false);
                 }
 
-                // ── Roll the d20 (Cypher System core mechanic) ──
-                const roll = await (new Roll('1d20')).evaluate();
-                const rollTotal = Number(roll.total ?? 0);
-                const specialEvent = this._skillRollSpecialEvent(rollTotal);
+                // ── Roll the d20 (Cypher System core mechanic) — skipped for automatic casts ──
+                let rollTotal = 0;
+                let specialEvent = null;
+                let success = true;
+                if (needsRoll) {
+                  const roll = await (new Roll('1d20')).evaluate();
+                  rollTotal = Number(roll.total ?? 0);
+                  specialEvent = this._skillRollSpecialEvent(rollTotal);
 
-                // Achieved difficulty = (roll + modifiers*3) / 3
-                const totalModifiers = summary.assets + summary.effortEffect + summary.easedBy - summary.hinderedBy;
-                const achievedDifficulty = Math.max(0, Math.floor((rollTotal + totalModifiers * 3) / 3));
-                const success = achievedDifficulty >= summary.finalDifficulty;
+                  // Achieved difficulty = (roll + modifiers*3) / 3
+                  const totalModifiers = summary.assets + summary.effortEffect + summary.easedBy - summary.hinderedBy;
+                  const achievedDifficulty = Math.max(0, Math.floor((rollTotal + totalModifiers * 3) / 3));
+                  success = achievedDifficulty >= summary.finalDifficulty;
+                }
 
                 // ── Spend from pool ──
                 if (summary.totalSpend > 0) {
@@ -873,6 +988,9 @@ export function applySpellsPanel(CypherTaskbar) {
                 // Try to trigger the item's use handler
                 try { await item.use(); } catch (e) { console.warn(`${MODULE_ID} | item.use() failed for spell`, e); }
 
+                // Spell casting consumes the combat bar's ACTION pip (no-op outside combat).
+                this._cbExpendResource?.("action");
+
                 // ── Build chat message ──
                 const costRows = [
                   ...(summary.costNum > 0 ? [{ label: 'Spell Cost', value: summary.costNum, type: 'cost' }] : []),
@@ -881,9 +999,15 @@ export function applySpellsPanel(CypherTaskbar) {
                   ...(summary.edgeDiscount > 0 ? [{ label: 'Edge (discount)', value: `-${summary.edgeDiscount}`, type: 'edge' }] : [])
                 ].map(r => `<div class="ct-ability-cost-row ${r.type}"><span>${r.label}</span><strong>${r.value}</strong></div>`).join('');
 
-                const damageBonus = summary.effortDamage * 3;
-                const damageBlock = damageBonus > 0
-                  ? `<div class="ct-ability-use-damage"><span class="ct-ability-use-damage-label">Damage Bonus</span><span class="ct-ability-use-damage-value">+${damageBonus} (Effort for Damage)</span></div>`
+                const damageBlock = (hasDamage || summary.effortDmgBonus > 0)
+                  ? `<div class="ct-native-attack-damage-block">
+                      <div class="ct-native-attack-damage-label">Damage</div>
+                      <div class="ct-native-attack-damage-breakdown">
+                        ${hasDamage ? `<span>${baseDamage}${damageFormula ? ` (${foundry.utils.escapeHTML(damageFormula)})` : ''} base</span>` : ''}
+                        ${summary.effortDmgBonus > 0 ? `<span>+${summary.effortDmgBonus} effort</span>` : ''}
+                      </div>
+                      <div class="ct-native-attack-total-damage">TOTAL DAMAGE: ${summary.totalDamage}</div>
+                    </div>`
                   : '';
 
                 const chatContent = `
@@ -906,6 +1030,7 @@ export function applySpellsPanel(CypherTaskbar) {
                       <div class="ct-ability-pool-dot remaining"><span>${summary.remainingPool}</span><label>After</label></div>
                     </div>
                     ${damageBlock}
+                    ${needsRoll ? `
                     <div class="ct-ability-use-roll-result">
                       <div class="ct-ability-use-roll-label">Roll Result</div>
                       <div class="ct-ability-use-roll-value">${rollTotal}</div>
@@ -913,12 +1038,47 @@ export function applySpellsPanel(CypherTaskbar) {
                       <div class="ct-ability-use-roll-success" style="color:${success ? '#7cffa0' : '#ff6b6b'};">${success ? 'SUCCESS' : 'FAILURE'}</div>
                       ${specialEvent ? `<div class="ct-ability-use-roll-special"><strong>${foundry.utils.escapeHTML(specialEvent.title)}:</strong> ${foundry.utils.escapeHTML(specialEvent.text)}</div>` : ''}
                     </div>
+                    ` : `
+                    <div class="ct-ability-use-roll-result">
+                      <div class="ct-ability-use-roll-label">Automatic Cast</div>
+                      <div class="ct-ability-use-roll-success" style="color:#7cffa0;letter-spacing:0.14em;">NO ROLL REQUIRED</div>
+                    </div>
+                    `}
                   </div>`;
 
                 try {
                   await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content: chatContent });
                 } catch (err) {
                   console.error(`${MODULE_ID} | Spell cast chat message failed:`, err);
+                }
+
+                // Notify integrations (e.g. Cypher Cool Items → AutoAnimations)
+                if (Hooks.events?.['cciAbilityUsed']?.length) {
+                  Hooks.callAll('cciAbilityUsed', item);
+                }
+
+                // ── Post-cast outcome (attack framework):
+                //    Roll casts: YOU HIT!/YOU MISSED! floater + GM damage/effects dialog on success.
+                //    Automatic casts (no roll) with stated damage or effects: same GM confirmation
+                //    + damage application as a targeted spell with a roll — no hit/miss floater. ──
+                try {
+                  const targetDoc = this._getFirstTargetTokenDoc?.();
+                  const hasEffects = (item.effects?.contents ?? []).some(e => e && !e.disabled);
+                  const outcomeApplies = needsRoll ? success : true;
+                  if (outcomeApplies && targetDoc?.actor && (summary.totalDamage > 0 || hasEffects)) {
+                    await this._applyAttackToTarget?.(targetDoc, summary.totalDamage, item);
+                  }
+                  if (needsRoll) {
+                    const ownToken = actor.getActiveTokens?.()[0]?.document ?? null;
+                    // Attack spells (with damage) keep HIT/MISS; defense/utility use SUCCESS/FAILURE
+                    this._showAttackOutcomeFloater?.(targetDoc ?? ownToken, success, hasDamage ? null : {
+                      kicker: "SPELL RESULT",
+                      successText: "SUCCESS!",
+                      failureText: "FAILURE!"
+                    });
+                  }
+                } catch (err) {
+                  console.error(`${MODULE_ID} | post-cast outcome failed`, err);
                 }
 
                 resolve(true);
@@ -976,6 +1136,9 @@ export function applySpellsPanel(CypherTaskbar) {
                 totalEl.replaceChildren(document.createTextNode(String(s.totalSpend)));
                 totalEl.style.color = s.canAfford ? '#7cffa0' : '#ff6b6b';
               }
+              form.querySelector('[data-cast-base-damage]')?.replaceChildren(document.createTextNode(String(s.baseDamage)));
+              form.querySelector('[data-cast-effort-dmg]')?.replaceChildren(document.createTextNode(`+${s.effortDmgBonus}`));
+              form.querySelector('[data-cast-total-damage]')?.replaceChildren(document.createTextNode(String(s.totalDamage)));
             };
 
             form.querySelectorAll('select').forEach(el => el.addEventListener('change', sync));

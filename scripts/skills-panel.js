@@ -354,17 +354,7 @@ export function applySkillsPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-skills-settings-popup";
-      popup.classList.add("ct-popup");
-      // Position above the Skills section button
-      const skillsBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="skills"]');
-      const btnRect = skillsBtn?.getBoundingClientRect();
-      if (btnRect) {
-        popup.style.left = `${btnRect.left}px`;
-        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-      } else {
-        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
-      }
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Skills Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -430,11 +420,7 @@ export function applySkillsPanel(CypherTaskbar) {
       </div>`;
       document.body.appendChild(popup);
 
-      requestAnimationFrame(() => {
-        const rect = popup.getBoundingClientRect();
-        popup.style.left = `${Math.min(Math.max(8, parseFloat(popup.style.left)), Math.max(8, window.innerWidth - rect.width - 8))}px`;
-        popup.style.top = `${Math.min(Math.max(8, parseFloat(popup.style.top)), Math.max(8, window.innerHeight - rect.height - 8))}px`;
-      });
+      this._positionPopupRightOfMenu(popup, event, { fallbackSelector: '#cypher-taskbar-bar .ct-btn[data-panel="skills"]' });
 
       const collectState = () => ({
         skillsMenuShadowColor: popup.querySelector("#sm-shadow-color").value,
@@ -539,9 +525,7 @@ export function applySkillsPanel(CypherTaskbar) {
       document.querySelector("#ct-skill-category-popup")?.remove();
       const popup = document.createElement("div");
       popup.id = "ct-skill-category-popup";
-      popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-folder-plus"></i> Skill Categories <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -554,6 +538,7 @@ export function applySkillsPanel(CypherTaskbar) {
         </div>
       </div>`;
       document.body.appendChild(popup);
+      this._positionPopupRightOfMenu(popup, event);
 
       const renderCategories = () => {
         const list = popup.querySelector("#ct-skill-category-list");
@@ -630,7 +615,7 @@ export function applySkillsPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-skill-category-appearance-popup";
-      popup.classList.add("ct-popup");
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -646,7 +631,7 @@ export function applySkillsPanel(CypherTaskbar) {
         <label>Header Color <input type="color" id="ct-category-header-color" value="${state.headerColor}"></label>
       </div>`;
       document.body.appendChild(popup);
-      this._positionPopupAboveEvent(popup, event);
+      this._positionPopupRightOfMenu(popup, event);
 
       const previewTarget = () => this.element?.querySelector(`[data-category-header="${categoryId}"]`);
       const syncVal = (id, fmt = v => v) => {

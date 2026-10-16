@@ -123,6 +123,7 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "portraitAreaCollapsed", { scope: "client", config: false, type: Boolean, default: false });
   game.settings.register(MODULE_ID, "portraitShadow", { scope: "client", config: false, type: Boolean, default: true });
   game.settings.register(MODULE_ID, "portraitShadowBlur", { scope: "client", config: false, type: Number, default: 12 });
+  game.settings.register(MODULE_ID, "torchMode", { scope: "client", config: false, type: Boolean, default: true, onChange: () => CypherTaskbar.instance?._syncTorchMode?.() });
   game.settings.register(MODULE_ID, "portraitShadowColor", { scope: "client", config: false, type: String, default: "#000000" });
   game.settings.register(MODULE_ID, "portraitShadowOpacity", { scope: "client", config: false, type: Number, default: 0.85 });
   game.settings.register(MODULE_ID, "portraitShadowDistance", { scope: "client", config: false, type: Number, default: 6 });
@@ -390,5 +391,13 @@ function _registerMenuSettings(prefix) {
     config: true,
     type: Boolean,
     default: true
+  });
+  game.settings.register(MODULE_ID, "portraitMenuLastTab", {
+    name: "Portrait Menu Last Tab",
+    hint: "Last opened side tab in the MAIN menu popup.",
+    scope: "client",
+    config: false,
+    type: String,
+    default: "shared"
   });
 }

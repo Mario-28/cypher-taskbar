@@ -1065,10 +1065,10 @@ body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .c
 .ct-item-icon { color:var(--ct-accent); opacity:0.7; width:14px; text-align:center; }
 .ct-empty-msg { padding:8px 14px; color:var(--ct-text-dim); font-size:0.74em; font-style:italic; }
 .ct-skill-rating { font-size:0.8em; padding:1px 6px; border-radius:3px; flex-shrink:0; }
-.ct-skill-specialized { background:rgba(200,169,110,0.22); color:var(--ct-accent); }
-.ct-skill-trained { background:rgba(58,143,212,0.18); color:#3a8fd4; }
-.ct-skill-inability { background:rgba(217,64,64,0.18); color:#d94040; }
-.ct-skill-practiced { background:rgba(255,255,255,0.07); color:var(--ct-text-dim); }
+.ct-skill-specialized { background:#d4a94d; color:#231a06; }
+.ct-skill-trained { background:#3e7d46; color:#ffffff; }
+.ct-skill-inability { background:#a83232; color:#ffffff; }
+.ct-skill-practiced { background:#6e6e6e; color:#f2f2f2; }
 
 /* ── Popups ── */
 .ct-popup {
@@ -1077,6 +1077,24 @@ body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .c
   box-shadow:0 8px 32px rgba(0,0,0,0.8); animation:ct-panel-in 0.15s ease;
   font-family:inherit; color:var(--ct-text);
   will-change: transform, opacity;
+}
+/* Settings popups: window size adapts to its content */
+.ct-popup.ct-settings-popup {
+  width: 300px;
+  max-width: 92vw;
+}
+/* 300px-wide settings: single-column panes, no control overflow */
+.ct-popup.ct-settings-popup .ct-popup-header {
+  cursor: move;
+  user-select: none;
+}
+.ct-popup.ct-settings-popup .ct-popup-pane {
+  grid-template-columns: 1fr;
+}
+.ct-popup.ct-settings-popup select,
+.ct-popup.ct-settings-popup input[type="text"],
+.ct-popup.ct-settings-popup input[type="number"] {
+  max-width: 100%;
 }
 .ct-popup-header {
   display:flex; align-items:center; gap:8px; padding:8px 12px;
@@ -1512,9 +1530,6 @@ body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .c
   padding: var(--ct-skills-item-padding, 5px) calc(var(--ct-skills-item-padding, 5px) * 2.8);
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.05);
-}
-.ct-panel-skills-custom .ct-skill-rating {
-  color: color-mix(in srgb, var(--ct-skills-heading-color, #d4a94d) calc(var(--ct-skills-heading-opacity, 0.85) * 100%), white 15%);
 }
 .ct-panel-skills-custom .ct-panel-header {
   border-bottom-color: color-mix(in srgb, var(--ct-skills-heading-color, #d4a94d) calc(var(--ct-skills-heading-opacity, 0.85) * 100%), transparent);
@@ -2233,6 +2248,32 @@ body.ct-combat-bar-active:not(.cyppc-no-taskbar-fade) .ct-portrait-wrap:hover .c
 }
 
 
+/* ABILITIES menu — ACTION-lock state (combat bar action pool spent).
+   Action-activation rows grey out and lose their use button. */
+.ct-ab-action-row.ct-ab-locked {
+  opacity: 0.45;
+  filter: grayscale(0.85);
+  cursor: not-allowed;
+}
+.ct-ab-action-row.ct-ab-locked .ct-item-name {
+  color: #8d8674;
+  text-decoration: line-through;
+  text-decoration-color: rgba(216, 182, 74, 0.45);
+}
+.ct-ab-lock-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: #d8b64a;
+  border: 1px solid rgba(216, 182, 74, 0.4);
+  background: rgba(60, 46, 12, 0.5);
+  flex: 0 0 auto;
+}
 .ct-ab-use-inline {
   margin-left: auto;
   padding: 0 4px;
@@ -2340,6 +2381,69 @@ align-self: stretch;
   justify-content: center;
   cursor: pointer;
 }
+
+/* ── SPELLS PER DAY widget (header) ── */
+.ct-sp-spd {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ct-sp-heading-color, #7c6cfa) 45%, transparent);
+  background: color-mix(in srgb, var(--ct-sp-heading-color, #7c6cfa) 12%, rgba(255,255,255,0.04));
+}
+.ct-sp-spd i {
+  font-size: 0.75em;
+  color: color-mix(in srgb, var(--ct-sp-heading-color, #7c6cfa) 90%, white 10%);
+}
+.ct-sp-spd-value {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: var(--ct-sp-title-color, #b8aaff);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+}
+.ct-sp-spd-bar {
+  width: 56px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.35);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+  overflow: hidden;
+}
+.ct-sp-spd-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ct-sp-heading-color, #7c6cfa) 70%, transparent),
+    color-mix(in srgb, var(--ct-sp-heading-color, #7c6cfa) 95%, white 15%));
+  transition: width 0.35s ease;
+}
+.ct-sp-spd-exhausted {
+  border-color: rgba(255,120,120,0.45);
+  background: rgba(255,80,80,0.08);
+}
+.ct-sp-spd-exhausted i,
+.ct-sp-spd-exhausted .ct-sp-spd-value {
+  color: #ff9090;
+}
+.ct-sp-spd-exhausted .ct-sp-spd-fill {
+  background: linear-gradient(90deg, rgba(255,90,90,0.35), rgba(255,120,120,0.75));
+}
+
+/* SPELLS PER DAY exhausted — listing rows locked (READY rows stay active) */
+.ct-sp-row-spd-locked {
+  opacity: 0.38;
+  filter: saturate(0.35);
+}
+.ct-sp-row-spd-locked .ct-sp-ready-toggle {
+  cursor: not-allowed;
+}
+.ct-sp-row-spd-locked .ct-sp-ready-toggle-box {
+  border-color: rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.02);
+}
 .ct-sp-ready-toggle {
   position: relative;
 }
@@ -2401,10 +2505,41 @@ align-self: stretch;
 .ct-sp-cast-btn:active {
   transform: scale(0.96);
 }
+/* ACTION-lock: cast + roll-attack buttons greyed while the action pool is spent */
+.ct-sp-cast-btn.ct-sp-cast-btn-dim,
+.ct-sp-cast-btn:disabled,
+.ct-combat-attack-burst.ct-atk-btn-dim,
+.ct-combat-attack-burst:disabled,
+.ct-sp-cast-btn.ct-sp-cast-btn-dim:hover,
+.ct-sp-cast-btn:disabled:hover,
+.ct-combat-attack-burst.ct-atk-btn-dim:hover,
+.ct-combat-attack-burst:disabled:hover {
+  opacity: 0.35;
+  filter: grayscale(0.7);
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* RANGE-lock: per-item action buttons greyed while the target is out of range */
+.ct-range-locked,
+.ct-range-locked:hover {
+  opacity: 0.35 !important;
+  filter: grayscale(0.85) !important;
+  cursor: not-allowed !important;
+}
 .ct-sp-action-row.is-ready {
   background: linear-gradient(90deg, rgba(124,108,250,0.24), rgba(200,182,255,0.12));
   border-color: rgba(178,160,255,0.48);
   box-shadow: inset 0 0 0 1px rgba(194,178,255,0.16), 0 0 0 1px rgba(98,72,194,0.12);
+}
+/* Non-ready spell listings — greyed; only READY copies carry a cast button.
+   Visual only: the memorize checkbox and drag organization stay usable. */
+.ct-sp-action-row.ct-sp-row-disabled {
+  opacity: 0.38;
+  filter: saturate(0.4);
+}
+.ct-sp-action-row.ct-sp-row-disabled:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 .ct-sp-ready-header {
   box-shadow: inset 0 -1px 0 rgba(255,255,255,0.06);
@@ -6384,6 +6519,10 @@ align-self: stretch;
   background: radial-gradient(circle at top, rgba(217, 166, 69, 0.16), transparent 44%), linear-gradient(180deg, rgba(18, 14, 11, 0.97), rgba(10, 8, 7, 0.98));
   color: #f2ead7;
   padding: calc(var(--ct-bars-top-padding, 0px) * var(--ct-bars-scale)) 0 0 0;
+  /* Core Foundry clips .window-content with overflow-x: hidden — offer a real
+     horizontal scrollbar when spell names/fields overflow or the window is resized. */
+  overflow-x: auto;
+  overflow-y: auto;
 }
 .ct-native-skill-roll-form { margin: 0; }
 .ct-skill-roll-shell { display: flex; flex-direction: column; gap: 16px; padding: 18px; }
@@ -6400,6 +6539,56 @@ align-self: stretch;
 .ct-skill-roll-title { position: relative; z-index: 1; font-size: 1.3rem; font-weight: 700; color: #fff4d3; line-height: 1.15; }
 .ct-skill-roll-badges { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .ct-skill-roll-badge { display: inline-flex; align-items: center; border: 1px solid rgba(255, 223, 152, 0.22); border-radius: 999px; padding: 5px 10px; background: rgba(255, 238, 198, 0.08); color: #f3e7c0; font-size: 0.73rem; letter-spacing: 0.03em; }
+.ct-skill-roll-badge.ct-atk-target-badge { border-color: rgba(58, 143, 212, 0.45); background: rgba(58, 143, 212, 0.14); color: #9fd0ff; gap: 5px; }
+/* OTHER-action pip chips (GM fallback dialog): multi-select toggles; NONE is exclusive */
+.ct-other-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+.ct-other-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid rgba(255, 223, 152, 0.28); border-radius: 999px; padding: 8px 14px; background: rgba(255, 238, 198, 0.06); color: #e8dcc0; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.05em; cursor: pointer; transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, color 0.15s; }
+.ct-other-chip:hover { border-color: rgba(255, 223, 152, 0.55); background: rgba(255, 238, 198, 0.12); }
+.ct-other-chip.ct-other-chip-on { background: rgba(255, 214, 112, 0.22); border-color: rgba(255, 214, 112, 0.75); color: #ffe9b3; box-shadow: 0 0 14px rgba(255, 214, 112, 0.28), inset 0 0 0 1px rgba(255, 214, 112, 0.35); }
+.ct-other-chip.ct-other-chip-none.ct-other-chip-on { background: rgba(124, 252, 160, 0.16); border-color: rgba(124, 252, 160, 0.6); color: #a9ffc6; box-shadow: 0 0 14px rgba(124, 252, 160, 0.22), inset 0 0 0 1px rgba(124, 252, 160, 0.3); }
+
+/* ── Attack outcome floater (2s fade in/out window above a token) ── */
+.ct-attack-outcome {
+  position: fixed;
+  z-index: 100000;
+  transform: translate(-50%, -110%);
+  pointer-events: none;
+  opacity: 0;
+  animation: ct-outcome-fade 2s ease-in-out forwards;
+}
+.ct-attack-outcome.ct-attack-outcome-center { left: 50%; top: 38%; transform: translate(-50%, -50%); }
+.ct-attack-outcome-window {
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.06em;
+  background: linear-gradient(180deg, rgba(22, 17, 32, 0.97), rgba(10, 8, 18, 0.97));
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  border-radius: 10px;
+  padding: 10px 26px 12px;
+  text-align: center;
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.65);
+  animation: ct-outcome-pop 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.ct-attack-outcome-kicker { font-size: 0.66rem; color: var(--ct-text-dim, #9a9a9a); letter-spacing: 0.3em; }
+.ct-attack-outcome-text { font-size: 1.9rem; line-height: 1.15; }
+.ct-attack-outcome-hit .ct-attack-outcome-window { border-color: rgba(70, 224, 138, 0.55); }
+.ct-attack-outcome-hit .ct-attack-outcome-text { color: #46e08a; text-shadow: 0 0 14px rgba(70, 224, 138, 0.55); }
+.ct-attack-outcome-miss .ct-attack-outcome-window { border-color: rgba(255, 77, 61, 0.55); }
+.ct-attack-outcome-miss .ct-attack-outcome-text { color: #ff4d3d; text-shadow: 0 0 14px rgba(255, 77, 61, 0.55); }
+@keyframes ct-outcome-fade { 0% { opacity: 0; } 10% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes ct-outcome-pop { 0% { transform: scale(0.7); } 100% { transform: scale(1); } }
+
+/* ── GM attack-outcome review dialog ── */
+.ct-gm-outcome-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.ct-gm-outcome-dmg { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-family: "Bebas Neue", sans-serif; letter-spacing: 0.05em; font-size: 1.05rem; color: #f3e7c0; }
+.ct-gm-outcome-dmg input { width: 90px; background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(200, 169, 110, 0.35); border-radius: 8px; color: #ffd98a; font-family: "Bebas Neue", sans-serif; font-size: 1.4rem; text-align: center; padding: 4px 8px; }
+.ct-gm-outcome-dmg input:focus { outline: none; border-color: rgba(255, 217, 138, 0.7); box-shadow: 0 0 10px rgba(255, 217, 138, 0.25); }
+.ct-gm-outcome-fx-title { font-family: "Bebas Neue", sans-serif; letter-spacing: 0.18em; font-size: 0.8rem; color: var(--ct-text-dim, #9a9a9a); border-top: 1px solid rgba(200, 169, 110, 0.18); padding-top: 12px; }
+.ct-gm-outcome-fx { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid rgba(200, 169, 110, 0.16); border-radius: 8px; background: rgba(255, 238, 198, 0.05); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.ct-gm-outcome-fx:hover { background: rgba(255, 238, 198, 0.1); border-color: rgba(200, 169, 110, 0.35); }
+.ct-gm-outcome-fx input { accent-color: #c8a96e; margin: 0; }
+.ct-gm-outcome-fx img { width: 22px; height: 22px; border-radius: 4px; }
+.ct-gm-outcome-fx span { font-size: 0.92rem; }
+.ct-gm-outcome-none { font-size: 0.85rem; color: var(--ct-text-dim, #9a9a9a); font-style: italic; }
 .ct-skill-roll-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .ct-skill-roll-field { display: flex; flex-direction: column; gap: 6px; }
 .ct-skill-roll-field > span { font-size: 0.76rem; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(242, 228, 190, 0.82); }
@@ -6473,12 +6662,12 @@ align-self: stretch;
 .ct-ability-pool-dot.remaining span { color: #2d7a2d; }
 .ct-ability-pool-arrow { color: rgba(58, 32, 96, 0.35); font-size: 0.72rem; padding-top: 4px; }
 
-/* ── Cypher Taskbar: Attack Roll Damage Block ── */
-.ct-native-attack-roll-form .ct-atk-dmg-summary {
+/* ── Cypher Taskbar: Attack/Spell Roll Damage Summary Rows ── */
+.ct-native-skill-roll-form .ct-atk-dmg-summary {
   background: rgba(180, 30, 30, 0.07);
   border-radius: 3px;
 }
-.ct-native-attack-roll-form .ct-atk-total-dmg-row strong {
+.ct-native-skill-roll-form .ct-atk-total-dmg-row strong {
   color: #e53e3e;
   font-size: 1.1em;
 }
@@ -6687,6 +6876,65 @@ align-self: stretch;
 .ct-status-debilitated {
   color: #ef5a5a;
 }
+.ct-bar-status.ct-status-dead,
+.ct-status-dead {
+  color: #a11a1a;
+}
+
+/* ── Portrait damage states ── */
+/* FX overlay: sits above the portrait img/video, below the dice bar */
+.ct-portrait-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+.ct-ps-impaired .ct-portrait-fx {
+  opacity: 1;
+  background: rgba(255, 205, 60, 0.38);
+  mix-blend-mode: color;
+}
+.ct-ps-debilitated .ct-portrait-fx {
+  opacity: 1;
+  background: rgba(228, 38, 38, 0.45);
+  mix-blend-mode: color;
+}
+.ct-ps-dead .ct-portrait,
+.ct-ps-dead .ct-portrait-video {
+  opacity: 0.2;
+  filter: grayscale(0.9);
+  transition: opacity 0.6s ease, filter 0.6s ease;
+}
+/* Hit feedback: slight shake + brief red flash */
+@keyframes ct-portrait-shake {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-3px, 1px) rotate(-0.5deg); }
+  40% { transform: translate(3px, -1px) rotate(0.5deg); }
+  60% { transform: translate(-2px, -1px); }
+  80% { transform: translate(2px, 1px); }
+}
+.ct-dmg-shake {
+  animation: ct-portrait-shake 0.45s ease-in-out;
+}
+@keyframes ct-portrait-hit {
+  0% { opacity: 1; background: rgba(255, 30, 30, 0.7); mix-blend-mode: color; }
+  100% { opacity: 0; }
+}
+.ct-dmg-flash .ct-portrait-fx {
+  animation: ct-portrait-hit 0.55s ease-out;
+}
+/* Dead locks the whole taskbar (menus, buttons, pools, portrait) */
+#ct-bar.ct-actor-dead :is(.ct-btn, .ct-panel, .cgt-panel, button, input, select, a, label, .ct-stat-row, .ct-float-stats, .ct-portrait-wrap, .ct-bar-meta) {
+  pointer-events: none !important;
+}
+/* ...and any popup that was open when death happened */
+body.ct-actor-dead-lock .ct-popup,
+body.ct-actor-dead-lock .ct-confirm,
+body.ct-actor-dead-lock .cgt-panel[data-cgt-owner="taskbar"] {
+  pointer-events: none !important;
+}
 
 @keyframes ctTaskbarDamagePulseYellow {
   0% { box-shadow: 0 -2px 24px rgba(0,0,0,0.7), inset 0 0 0 0 rgba(255, 214, 64, 0.00); background-color: var(--ct-bg); }
@@ -6751,6 +6999,74 @@ background: rgba(255,255,255,0.03);
 }
 .ct-panel-header-equipment-menu i {
 color: color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) calc(var(--ct-equipment-heading-opacity, 0.85) * 100%), white 5%);
+}
+
+/* ── CYPHERS/ARTIFACTS carry-limit widget (header) ── */
+.ct-eq-cypher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) 45%, transparent);
+  background: color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) 12%, rgba(255,255,255,0.04));
+}
+.ct-eq-cypher i {
+  font-size: 0.75em;
+  color: color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) 90%, white 10%);
+}
+.ct-eq-cypher-value {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) 75%, white 25%);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+}
+.ct-eq-cypher-bar {
+  width: 56px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.35);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+  overflow: hidden;
+}
+.ct-eq-cypher-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) 70%, transparent),
+    color-mix(in srgb, var(--ct-equipment-heading-color, #d4a94d) 95%, white 15%));
+  transition: width 0.35s ease;
+}
+/* Limit reached — value + bar flash red until a slot frees up */
+@keyframes ct-eq-cypher-flash {
+  0%, 100% {
+    border-color: rgba(255,90,90,0.65);
+    background: rgba(255,60,60,0.16);
+    box-shadow: 0 0 6px rgba(255,60,60,0.35);
+  }
+  50% {
+    border-color: rgba(255,90,90,0.25);
+    background: rgba(255,60,60,0.05);
+    box-shadow: 0 0 2px rgba(255,60,60,0.10);
+  }
+}
+@keyframes ct-eq-cypher-fill-flash {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(255,110,110,0.75), 0 0 5px rgba(255,70,70,0.45); }
+  50%      { box-shadow: inset 0 0 0 1px rgba(255,110,110,0.20), 0 0 1px rgba(255,70,70,0.10); }
+}
+.ct-eq-cypher-exhausted {
+  animation: ct-eq-cypher-flash 1s ease-in-out infinite;
+}
+.ct-eq-cypher-exhausted i,
+.ct-eq-cypher-exhausted .ct-eq-cypher-value {
+  color: #ff9090;
+}
+/* Depleted bar pulses an empty red track — reads as "at/over capacity" */
+.ct-eq-cypher-exhausted .ct-eq-cypher-bar {
+  background: rgba(255,70,70,0.12);
+  animation: ct-eq-cypher-fill-flash 1s ease-in-out infinite;
 }
 .ct-equipment-panel-title-text {
 font-size: calc(0.85em * var(--ct-equipment-title-scale, 1));
@@ -6820,6 +7136,83 @@ scrollbar-color: rgba(212,169,77,0.7) rgba(255,255,255,0.08);
 }
 .ct-weapon-drop-zone.ct-weapon-drop-active .ct-weapon-drop-zone-inner i {
   color: rgba(212, 169, 77, 1);
+}
+
+/* Ammo section inside Weapons & Ammo */
+.ct-ammo-section-title {
+  font-size: 0.68em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ct-accent);
+  opacity: 0.85;
+  padding: 10px 14px 4px;
+  margin-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ct-ammo-section-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 0.92em;
+}
+.ct-ammo-card .ct-weapon-card-icon {
+  border-radius: 50%;
+}
+/* Weapon card highlighted while an ammo card is dragged over it */
+.ct-weapon-card.ct-ammo-drop-hover {
+  border-color: rgba(120, 200, 120, 0.8) !important;
+  box-shadow: 0 0 12px rgba(120, 200, 120, 0.35), inset 0 0 8px rgba(120, 200, 120, 0.15);
+  background: rgba(120, 200, 120, 0.08);
+}
+
+.ct-weapon-card.ct-weapon-locked {
+  filter: grayscale(0.9);
+  opacity: 0.55;
+}
+.ct-weapon-card.ct-weapon-locked:hover {
+  transform: none;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.ct-weapon-card.ct-weapon-locked .ct-weapon-use-btn {
+  opacity: 0.35;
+}
+
+/* NOT LOADED / AMMO SPENT banner across the locked card */
+.ct-weapon-lock-banner {
+  position: absolute;
+  top: 50%;
+  left: -2px;
+  right: -2px;
+  transform: translateY(-50%) rotate(-3deg);
+  background: rgba(20, 8, 8, 0.88);
+  border-top: 1px solid rgba(220, 100, 100, 0.65);
+  border-bottom: 1px solid rgba(220, 100, 100, 0.65);
+  color: #ff8a8a;
+  font-size: 0.68em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding: 5px 4px;
+  pointer-events: none;
+  z-index: 2;
+}
+.ct-weapon-lock-banner i {
+  color: #e05c5c;
+  margin-right: 3px;
+}
+.ct-weapon-lock-banner .ct-weapon-lock-hint {
+  display: block;
+  font-weight: 500;
+  font-size: 0.85em;
+  color: rgba(255, 170, 170, 0.75);
+  letter-spacing: 0.02em;
+  margin-top: 1px;
 }
 
 /* ── Weapon Grid ── */
@@ -6966,6 +7359,47 @@ scrollbar-color: rgba(212,169,77,0.7) rgba(255,255,255,0.08);
 .ct-weapon-use-btn:hover {
   background: rgba(200, 169, 110, 0.35);
   color: #f0d68a;
+}
+
+/* Delete (drop-from-actor) button on weapon/ammo cards — mirrors the use button,
+   red-themed, sits below it in the top-right corner. */
+.ct-weapon-del-btn {
+  position: absolute;
+  top: 30px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: none;
+  background: rgba(200, 80, 80, 0.15);
+  color: rgba(220, 100, 100, 0.75);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65em;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  padding: 0;
+}
+.ct-weapon-card:hover .ct-weapon-del-btn {
+  opacity: 1;
+}
+.ct-weapon-del-btn:hover {
+  background: rgba(200, 60, 60, 0.45);
+  color: #ff8a8a;
+}
+
+/* Drop-weapon confirmation popup */
+.ct-drop-weapon-confirm {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+.ct-drop-weapon-confirm .ct-popup-header {
+  border-bottom: 1px solid rgba(200, 80, 80, 0.35);
+}
+.ct-drop-weapon-confirm .ct-popup-header i.fa-trash-can {
+  color: #e05c5c;
+  margin-right: 6px;
 }
 
 /* Weapon panel body override */
@@ -7322,6 +7756,325 @@ backdrop-filter: blur(8px);
   color: #ffffff;
   border-color: rgba(140,255,160,0.5);
   box-shadow: 2px 2px 12px rgba(80,220,100,0.25), inset 0 0 8px rgba(100,255,120,0.15);
+}
+
+/* ── Combat menu side tabs (Home / Attacks) ── */
+.ct-combat-tabs-wrapper {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: stretch;
+  vertical-align: top;
+}
+.ct-combat-tabs-wrapper .ct-panel-combat {
+  border-radius: 12px;
+}
+.ct-combat-main {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.ct-combat-side-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+}
+.ct-combat-side-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 32px;
+  padding: 10px 4px;
+  background: linear-gradient(180deg, #2a4d7a, #1a3050);
+  border: 1px solid rgba(100,160,220,0.25);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  color: #a8c8e8;
+  font-size: 0.58em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  box-shadow: 2px 2px 8px rgba(0,0,0,0.3);
+}
+.ct-combat-side-tab i {
+  font-size: 1.1em;
+  transform: rotate(-90deg);
+}
+.ct-combat-side-tab:hover {
+  background: linear-gradient(180deg, #3a5d8a, #2a4060);
+  color: #c8dff8;
+  border-color: rgba(120,180,240,0.4);
+}
+.ct-combat-side-tab.active {
+  background: linear-gradient(180deg, #4a7db0, #305080);
+  color: #ffffff;
+  border-color: rgba(140,200,255,0.5);
+  box-shadow: 2px 2px 12px rgba(80,150,220,0.25), inset 0 0 8px rgba(100,180,255,0.15);
+}
+.ct-combat-side-tab[data-combat-tab="home"] {
+  background: linear-gradient(180deg, #3a3a3a, #1a1a1a);
+  border-color: rgba(180,180,180,0.25);
+  color: #c8c8c8;
+}
+.ct-combat-side-tab[data-combat-tab="home"]:hover {
+  background: linear-gradient(180deg, #4a4a4a, #2a2a2a);
+  color: #e8e8e8;
+  border-color: rgba(200,200,200,0.4);
+}
+.ct-combat-side-tab[data-combat-tab="home"].active {
+  background: linear-gradient(180deg, #5a5a5a, #3a3a3a);
+  color: #ffffff;
+  border-color: rgba(220,220,220,0.5);
+  box-shadow: 2px 2px 12px rgba(150,150,150,0.25), inset 0 0 8px rgba(200,200,200,0.15);
+}
+.ct-combat-side-tab[data-combat-tab="attacks"] {
+  background: linear-gradient(180deg, #7a2a2a, #501a1a);
+  border-color: rgba(220,100,100,0.25);
+  color: #e8a8a8;
+}
+.ct-combat-side-tab[data-combat-tab="attacks"]:hover {
+  background: linear-gradient(180deg, #8a3a3a, #602a2a);
+  color: #f8c8c8;
+  border-color: rgba(240,120,120,0.4);
+}
+.ct-combat-side-tab[data-combat-tab="attacks"].active {
+  background: linear-gradient(180deg, #b04a4a, #803030);
+  color: #ffffff;
+  border-color: rgba(255,140,140,0.5);
+  box-shadow: 2px 2px 12px rgba(220,80,80,0.25), inset 0 0 8px rgba(255,120,120,0.15);
+}
+
+/* ── Combat menu ATTACKS tab body ── */
+.ct-combat-attacks-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ct-combat-attacks-dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 2px dashed rgba(200,120,120,0.35);
+  border-radius: 8px;
+  background: rgba(120,40,40,0.12);
+  color: #d8a8a8;
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition: all 0.2s ease;
+}
+.ct-combat-attacks-dropzone.ct-drag-over {
+  border-color: rgba(255,160,160,0.7);
+  background: rgba(160,60,60,0.25);
+  color: #f8d0d0;
+  transform: scale(1.02);
+}
+.ct-combat-attacks-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.ct-combat-attack-icon {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  border: 1px solid rgba(200,120,120,0.3);
+  background: linear-gradient(180deg, rgba(90,30,30,0.4), rgba(40,15,15,0.5));
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.ct-combat-attack-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 7px;
+  display: block;
+}
+.ct-combat-attack-icon:hover {
+  border-color: rgba(255,160,160,0.65);
+  box-shadow: 0 0 10px rgba(220,90,90,0.35);
+  transform: translateY(-2px);
+}
+.ct-combat-attack-unpin {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255,160,160,0.6);
+  border-radius: 50%;
+  background: linear-gradient(180deg, #8a3030, #5a1c1c);
+  color: #ffd8d8;
+  font-size: 9px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+}
+.ct-combat-attack-icon:hover .ct-combat-attack-unpin {
+  display: flex;
+}
+.ct-combat-attack-unpin:hover {
+  background: linear-gradient(180deg, #b04040, #7a2828);
+  color: #ffffff;
+}
+.ct-combat-attacks-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: #9a8a8a;
+  font-size: 0.85em;
+  text-align: center;
+}
+.ct-combat-attacks-empty i {
+  font-size: 1.6em;
+  opacity: 0.5;
+}
+.ct-combat-attacks-hint {
+  color: #8a7a7a;
+  font-size: 0.72em;
+  letter-spacing: 0.03em;
+  text-align: center;
+  opacity: 0.85;
+}
+
+/* ── HOME attack rows: inline stats + combat-mode burst icon ── */
+.ct-combat-attack-row .ct-item-name {
+  flex: 0 0 auto;
+}
+.ct-combat-attack-stats {
+  font-size: 0.84em;
+  color: var(--ct-text-dim);
+  white-space: nowrap;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.ct-combat-attack-retarget {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: 0.95em;
+  line-height: 1;
+  color: #3a8fd4;
+  cursor: pointer;
+  transition: color 0.15s, text-shadow 0.15s, transform 0.15s;
+}
+.ct-combat-attack-retarget:hover {
+  color: #6cc0ff;
+  text-shadow: 0 0 8px rgba(58,143,212,0.65);
+  transform: scale(1.12);
+}
+.ct-combat-attack-burst {
+  margin-left: 4px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: 0.95em;
+  line-height: 1;
+  color: #ff2414;
+  cursor: pointer;
+  transition: color 0.15s, text-shadow 0.15s, transform 0.15s;
+}
+.ct-combat-attack-burst:hover {
+  color: #ff6b5e;
+  text-shadow: 0 0 8px rgba(255,36,20,0.65);
+  transform: scale(1.15);
+}
+
+/* ── Combat attack tooltip ── */
+.ct-attack-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  width: 280px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, rgba(30,15,15,0.97), rgba(18,9,9,0.97));
+  border: 1px solid rgba(220,110,110,0.45);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.55), 0 0 14px rgba(200,70,70,0.15);
+  pointer-events: none;
+  color: #e8d8d8;
+  font-family: inherit;
+  font-size: 0.82em;
+  line-height: 1.45;
+}
+.ct-attack-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(220,110,110,0.25);
+}
+.ct-attack-tooltip-header img {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid rgba(220,110,110,0.35);
+}
+.ct-attack-tooltip-header span {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #f4d8d8;
+  text-transform: uppercase;
+  font-size: 0.95em;
+}
+.ct-attack-tooltip-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+.ct-attack-tooltip-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ct-attack-tooltip-stat-key {
+  color: #a88888;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.85em;
+}
+.ct-attack-tooltip-stat-val {
+  color: #f0e0e0;
+  font-weight: 700;
+}
+.ct-attack-tooltip-desc {
+  color: #cbb6b6;
+  font-size: 0.95em;
+}
+.ct-attack-tooltip-type {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 8px;
+  border: 1px solid rgba(220,110,110,0.35);
+  border-radius: 999px;
+  color: #d8a8a8;
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 /* ── Equipment placeholder (Equip tab) ── */
@@ -8656,7 +9409,6 @@ backdrop-filter: blur(8px);
 }
 
 /* ── Book Settings Popup ── */
-#ct-book-settings-popup { width: 420px; }
 #ct-book-settings-popup .ct-popup-body { max-height: 380px; overflow-y: auto; }
 
 #ct-stuff-panel .ct-popup-header span {
@@ -8822,7 +9574,6 @@ backdrop-filter: blur(8px);
 }
 
 /* ── Stuff Settings (adapted from skills) ── */
-#ct-stuff-settings-popup { width: 420px; }
 #ct-stuff-settings-popup .ct-popup-body { max-height: 380px; overflow-y: auto; }
 
 
@@ -11322,6 +12073,24 @@ backdrop-filter: blur(8px);
   transform: translateX(-20px);
   transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* ── MAIN menu backdrop blur — frosted glass halo around the popup ── */
+#ct-portrait-menu-wrapper::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  backdrop-filter: blur(8px) saturate(1.1);
+  -webkit-backdrop-filter: blur(8px) saturate(1.1);
+  background: rgba(8, 8, 12, 0.35);
+  border-radius: 18px;
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+#ct-portrait-menu-wrapper:has(.ct-portrait-menu-popup.is-open)::before {
+  opacity: 1;
+}
 .ct-portrait-menu-popup.is-open {
   opacity: 1;
   transform: translateX(0);
@@ -11341,6 +12110,47 @@ backdrop-filter: blur(8px);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+
+/* ── MAIN menu side tabs — active state ── */
+.ct-portrait-side-btn.is-active {
+  background: rgba(74, 222, 128, 0.1) !important;
+  border-color: rgba(74, 222, 128, 0.35) !important;
+  color: #4ade80 !important;
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.1) !important;
+}
+.ct-portrait-side-btn.ct-portrait-btn-shared.is-active {
+  background: rgba(74, 222, 128, 0.1) !important;
+  border-color: rgba(74, 222, 128, 0.35) !important;
+  color: #4ade80 !important;
+  box-shadow: 0 0 12px rgba(74, 222, 128, 0.1) !important;
+}
+.ct-portrait-side-btn.ct-portrait-btn-gm.is-active {
+  background: rgba(200, 169, 110, 0.12) !important;
+  border-color: rgba(200, 169, 110, 0.4) !important;
+  color: #c8a96e !important;
+  box-shadow: 0 0 12px rgba(200, 169, 110, 0.12) !important;
+}
+.ct-portrait-side-btn.ct-portrait-btn-my.is-active {
+  background: rgba(200, 169, 110, 0.12) !important;
+  border-color: rgba(200, 169, 110, 0.4) !important;
+  color: #c8a96e !important;
+  box-shadow: 0 0 12px rgba(200, 169, 110, 0.12) !important;
+}
+.ct-portrait-side-btn.ct-portrait-btn-character.is-active {
+  background: rgba(107, 189, 255, 0.1) !important;
+  border-color: rgba(107, 189, 255, 0.35) !important;
+  color: #6bbdff !important;
+  box-shadow: 0 0 12px rgba(107, 189, 255, 0.1) !important;
+}
+
+/* Tab panes */
+.ct-portrait-menu-pane {
+  display: none;
+}
+.ct-portrait-menu-pane.is-active {
+  display: block;
+}
+
 .ct-portrait-menu-popup .ct-popup-body {
   padding: 6px;
 }
@@ -12207,6 +13017,74 @@ backdrop-filter: blur(8px);
   background: linear-gradient(160deg, #3f80ec 0%, #2456ad 55%, #173a7a 100%);
   box-shadow: 0 0 14px rgba(80, 150, 255, 0.5), 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
+/* MOVE — dark-blue fade while the ACTION pool is spent (immediate move only) */
+.ct-cb-move.ct-cb-move-dim,
+.ct-cb-move.ct-cb-move-dim:hover {
+  background: linear-gradient(160deg, #1a2f52 0%, #101d36 55%, #0a1426 100%);
+  border-color: rgba(90, 130, 190, 0.35);
+  color: #9db8d8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.ct-cb-move.ct-cb-move-dim i {
+  opacity: 0.75;
+  filter: none;
+}
+/* SPELL — grey fade while the ACTION pool is spent */
+.ct-cb-spell.ct-cb-spell-dim,
+.ct-cb-spell.ct-cb-spell-dim:hover {
+  background: linear-gradient(160deg, #2b2440 0%, #1c172e 55%, #141021 100%);
+  border-color: rgba(120, 105, 160, 0.3);
+  color: #8d84a8;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.ct-cb-spell.ct-cb-spell-dim i {
+  opacity: 0.7;
+  filter: grayscale(0.6);
+}
+
+/* === TURN LOCK — combat active, not the tracked PC's turn ===
+   All action buttons in taskbar menus grey out and stop responding.
+   The class is toggled on #ct-panel-container by _syncTurnLock(). */
+#ct-panel-container.ct-turn-locked [data-cast-spell],
+#ct-panel-container.ct-turn-locked [data-attack-retarget],
+#ct-panel-container.ct-turn-locked [data-attack-burst],
+#ct-panel-container.ct-turn-locked [data-use-ability],
+#ct-panel-container.ct-turn-locked [data-roll-skill],
+#ct-panel-container.ct-turn-locked [data-use-equipment],
+#ct-panel-container.ct-turn-locked [data-use-weapon] {
+  opacity: 0.35;
+  filter: grayscale(0.7);
+  pointer-events: none;
+  cursor: not-allowed;
+}
+/* Items context menu (mounted on document.body, outside the container) */
+.ct-cash-ctx-item.ct-turn-locked-item {
+  opacity: 0.35;
+  filter: grayscale(0.7);
+  cursor: not-allowed;
+}
+
+/* === PIP BURN — expended pip animation (3s) ===
+   The pip grows large and burns red, then settles back to normal size.
+   If it hit 0, the ct-cb-res-empty grey is waiting underneath; the JS
+   removes ct-cb-pip-anim when the animation finishes. */
+.ct-cb-res.ct-cb-pip-anim {
+  animation: ct-cb-pip-burn 3s ease;
+  border-color: rgba(255, 92, 92, 0.75);
+  box-shadow: 0 0 16px rgba(255, 70, 70, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 5px rgba(0, 0, 0, 0.35);
+}
+.ct-cb-res.ct-cb-pip-anim .ct-cb-res-val {
+  color: #ff6b6b;
+  border-color: rgba(255, 92, 92, 0.8);
+  background: linear-gradient(180deg, rgba(80, 22, 22, 0.95), rgba(38, 10, 10, 0.95));
+}
+@keyframes ct-cb-pip-burn {
+  0%   { transform: scale(1); }
+  15%  { transform: scale(1.65); }
+  45%  { transform: scale(1.5); }
+  75%  { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
 /* MOVE — disabled while the move pool is empty */
 .ct-cb-move.ct-cb-disabled,
 .ct-cb-move.ct-cb-disabled:hover {
@@ -12246,6 +13124,20 @@ backdrop-filter: blur(8px);
   color: #ffe9e9;
   background: linear-gradient(160deg, rgba(190, 40, 40, 0.9), rgba(90, 18, 20, 0.95));
   box-shadow: 0 0 14px rgba(255, 80, 80, 0.45), 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+/* ABILITY — yellow flag while the action pool is spent (stays clickable) */
+.ct-cb-ability.ct-cb-ability-yellow,
+.ct-cb-ability.ct-cb-ability-yellow:hover {
+  border-color: rgba(255, 208, 64, 0.8);
+  background: linear-gradient(160deg, rgba(74, 58, 16, 0.92), rgba(40, 29, 8, 0.95));
+  box-shadow: 0 0 14px rgba(255, 196, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.ct-cb-ability.ct-cb-ability-yellow i {
+  color: #ffd700;
+  filter: drop-shadow(0 0 6px rgba(255, 200, 0, 0.85));
+}
+.ct-cb-ability.ct-cb-ability-yellow:hover i {
+  color: #ffe45c;
 }
 /* MOVE popup — two-column glass expenditure menu
    Reference: Linear command palette × VisionOS glass, inside the bar's
@@ -12336,6 +13228,15 @@ backdrop-filter: blur(8px);
     inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 /* Per-move color coding */
+.ct-cb-mm-opt.ct-mm-disabled,
+.ct-cb-mm-opt.ct-mm-disabled:hover,
+.ct-cb-mm-opt.ct-mm-disabled:focus-visible {
+  filter: grayscale(0.9);
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 .ct-mm-green { --acc: 74, 196, 120; }
 .ct-mm-teal  { --acc: 56, 189, 186; }
 .ct-mm-blue  { --acc: 96, 156, 250; }
@@ -12837,4 +13738,822 @@ body.ct-move-mode #hotbar {
 }
 .ct-move-exit:active {
   transform: scale(0.96);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   v4.1.203 — GM Intrusion banner (full-height overlay over the portrait)
+   ═══════════════════════════════════════════════════════════════════ */
+.ct-intrusion {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: radial-gradient(120% 100% at 50% 0%, rgba(60, 10, 10, 0.94), rgba(12, 4, 4, 0.97));
+  border: 1px solid rgba(255, 200, 90, 0.35);
+  box-shadow: 0 0 40px rgba(255, 60, 40, 0.35), inset 0 0 60px rgba(0, 0, 0, 0.6);
+  animation: ct-intrusion-in 0.45s cubic-bezier(.2, .9, .25, 1.2);
+  overflow: hidden;
+}
+@keyframes ct-intrusion-in {
+  from { opacity: 0; transform: translateY(-14px) scale(.97); }
+  to   { opacity: 1; transform: none; }
+}
+.ct-intrusion.ct-out {
+  opacity: 0;
+  transform: translateY(10px) scale(.98);
+  transition: opacity .3s ease, transform .3s ease;
+}
+.ct-intrusion-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 26px 16px 20px;
+  width: 100%;
+  text-align: center;
+}
+.ct-intrusion-kicker {
+  font-size: 1.15em;
+  font-weight: 800;
+  letter-spacing: .35em;
+  color: #ffd677;
+  animation: ct-intrusion-pulse 1.6s ease-in-out infinite;
+}
+.ct-intrusion-kicker i { color: #ff5540; }
+@keyframes ct-intrusion-pulse {
+  0%, 100% { text-shadow: 0 0 10px rgba(255, 120, 40, .45); }
+  50%      { text-shadow: 0 0 22px rgba(255, 140, 50, .95); }
+}
+.ct-intrusion-desc {
+  font-size: .95em;
+  line-height: 1.45;
+  color: #f2e4c8;
+  font-style: italic;
+  max-height: 40%;
+  overflow: auto;
+}
+.ct-intrusion-sub {
+  font-size: .72em;
+  color: #c8a96e;
+  line-height: 1.5;
+  opacity: .9;
+}
+.ct-intrusion-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.ct-intrusion-accept,
+.ct-intrusion-refuse {
+  border: 1px solid;
+  padding: 9px 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  cursor: pointer;
+  font-size: .85em;
+  font-family: inherit;
+}
+.ct-intrusion-accept {
+  background: linear-gradient(180deg, rgba(90, 60, 10, .9), rgba(50, 32, 6, .9));
+  border-color: #c8a96e;
+  color: #ffd677;
+}
+.ct-intrusion-accept:hover { box-shadow: 0 0 16px rgba(255, 190, 80, .45); }
+.ct-intrusion-refuse {
+  background: rgba(30, 8, 8, .85);
+  border-color: #7a2a2a;
+  color: #ff8f8f;
+}
+.ct-intrusion-refuse:hover:not(:disabled) { box-shadow: 0 0 14px rgba(255, 60, 60, .35); }
+.ct-intrusion-refuse:disabled { opacity: .4; cursor: not-allowed; }
+.ct-intrusion-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #8a7a5a;
+  cursor: pointer;
+  font-size: .85em;
+  z-index: 2;
+}
+.ct-intrusion-close:hover { color: #ffd677; }
+select.ct-intrusion-give {
+  width: 100%;
+  background: #1a0f0a;
+  color: #f2e4c8;
+  border: 1px solid #c8a96e;
+  padding: 6px;
+  font-family: inherit;
+}
+/* Dead-lock must not freeze the intrusion decision */
+#ct-bar.ct-actor-dead .ct-intrusion,
+#ct-bar.ct-actor-dead .ct-intrusion * { pointer-events: auto !important; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   v4.1.204 — Floating combat numbers off the portrait
+   ═══════════════════════════════════════════════════════════════════ */
+.ct-float-num {
+  position: fixed;
+  transform: translate(-50%, 0);
+  z-index: 9999;
+  pointer-events: none;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: .04em;
+  font-family: inherit;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .9), 0 0 12px currentColor;
+  animation: ct-float-rise 1.4s ease-out backwards;
+}
+.ct-float-dmg  { color: #ff6a5e; }
+.ct-float-heal { color: #7de08f; }
+@keyframes ct-float-rise {
+  0%   { opacity: 0; transform: translate(-50%, 0) scale(.7); }
+  12%  { opacity: 1; transform: translate(-50%, -14px) scale(1.08); }
+  100% { opacity: 0; transform: translate(-50%, -90px) scale(1); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   v4.1.206 — Mood portraits switcher
+   ═══════════════════════════════════════════════════════════════════ */
+.ct-mood-bar {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  z-index: 5;
+  opacity: .5;
+  transition: opacity .2s ease;
+}
+.ct-portrait-wrap:hover .ct-mood-bar { opacity: 1; }
+.ct-mood-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .25);
+  background: rgba(10, 8, 14, .78);
+  color: #cfc4de;
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.ct-mood-btn:hover { border-color: #ffd677; color: #ffd677; }
+.ct-mood-btn.ct-mood-active {
+  background: linear-gradient(180deg, rgba(90, 60, 10, .95), rgba(50, 32, 6, .95));
+  border-color: #c8a96e;
+  color: #ffd677;
+  box-shadow: 0 0 10px rgba(255, 190, 80, .5);
+}
+.ct-mood-btn.ct-mood-unset { opacity: .45; border-style: dashed; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   v4.1.207 — Torch mode: warm flicker tied to scene darkness
+   ═══════════════════════════════════════════════════════════════════ */
+.ct-torch-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  /* --ct-torch (0..1) is set from JS: eased scene darkness */
+  opacity: var(--ct-torch, 0);
+  background:
+    radial-gradient(120% 82% at 50% 100%, rgba(255, 172, 72, 0.9), rgba(255, 118, 28, 0.38) 52%, transparent 74%);
+  mix-blend-mode: soft-light;
+  animation: ct-torch-flicker 3.1s ease-in-out infinite;
+}
+@keyframes ct-torch-flicker {
+  0%, 100% { opacity: calc(var(--ct-torch, 0) * 1); }
+  13%      { opacity: calc(var(--ct-torch, 0) * 0.86); }
+  27%      { opacity: calc(var(--ct-torch, 0) * 0.97); }
+  38%      { opacity: calc(var(--ct-torch, 0) * 0.78); }
+  52%      { opacity: calc(var(--ct-torch, 0) * 0.94); }
+  67%      { opacity: calc(var(--ct-torch, 0) * 0.83); }
+  81%      { opacity: calc(var(--ct-torch, 0) * 0.99); }
+}
+
+/* ═══════════════════════════════════════════
+   DICE HISTORY STRIP
+   ═══════════════════════════════════════════ */
+
+/* Chips live inside .ct-recovery-bar — separated by a divider */
+.ct-recovery-bar .ct-dice-chip {
+  margin-left: 2px;
+}
+.ct-recovery-bar .ct-dice-chip:first-of-type {
+  margin-left: 6px;
+  border-left: 1px solid rgba(200,169,110,0.25);
+  padding-left: 8px;
+  border-radius: 0 10px 10px 0;
+}
+
+.ct-dice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--ct-border, rgba(200,169,110,0.2));
+  background: rgba(12,12,16,0.6);
+  color: var(--ct-text, #e0d8c8);
+  font-size: 0.65rem;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  flex-shrink: 0;
+}
+
+.ct-dice-chip:hover {
+  background: rgba(200,169,110,0.2);
+  border-color: var(--ct-accent, #c8a96e);
+  transform: scale(1.06);
+}
+
+.ct-dice-chip:active {
+  transform: scale(0.97);
+}
+
+.ct-dice-chip .ct-chip-total {
+  font-weight: 700;
+  font-size: 0.7rem;
+  color: var(--ct-accent, #c8a96e);
+}
+
+.ct-dice-chip .ct-chip-detail {
+  font-size: 0.58rem;
+  opacity: 0.65;
+  max-width: 55px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-dice-chip.ct-chip-hit {
+  border-color: rgba(126,207,126,0.4);
+}
+.ct-dice-chip.ct-chip-hit .ct-chip-total {
+  color: #7ecf7e;
+}
+
+.ct-dice-chip.ct-chip-miss {
+  border-color: rgba(207,126,126,0.35);
+  opacity: 0.75;
+}
+.ct-dice-chip.ct-chip-miss .ct-chip-total {
+  color: #cf7e7e;
+}
+
+.ct-dice-chip i {
+  font-size: 0.55rem;
+  opacity: 0.5;
+}
+
+/* ═══════════════════════════════════════════
+   STICKY NOTES
+   ═══════════════════════════════════════════ */
+
+.ct-sticky-note {
+  position: fixed;
+  width: 180px;
+  min-height: 140px;
+  max-height: 300px;
+  border-radius: 4px 4px 12px 4px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: inherit;
+  transition: box-shadow 0.2s ease;
+}
+
+.ct-sticky-note.ct-sticky-dragging {
+  box-shadow: 0 14px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
+  cursor: grabbing;
+  user-select: none;
+}
+
+.ct-sticky-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 3px 8px;
+  cursor: grab;
+  flex-shrink: 0;
+  background: rgba(0,0,0,0.06);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+
+.ct-sticky-header:active {
+  cursor: grabbing;
+}
+
+.ct-sticky-colors {
+  display: flex;
+  gap: 3px;
+}
+
+.ct-sticky-color {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.ct-sticky-color:hover {
+  transform: scale(1.25);
+}
+
+.ct-sticky-color.active {
+  border-color: rgba(0,0,0,0.45);
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,0.35);
+}
+
+.ct-sticky-close {
+  background: none;
+  border: none;
+  color: rgba(0,0,0,0.35);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ct-sticky-close:hover {
+  color: rgba(180,30,30,0.8);
+  background: rgba(0,0,0,0.08);
+}
+
+.ct-sticky-text {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: rgba(30,25,15,0.85);
+  min-height: 100px;
+  max-height: 250px;
+  overflow-y: auto;
+  field-sizing: content;
+}
+
+.ct-sticky-text::placeholder {
+  color: rgba(30,25,15,0.3);
+  font-style: italic;
+}
+
+.ct-sticky-text::-webkit-scrollbar {
+  width: 4px;
+}
+.ct-sticky-text::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.15);
+  border-radius: 2px;
+}
+
+/* ═══════════════════════════════════════════
+   MY TASKS
+   ═══════════════════════════════════════════ */
+
+.ct-my-tasks-panel {
+  border-radius: 12px;
+  max-width: none !important;
+}
+
+.ct-my-tasks-body {
+  padding: 12px 16px;
+  gap: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Task item row */
+.ct-my-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  transition: all 0.2s ease;
+  position: relative;
+}
+.ct-my-task-item:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(255,255,255,0.12);
+  transform: translateX(3px);
+}
+
+/* Urgent (yesterday) unsolved tasks flash */
+@keyframes ct-my-task-urgent-flash {
+  0%, 100% { border-color: rgba(255,68,68,0.3); background: rgba(255,68,68,0.04); }
+  50%      { border-color: rgba(255,68,68,0.7); background: rgba(255,68,68,0.12); }
+}
+.ct-my-task-urgent {
+  animation: ct-my-task-urgent-flash 2s ease-in-out infinite;
+}
+
+/* Solved tasks */
+.ct-my-task-solved {
+  opacity: 0.45;
+}
+.ct-my-task-solved .ct-gm-task-title {
+  text-decoration: line-through;
+}
+.ct-my-task-solved:hover {
+  opacity: 0.65;
+}
+
+/* Action buttons at end of row */
+.ct-my-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.ct-my-task-action-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: rgba(232,232,232,0.55);
+  cursor: pointer;
+  font-size: 0.75em;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+.ct-my-task-action-btn:hover {
+  background: rgba(255,255,255,0.12);
+  color: #e8e8e8;
+}
+.ct-my-task-edit:hover {
+  border-color: rgba(200,169,110,0.4);
+  color: #c8a96e;
+}
+.ct-my-task-solve:hover {
+  border-color: rgba(126,207,126,0.4);
+  color: #7ecf7e;
+}
+.ct-my-task-solve.is-solved {
+  color: #7ecf7e;
+  border-color: rgba(126,207,126,0.3);
+  background: rgba(126,207,126,0.08);
+}
+.ct-my-task-delete:hover {
+  border-color: rgba(207,126,126,0.4);
+  color: #cf7e7e;
+}
+
+/* GM badge */
+.ct-my-task-gm-badge {
+  color: #c8a96e;
+  font-size: 0.75em;
+}
+.ct-my-task-gm-badge i {
+  margin-right: 2px;
+}
+
+/* ═══════════════════════════════════════════
+   MY TASK EDITOR (WYSIWYG)
+   ═══════════════════════════════════════════ */
+
+.ct-my-task-form {
+  border-radius: 12px;
+  max-width: none !important;
+}
+
+.ct-my-task-wysiwyg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  width: 90%;
+  margin-left: auto;
+  margin-right: auto;
+}
+.ct-my-task-wysiwyg-toolbar button {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(232,232,232,0.55);
+  cursor: pointer;
+  font-size: 0.72em;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+.ct-my-task-wysiwyg-toolbar button:hover {
+  background: rgba(255,255,255,0.1);
+  color: #e8e8e8;
+}
+.ct-wysiwyg-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.1);
+  margin: 0 4px;
+}
+
+.ct-my-task-wysiwyg-editor {
+  min-height: 160px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 0 0 8px 8px;
+  color: #e0d8c8;
+  font-size: 0.88em;
+  line-height: 1.5;
+  outline: none;
+  width: 90%;
+  margin-left: auto;
+  margin-right: auto;
+}
+.ct-my-task-wysiwyg-editor:focus {
+  border-color: rgba(200,169,110,0.3);
+  background: rgba(255,255,255,0.05);
+}
+.ct-my-task-wysiwyg-editor:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(232,232,232,0.25);
+  font-style: italic;
+  pointer-events: none;
+}
+.ct-my-task-wysiwyg-editor h3 {
+  margin: 8px 0 4px 0;
+  color: #c8a96e;
+  font-size: 1.05em;
+}
+.ct-my-task-wysiwyg-editor ul,
+.ct-my-task-wysiwyg-editor ol {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+.ct-my-task-wysiwyg-editor p {
+  margin: 4px 0;
+}
+
+/* ═══════════════════════════════════════════
+   MY TASKS LOGIN NOTIFICATION
+   ═══════════════════════════════════════════ */
+
+.ct-my-tasks-login-panel {
+  border-radius: 12px;
+  max-width: none !important;
+  border-color: rgba(255,170,0,0.25) !important;
+}
+.ct-my-tasks-login-body {
+  padding: 12px 16px;
+  gap: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ct-my-task-login-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+}
+
+/* Flash animation for yesterday tasks in login notification */
+@keyframes ct-login-flash-yesterday {
+  0%, 100% { border-color: rgba(255,68,68,0.2); background: rgba(255,68,68,0.03); }
+  50%      { border-color: rgba(255,68,68,0.6); background: rgba(255,68,68,0.1); }
+}
+.ct-my-task-login-yesterday {
+  animation: ct-login-flash-yesterday 1.5s ease-in-out infinite;
+}
+
+/* Flash animation for soon tasks in login notification */
+@keyframes ct-login-flash-soon {
+  0%, 100% { border-color: rgba(255,170,0,0.15); background: rgba(255,170,0,0.02); }
+  50%      { border-color: rgba(255,170,0,0.45); background: rgba(255,170,0,0.07); }
+}
+.ct-my-task-login-soon {
+  animation: ct-login-flash-soon 2.5s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════
+   MY TASK DETAIL VIEW
+   ═══════════════════════════════════════════ */
+
+.ct-my-task-detail {
+  border-radius: 12px;
+  max-width: none !important;
+}
+
+.ct-my-task-detail-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ct-my-task-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ct-my-task-detail-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.72em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ct-badge-color, #ffaa00);
+  background: color-mix(in srgb, var(--ct-badge-color, #ffaa00) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ct-badge-color, #ffaa00) 30%, transparent);
+}
+
+.ct-my-task-detail-solved-badge {
+  --ct-badge-color: #7ecf7e;
+}
+
+.ct-my-task-detail-gm-badge {
+  --ct-badge-color: #c8a96e;
+}
+
+.ct-my-task-detail-date {
+  font-size: 0.72em;
+  color: rgba(232,232,232,0.35);
+  margin-left: auto;
+}
+
+.ct-my-task-detail-desc {
+  font-size: 0.92em;
+  line-height: 1.6;
+  color: #d8d0c0;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-y: auto;
+  max-height: 340px;
+}
+
+.ct-my-task-detail-desc h3 {
+  margin: 10px 0 4px 0;
+  color: #c8a96e;
+}
+
+.ct-my-task-detail-desc ul,
+.ct-my-task-detail-desc ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+
+.ct-my-task-detail-desc p {
+  margin: 6px 0;
+}
+
+.ct-my-task-detail-desc strong {
+  color: #e8e0d0;
+}
+
+.ct-my-task-detail-desc em {
+  color: #c0b8a8;
+}
+
+/* Detail header action buttons */
+.ct-my-task-detail .ct-popup-action-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: rgba(232,232,232,0.55);
+  cursor: pointer;
+  font-size: 0.75em;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.ct-my-task-detail .ct-popup-action-btn:hover {
+  background: rgba(255,255,255,0.12);
+  color: #e8e8e8;
+}
+
+/* ═══════════════════════════════════════════
+   MY TASKS — TABS & APPROVAL
+   ═══════════════════════════════════════════ */
+
+/* Tab bar */
+.ct-my-tasks-tabs {
+  display: flex;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.ct-my-tasks-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: rgba(232,232,232,0.4);
+  font-size: 0.75em;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-bottom: 2px solid transparent;
+}
+.ct-my-tasks-tab i { margin-right: 5px; }
+.ct-my-tasks-tab:hover { color: rgba(232,232,232,0.7); }
+.ct-my-tasks-tab.is-active {
+  color: #c8a96e;
+  border-bottom-color: #c8a96e;
+  background: rgba(200,169,110,0.04);
+}
+
+/* Approval pending badge */
+.ct-my-task-approval-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.62em;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #ffaa00;
+  background: rgba(255,170,0,0.1);
+  border: 1px solid rgba(255,170,0,0.3);
+  vertical-align: middle;
+}
+
+/* Approval-pending row highlight */
+@keyframes ct-my-approval-pulse {
+  0%, 100% { border-color: rgba(255,170,0,0.25); background: rgba(255,170,0,0.03); }
+  50%      { border-color: rgba(255,170,0,0.6);  background: rgba(255,170,0,0.08); }
+}
+.ct-my-task-approval-pending {
+  animation: ct-my-approval-pulse 2s ease-in-out infinite;
+}
+
+/* Approval button (check mark for GM tasks) */
+.ct-my-task-approval {
+  color: #7ecf7e;
+}
+.ct-my-task-approval:hover {
+  border-color: rgba(126,207,126,0.5);
+  background: rgba(126,207,126,0.1);
+  color: #7ecf7e;
+}
+
+/* Awaiting (disabled hourglass) */
+.ct-my-task-awaiting {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Detail view approval badge */
+.ct-my-task-approval-badge {
+  --ct-badge-color: #ffaa00;
 }

@@ -177,14 +177,24 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       });
       const visibleSections = visibleCategories.filter(category => !hiddenCategories.has(category.id));
 
+      // Combat-bar ACTION-lock: only applies while the combat bar is live with
+      // an empty action pool (Cypher 2 abilities carry system.activation).
+      const noActionLeft = !!this.element?.querySelector?.('.ct-cb-res[data-cb-res="action"] .ct-cb-res-val') && (this._cbActionPipsLeft?.() ?? 0) <= 0;
+
       const sectionData = visibleSections.map(category => {
         const entries = (grouped.get(category.id) ?? []).sort((a, b) => a.order - b.order || a.item.name.localeCompare(b.item.name));
         const bodyClass = entries.length ? "ct-ab-category-body" : "ct-ab-category-body ct-ab-category-body-empty";
         const rows = entries.length ? entries.map(({ item }) => {
           const cost = item.system.basic?.cost ? `<span class="ct-item-cost">${item.system.basic.cost}</span>` : "";
           const costNum = Number((String(item.system?.basic?.cost ?? "").match(/^(\d+)/)?.[1]) ?? 0);
-          const useBtn = costNum > 0 ? `<button class="ct-ab-use-inline" data-use-ability="${item.id}" title="Use ${item.name}"><i class="fas fa-bolt"></i></button>` : "";
-          return `<div class="ct-item-row ct-ab-action-row ct-ab-draggable" draggable="true" data-ability-id="${item.id}"><img class="ct-item-img" src="${item.img || 'icons/svg/ability.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span>${cost}${useBtn}</div>`;
+          // Abilities with ACTIVATION "action" (cypher-cool-items dropdown,
+          // system field fallback) need a free ACTION pip — when the combat
+          // bar's action pool is spent the row is greyed and unclickable.
+          const locked = noActionLeft && this._cbAbilityActivation(item) === "action";
+          const rangeLocked = !locked && !!(this._ctRangeLocked?.(item, "ability"));
+          const useBtn = costNum > 0 && !locked ? `<button class="ct-ab-use-inline${rangeLocked ? " ct-range-locked" : ""}" data-use-ability="${item.id}" title="${rangeLocked ? "Out of range" : `Use ${item.name}`}"${rangeLocked ? " disabled" : ""}><i class="fas fa-bolt"></i></button>` : "";
+          const lockTag = locked ? `<span class="ct-ab-lock-tag" title="Requires an action — action pool spent"><i class="fas fa-lock"></i> ACTION</span>` : "";
+          return `<div class="ct-item-row ct-ab-action-row ct-ab-draggable${locked ? " ct-ab-locked" : ""}" draggable="true" data-ability-id="${item.id}"${locked ? ` title="Requires an action — action pool spent"` : ""}><img class="ct-item-img" src="${item.img || 'icons/svg/ability.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span>${lockTag}${cost}${useBtn}</div>`;
         }).join("") : `<div class="ct-ab-empty-drop">Drop abilities here</div>`;
         const categoryStyle = this._getAbilityCategoryStyle(category.id);
         const html = `<section class="ct-ab-category-section" data-ab-category-section="${category.id}"><div class="ct-ab-category-header" data-ab-category-header="${category.id}" style="${this._abilityCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-ab-category-icon-wrap">${this._abilityCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-ab-category-title">${category.name}</span></div><div class="${bodyClass}" data-ability-category="${category.id}">${rows}</div></section>`;
@@ -285,17 +295,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-abilities-settings-popup";
-      popup.classList.add("ct-popup");
-      // Position above the Abilities section button
-      const abBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="abilities"]');
-      const btnRect = abBtn?.getBoundingClientRect();
-      if (btnRect) {
-        popup.style.left = `${btnRect.left}px`;
-        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-      } else {
-        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
-      }
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Abilities Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -341,6 +341,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
+      this._positionPopupRightOfMenu(popup, event, { fallbackSelector: '#cypher-taskbar-bar .ct-btn[data-panel="abilities"]' });
 
       const collectState = () => ({
         abilitiesMenuShadowColor: popup.querySelector("#am-shadow-color").value,
@@ -446,17 +447,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-ability-category-appearance-popup";
-      popup.classList.add("ct-popup");
-      // Position above the Abilities section button
-      const abBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="abilities"]');
-      const btnRect = abBtn?.getBoundingClientRect();
-      if (btnRect) {
-        popup.style.left = `${btnRect.left}px`;
-        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-      } else {
-        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
-      }
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -472,7 +463,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
           <label>Header Color <input type="color" id="ct-ab-category-header-color" value="${state.headerColor}"></label>
         </div>`;
       document.body.appendChild(popup);
-      this._positionPopupAboveEvent(popup, event);
+      this._positionPopupRightOfMenu(popup, event);
 
       const previewTarget = () => this.element?.querySelector(`[data-ab-category-header="${categoryId}"]`);
       const syncVal = (id, fmt = v => v) => {
@@ -555,17 +546,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       document.querySelector("#ct-ability-category-popup")?.remove();
       const popup = document.createElement("div");
       popup.id = "ct-ability-category-popup";
-      popup.classList.add("ct-popup");
-      // Position above the Abilities section button
-      const abBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="abilities"]');
-      const btnRect = abBtn?.getBoundingClientRect();
-      if (btnRect) {
-        popup.style.left = `${btnRect.left}px`;
-        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-      } else {
-        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
-      }
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-folder-plus"></i> Ability Categories <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -578,6 +559,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
+      this._positionPopupRightOfMenu(popup, event);
 
       const renderCategories = () => {
         const list = popup.querySelector("#ct-ability-category-list");
@@ -780,6 +762,11 @@ export function applyAbilitiesPanel(CypherTaskbar) {
                   });
                 } catch (err) {
                   console.error(`${MODULE_ID} | ChatMessage.create failed:`, err);
+                }
+
+                // Notify integrations (e.g. Cypher Cool Items → AutoAnimations)
+                if (Hooks.events?.['cciAbilityUsed']?.length) {
+                  Hooks.callAll('cciAbilityUsed', item);
                 }
 
                 resolve(true);

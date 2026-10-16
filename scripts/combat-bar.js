@@ -1,7 +1,7 @@
 import { MODULE_ID } from "./utils.js";
 
 /**
- * Combat Bar — per-turn PC automation strip (v4.1.86)
+ * Combat Bar — per-turn PC automation strip (v4.1.151)
  *
  * Separated from cypher-taskbar.js on purpose: all combat-bar logic lives here
  * so future bar changes never touch the main file beyond the thin wiring
@@ -64,9 +64,11 @@ export function applyCombatBar(CypherTaskbar) {
       };
     },
 
-    /** Stable key used to decide whether an existing bar node is stale. */
+    /** Stable key used to decide whether an existing bar node is stale.
+     *  Includes the spell-menu flag so the bar rebuilds when a spell
+     *  category appears/disappears on the actor. */
     _cbKey(st) {
-      return st ? `${st.combatId}:${st.combatantId}:${st.needInitiative ? 1 : 0}` : "";
+      return st ? `${st.combatId}:${st.combatantId}:${st.needInitiative ? 1 : 0}:${this._hasSpellCategory?.() ? 1 : 0}` : "";
     },
 
     /* ── Markup ─────────────────────────────────────────────────────────── */
@@ -85,8 +87,8 @@ export function applyCombatBar(CypherTaskbar) {
           <button class="ct-cb-btn ct-cb-move" data-cb-action="move" title="Move"><i class="fas fa-person-running"></i></button>
           <span class="ct-cb-spacer"></span>
           <button class="ct-cb-btn ct-cb-attack" data-cb-action="attack" title="Attack"><i class="fas fa-sword"></i></button>
-          <button class="ct-cb-btn" data-cb-action="ability" title="Ability"><i class="fas fa-bolt"></i></button>
-          <button class="ct-cb-btn" data-cb-action="spell" title="Spell"><i class="fas fa-wand-magic-sparkles"></i></button>
+          <button class="ct-cb-btn ct-cb-ability" data-cb-action="ability" title="Abilities"><i class="fas fa-bolt"></i></button>
+          ${this._hasSpellCategory?.() ? `<button class="ct-cb-btn ct-cb-spell" data-cb-action="spell" title="Spell"><i class="fas fa-wand-magic-sparkles"></i></button>` : ""}
           <button class="ct-cb-btn" data-cb-action="skill" title="Skill"><i class="fas fa-brain"></i></button>
           <button class="ct-cb-btn" data-cb-action="item" title="Item"><i class="fas fa-backpack"></i></button>
           <button class="ct-cb-btn" data-cb-action="other" title="Other"><i class="fas fa-ellipsis"></i></button>
@@ -117,6 +119,7 @@ export function applyCombatBar(CypherTaskbar) {
       const node = tpl.content.firstElementChild;
       if (existing) existing.replaceWith(node); else wrap.appendChild(node);
       this._bindCombatBar(node);
+      this._syncEquipmentUseButtons?.();
     },
 
     _bindCombatBar(node) {
@@ -137,6 +140,8 @@ export function applyCombatBar(CypherTaskbar) {
       });
       this._cbSyncMoveBtn();
       this._cbSyncAttackBtn();
+      this._cbSyncAbilityBtn();
+      this._cbSyncSpellBtn();
     },
 
     /* ── Actions ────────────────────────────────────────────────────────── */
@@ -156,11 +161,57 @@ export function applyCombatBar(CypherTaskbar) {
           break;
         }
         case "move":    /* movement */ break;
-        case "ability": /* ability use */ break;
-        case "spell":   /* spell use */ break;
-        case "skill":   /* skill roll */ break;
-        case "item":    /* item use */ break;
-        case "other":   /* misc action */ break;
+        case "ability": {
+          // Toggle the taskbar's ABILITIES menu — the ACTION-lock rule lives there.
+          const btn = this.element?.querySelector?.('.ct-btn[data-panel="abilities"]');
+          this._togglePanel("abilities", btn);
+          break;
+        }
+        case "spell": {
+          // Toggle the taskbar's SPELLS menu — non-ready spells show greyed.
+          const btn = this.element?.querySelector?.('.ct-btn[data-panel="spells"]');
+          this._togglePanel("spells", btn);
+          break;
+        }
+        case "skill": {
+          // Toggle the taskbar's SKILLS menu — same pattern as ABILITIES.
+          const btn = this.element?.querySelector?.('.ct-btn[data-panel="skills"]');
+          this._togglePanel("skills", btn);
+          break;
+        }
+        case "item": {
+          // Toggle the taskbar's EQUIPMENT menu. Opening it via THIS button is
+          // what unlocks item use during the player's combat turn.
+          const wasOpen = this.activePanel === "equipment";
+          const btn = this.element?.querySelector?.('.ct-btn[data-panel="equipment"]');
+          this._togglePanel("equipment", btn);
+          if (!wasOpen) {
+            const cur = this._cbState();
+            this._equipmentUseTurnKey = cur ? cur.combatantId : null;
+          }
+          this._syncEquipmentUseButtons?.();
+          break;
+        }
+        case "other": {
+          // Player-declared miscellaneous action — the GM adjudicates which
+          // pips it costs (MOVE/ACTION/UTILITY multi-select, or NONE). The
+          // dialog lives on the GM side; resolution spends the pips here.
+          try {
+            if (!game.user?.isGM) {
+              game.socket.emit(`module.${MODULE_ID}`, {
+                type: "gmOtherPipsRequest",
+                userId: game.user.id,
+                actorId: this.actor?.id ?? null,
+                actorName: this.actor?.name ?? "",
+                actorImg: this.actor?.img ?? ""
+              });
+              ui.notifications?.info?.("Other action sent to the GM — wait for the pip ruling.");
+            }
+          } catch (err) {
+            console.warn(`${MODULE_ID} | gmOtherPipsRequest emit failed`, err);
+          }
+          break;
+        }
         case "end":     await this._cbEndTurn(st); break;
       }
     },
@@ -311,6 +362,14 @@ export function applyCombatBar(CypherTaskbar) {
           </button>
         </div>`;
       document.body.appendChild(menu);
+      // ACTION pool spent — only IMMEDIATE MOVE survives; the rest grey out.
+      if (this._cbActionPipsLeft() <= 0) {
+        menu.querySelectorAll("[data-cb-cost]").forEach(opt => {
+          if (opt.dataset.mmTip === "imm") return;
+          opt.classList.add("ct-mm-disabled");
+          opt.setAttribute("disabled", "");
+        });
+      }
       // Bottom-left corner of the menu sits just above the MOVE button.
       const r = anchor.getBoundingClientRect();
       const mw = menu.offsetWidth, mh = menu.offsetHeight;
@@ -322,6 +381,7 @@ export function applyCombatBar(CypherTaskbar) {
         opt.onclick = (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
+          if (opt.classList.contains("ct-mm-disabled")) return;
           const key = opt.dataset.mmTip, cost = opt.dataset.cbCost;
           this._cbCloseMoveMenu();
           if (_CB_ROLL_MOVES[key]) { this._cbRollMove(key); return; }
@@ -412,13 +472,114 @@ export function applyCombatBar(CypherTaskbar) {
       return Number.isNaN(n) ? 0 : n;
     },
 
-    /** Grey out / re-enable the MOVE button from the current move-pip count. */
+    /** Grey out / re-enable the MOVE button from the current move-pip count.
+     *  Also fades the tile to dark blue when the ACTION pool is spent — an
+     *  immediate move is still possible, so the button itself stays live. */
     _cbSyncMoveBtn() {
       const left = this._cbMovePipsLeft();
       const btn = this.element?.querySelector?.(".ct-cb-move");
       if (!btn) return;
-      btn.classList.toggle("ct-cb-disabled", left <= 0);
-      btn.title = left > 0 ? "Move" : "No move remaining";
+      const noMove = left <= 0;
+      const noAction = this._cbActionPipsLeft() <= 0;
+      btn.classList.toggle("ct-cb-disabled", noMove);
+      btn.classList.toggle("ct-cb-move-dim", !noMove && noAction);
+      btn.title = noMove ? "No move remaining" : (noAction ? "Move — immediate only (no action left)" : "Move");
+    },
+
+    /** Yellow-flag the ABILITY button while the action pool is spent.
+     *  Unlike ATTACK it stays clickable — the menu opens and non-action
+     *  abilities (enablers, reactions…) remain usable. */
+    _cbSyncAbilityBtn() {
+      const btn = this.element?.querySelector?.(".ct-cb-ability");
+      if (!btn) return;
+      const spent = this._cbActionPipsLeft() <= 0;
+      btn.classList.toggle("ct-cb-ability-yellow", spent);
+      btn.title = spent ? "No action remaining — enablers still usable" : "Abilities";
+    },
+
+    /** Grey out the SPELL button while the action pool is spent.
+     *  Stays clickable — the menu opens and the READY spells reveal what
+     *  (if anything) can still be attempted. */
+    _cbSyncSpellBtn() {
+      const btn = this.element?.querySelector?.(".ct-cb-spell");
+      if (!btn) return;
+      const spent = this._cbActionPipsLeft() <= 0;
+      btn.classList.toggle("ct-cb-spell-dim", spent);
+      btn.title = spent ? "No action remaining" : "Spells";
+    },
+
+    /** True when the combat bar is live AND its action pool is empty
+     *  (false when there is no bar — outside combat nothing is locked). */
+    _cbNoActionLeft() {
+      const pip = this.element?.querySelector?.('.ct-cb-res[data-cb-res="action"] .ct-cb-res-val');
+      if (!pip) return false;
+      const n = parseInt(pip.textContent, 10);
+      return !Number.isNaN(n) && n <= 0;
+    },
+
+    /** Grey out the roll-attack buttons in the (open) combat menu while the
+     *  combat bar's ACTION pool is spent. No-op without a live combat bar —
+     *  outside combat attacking stays unrestricted. Mirrors the spell-cast
+     *  lock; _ctApplyRangeLocks keeps the disabled state in sync afterwards. */
+    _syncAttackRollButtons(root) {
+      const bar = root || this.element?.querySelector?.("#ct-panel-container");
+      if (!bar) return;
+      const spent = !!this._cbState?.() && this._cbNoActionLeft();
+      bar.querySelectorAll("[data-attack-burst]").forEach(btn => {
+        if (btn.dataset.origTitle === undefined) btn.dataset.origTitle = btn.title || "";
+        btn.classList.toggle("ct-atk-btn-dim", spent);
+        btn.disabled = spent || btn.classList.contains("ct-range-locked");
+        if (!btn.classList.contains("ct-range-locked")) btn.title = spent ? "No action remaining" : btn.dataset.origTitle;
+      });
+    },
+
+    /** True during an active combat when it is NOT the tracked PC's turn.
+     *  The combat bar itself only renders on your turn, so "combat active +
+     *  no bar state" means somebody else's turn. Outside combat: false. */
+    _cbTurnLocked() {
+      const combat = game.combat;
+      if (!combat || !combat.started) return false;
+      return !this._cbState?.();
+    },
+
+    /** Apply/remove the turn-lock class on the open taskbar menu. CSS greys
+     *  and pointer-events-locks every action button while it is present. */
+    _syncTurnLock() {
+      const c = this.element?.querySelector?.("#ct-panel-container");
+      if (!c) return;
+      c.classList.toggle("ct-turn-locked", this._cbTurnLocked());
+    },
+
+    /** Expended-pip flourish: the pip grows large and burns red for 3s,
+     *  then settles back — the empty grey (ct-cb-res-empty) is waiting
+     *  underneath if the value hit 0. Class is removed on completion. */
+    _cbPipSpentAnim(pip) {
+      const cls = "ct-cb-pip-anim";
+      pip.classList.remove(cls);
+      void pip.offsetWidth; // restart the animation if one is already running
+      pip.classList.add(cls);
+      clearTimeout(pip._ctPipAnimTimer);
+      pip._ctPipAnimTimer = setTimeout(() => pip.classList.remove(cls), 3100);
+    },
+
+    /** Read an ability's ACTIVATION (cypher-cool-items flag, fallback to the
+     *  Cypher 2 system field). Unset defaults to "action" — same default as
+     *  cypher-cool-items' ability panel. Values: action | enabler | permanent. */
+    _cbAbilityActivation(item) {
+      const flag = item?.getFlag?.("cypher-cool-items", "data")?.activation;
+      return flag ?? item?.system?.activation ?? "action";
+    },
+
+    /** After a confirmed ability use: spend 1 ACTION pip when the ability's
+     *  ACTIVATION is "action" (cypher-cool-items dropdown). Enablers/permanent
+     *  don't consume the action. No-op without a live combat bar. */
+    _cbExpendAbilityAction(itemId) {
+      const item = this.actor?.items?.get?.(itemId);
+      if (!item) return;
+      if (this._cbAbilityActivation(item) !== "action") return;
+      if (!this._cbExpendResource("action")) return;
+      // Pip count changed — re-apply the ACTION-lock to an open ABILITIES menu.
+      try { this._refreshActivePanel?.(); } catch { /* panel not open */ }
     },
 
     /** Decrement one resource pip (move/action/utility), floor at 0. Returns true if a pip was spent. */
@@ -431,9 +592,255 @@ export function applyCombatBar(CypherTaskbar) {
       const next = Math.max(0, cur - 1);
       val.textContent = String(next);
       pip.classList.toggle("ct-cb-res-empty", next <= 0);
+      this._cbPipSpentAnim(pip);
       if (kind === "move") this._cbSyncMoveBtn();
-      if (kind === "action") this._cbSyncAttackBtn();
+      if (kind === "action") { this._cbSyncAttackBtn(); this._cbSyncAbilityBtn(); this._cbSyncMoveBtn(); this._cbSyncSpellBtn(); this._syncSpellCastButtons?.(); this._syncAttackRollButtons?.(); }
+      if (kind === "utility") this._syncEquipmentUseButtons?.();
       return next < cur;
+    },
+
+    /** Current value of a combat-bar resource pip (move/action/utility), read
+     *  from the bar DOM. 0 when the bar is absent. */
+    _cbResCount(kind) {
+      const val = this.element?.querySelector?.(`.ct-cb-res[data-cb-res="${kind}"] .ct-cb-res-val`);
+      const n = parseInt(val?.textContent, 10);
+      return Number.isNaN(n) ? 0 : n;
+    },
+
+    /* ── Range bands: targeting-line colors + combat range locks ─────────
+       Cypher distances: immediate ≈ 3 m (melee/adjacent), short ≈ 15 m,
+       long ≈ 30 m, very long ≈ 100 m. The targeting-line overlay draws for
+       every user target; the action-button greying only applies while the
+       combat bar is live (combat mode) with a target on the canvas.      */
+
+    /** cypher-cool-items flag data on an item ({} when the module is absent). */
+    _ctCool(item) {
+      return item?.getFlag?.("cypher-cool-items", "data") ?? {};
+    },
+
+    /** Tracked PC's token on the active canvas. */
+    _ctPCToken() {
+      const actor = this.actor;
+      if (!actor || !canvas?.ready) return null;
+      return canvas.tokens?.placeables?.find(t => t.actor?.id === actor.id) ?? null;
+    },
+
+    /** True when at least one targeted token belongs to an NPC actor. */
+    _ctHasNPCTarget() {
+      if (!(game.user?.targets?.size > 0)) return false;
+      for (const t of game.user.targets) {
+        const a = t.actor;
+        if (a && !(a.type === "pc" || a.hasPlayerOwner)) return true;
+      }
+      return false;
+    },
+
+    /** Center distance between two token placeables → {meters, spaces}. */
+    _ctMeasureTokens(a, b) {
+      const units = canvas.scene?.grid?.units ?? "m";
+      try {
+        const m = canvas.grid.measurePath([{ x: a.center.x, y: a.center.y }, { x: b.center.x, y: b.center.y }]);
+        const distance = Number(m?.distance) || 0;
+        let meters = distance;
+        if (units === "ft" || units === "feet") meters *= 0.3048;
+        return { meters, distance, units, spaces: Number(m?.spaces) || 0 };
+      } catch (err) {
+        const size = canvas.scene?.grid?.sizeX || canvas.scene?.grid?.size || 100;
+        const per = canvas.scene?.grid?.distance || 1.5;
+        const distance = (Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) / size) * per;
+        let meters = distance;
+        if (units === "ft" || units === "feet") meters *= 0.3048;
+        return { meters, distance, units, spaces: Math.round(meters / per) };
+      }
+    },
+
+    /** Range band from a measure object. Feet scenes use the canonical Cypher
+     *  imperial distances (10/50/100 ft) so 10 ft reads immediate and 50 ft
+     *  reads short, instead of tripping over the 0.3048 conversion at the
+     *  metric boundaries. */
+    _ctBand(m) {
+      const u = String(m?.units ?? "m").toLowerCase();
+      if (u === "ft" || u === "feet") {
+        const d = Number(m?.distance) || 0;
+        if (d <= 10) return "imm";
+        if (d <= 50) return "short";
+        if (d <= 100) return "long";
+        return "vlong";
+      }
+      const meters = Number(m?.meters) || 0;
+      if (meters <= 3) return "imm";
+      if (meters <= 15) return "short";
+      if (meters <= 30) return "long";
+      return "vlong";
+    },
+
+    _ctBandLabel(band) {
+      return { imm: "immediate", short: "short", long: "long", vlong: "very long" }[band] ?? band;
+    },
+
+    /** Free-text attack range ("immediate", "short", "30 m", "50ft", …) → max meters, or null. */
+    _ctParseRangeText(str) {
+      const s = String(str ?? "").trim().toLowerCase();
+      if (!s) return null;
+      if (/very\s*long/.test(s)) return 100;
+      if (/\blong\b/.test(s)) return 30;
+      if (/\bshort\b/.test(s)) return 15;
+      if (/immediate|melee|adjacent|touch/.test(s)) return 3;
+      const n = parseFloat(s.replace(",", "."));
+      if (!Number.isNaN(n)) return /ft|feet/.test(s) ? n * 0.3048 : n;
+      return null;
+    },
+
+    /** Range rule for an item: null = unrestricted, else {melee:true} or {maxMeters:n}. */
+    _ctRangeSpec(item, kind) {
+      if (!item) return null;
+      if (kind === "attack") {
+        // cypher-cool-items attack config (its ATTACK panel) wins when present.
+        const cd = this._ctCool(item);
+        if (cd.attack) {
+          const coolMax = { short: 15, long: 30, veryLong: 100 }[cd.attackRange];
+          return coolMax ? { maxMeters: coolMax } : { melee: true };
+        }
+        // Melee weapons are adjacent-only. Anything else (ranged, thrown, or a
+        // weapon with a parseable range text) uses that range.
+        if ((item.system?.basic?.type ?? "") === "melee weapon") return { melee: true };
+        const max = this._ctParseRangeText(item.system?.basic?.range);
+        return max == null ? { melee: true } : { maxMeters: max };
+      }
+      if (kind === "ability" || kind === "spell") {
+        const d = this._ctCool(item);
+        if (!d.attack) return null;
+        const maxMeters = { short: 15, long: 30, veryLong: 100 }[d.attackRange];
+        return maxMeters ? { maxMeters } : { melee: true };
+      }
+      return null;
+    },
+
+    /** Live {meters, spaces} from the PC token to the first target, or null. */
+    _ctRangeCtx() {
+      if (!canvas?.ready || !(game.user?.targets?.size > 0)) return null;
+      const pc = this._ctPCToken();
+      const target = [...game.user.targets][0];
+      if (!pc || !target) return null;
+      return this._ctMeasureTokens(pc, target);
+    },
+
+    /** True when the item's range forbids use right now (combat mode + target + out of range).
+     *  Attack-mode spells are also locked until an NPC token is targeted. */
+    _ctRangeLocked(item, kind) {
+      if (!this._cbState?.()) return false;
+      if (kind === "spell" && this._ctCool(item).attack && !this._ctHasNPCTarget()) return true;
+      const spec = this._ctRangeSpec(item, kind);
+      if (!spec) return false;
+      const ctx = this._ctRangeCtx();
+      if (!ctx) return false;
+      if (spec.melee) return ctx.spaces > 0 ? ctx.spaces > 1.5 : ctx.meters > 3;
+      return ctx.meters > spec.maxMeters;
+    },
+
+    /** Re-evaluate every per-item action button against the current range and
+     *  redraw the targeting lines. Covers roll-attack (combat HOME tab),
+     *  use-ability (abilities menu) and cast-spell (spells READY rows).     */
+    _ctApplyRangeLocks() {
+      const root = this.element?.querySelector?.("#ct-panel-container");
+      if (root) {
+        const inCombat = !!this._cbState?.();
+        if (!inCombat) {
+          // Outside combat no range/target/action lock applies — clear any
+          // stale combat-era state left on the open panel's buttons.
+          root.querySelectorAll("[data-attack-burst], [data-use-ability], [data-cast-spell]").forEach(btn => {
+            btn.classList.remove("ct-range-locked", "ct-sp-cast-btn-dim", "ct-atk-btn-dim");
+            btn.disabled = false;
+            if (btn.dataset.ctRangeOrig !== undefined) btn.title = btn.dataset.ctRangeOrig;
+          });
+        } else {
+        const ctx = this._ctRangeCtx();
+        const apply = (btn, id, kind) => {
+          const item = this.actor?.items?.get?.(id);
+          if (!item) return;
+          const spec = this._ctRangeSpec(item, kind);
+          let locked = false;
+          let label = "";
+          if (spec && ctx) {
+            locked = spec.melee ? (ctx.spaces > 0 ? ctx.spaces > 1.5 : ctx.meters > 3) : ctx.meters > spec.maxMeters;
+            if (locked) label = spec.melee ? "melee" : this._ctBandLabel(this._ctBand(ctx));
+          }
+          // Attack-mode spells require an NPC target in combat mode.
+          let targetLocked = false;
+          if (kind === "spell" && inCombat && !locked && !this._ctHasNPCTarget()) {
+            if (this._ctCool(item).attack) targetLocked = true;
+          }
+          const isLocked = locked || targetLocked;
+          if (btn.dataset.ctRangeOrig === undefined) btn.dataset.ctRangeOrig = btn.title || "";
+          btn.classList.toggle("ct-range-locked", isLocked);
+          if (kind === "spell") {
+            const spent = btn.classList.contains("ct-sp-cast-btn-dim");
+            btn.disabled = spent || isLocked;
+            btn.title = targetLocked ? "Select an NPC target to cast"
+                      : locked ? `Out of range — target at ${label}`
+                      : (spent ? "No action remaining" : btn.dataset.ctRangeOrig);
+          } else {
+            const spent = btn.classList.contains("ct-atk-btn-dim");
+            btn.disabled = spent || isLocked;
+            btn.title = locked ? `Out of range — target at ${label}`
+                      : (spent ? "No action remaining" : btn.dataset.ctRangeOrig);
+          }
+        };
+        root.querySelectorAll("[data-attack-burst]").forEach(b => apply(b, b.dataset.attackBurst, "attack"));
+        root.querySelectorAll("[data-use-ability]").forEach(b => apply(b, b.dataset.useAbility, "ability"));
+        root.querySelectorAll("[data-cast-spell]").forEach(b => apply(b, b.dataset.castSpell, "spell"));
+        }
+      }
+      this._cbDrawTargLines?.();
+    },
+
+    /* ── Targeting-line overlay: PC token → each target, colored by range ── */
+
+    _cbEnsureTargLine() {
+      if (!canvas?.ready || !canvas.scene) return null;
+      const layer = canvas.interface ?? canvas.tokens ?? null;
+      if (!layer) return null;
+      if (this._targLineGfx && !this._targLineGfx.destroyed && this._targLineGfx.parent === layer) return this._targLineGfx;
+      try { this._targLineGfx?.destroy?.(); } catch { /* ignore */ }
+      const gfx = new PIXI.Graphics();
+      gfx.eventMode = "none";
+      layer.addChild(gfx);
+      this._targLineGfx = gfx;
+      return gfx;
+    },
+
+    _cbDrawTargLines() {
+      const gfx = this._cbEnsureTargLine?.();
+      if (!gfx) return;
+      gfx.clear();
+      if (!canvas?.ready) return;
+      const pc = this._ctPCToken();
+      if (!pc || !(game.user?.targets?.size > 0)) return;
+      const colors = { imm: 0x3b82f6, short: 0x22c55e, long: 0xeab308, vlong: 0xef4444 };
+      for (const t of game.user.targets) {
+        const m = this._ctMeasureTokens(pc, t);
+        const color = colors[this._ctBand(m)] ?? colors.imm;
+        if (typeof gfx.stroke === "function") {
+          // PIXI v8 (Foundry V13+): lineStyle/beginFill removed — stroke/fill.
+          gfx.moveTo(pc.center.x, pc.center.y)
+             .lineTo(t.center.x, t.center.y)
+             .stroke({ width: 4, color, alpha: 0.9 });
+          gfx.circle(t.center.x, t.center.y, 5).fill({ color, alpha: 0.95 });
+        } else {
+          // PIXI v7 fallback
+          gfx.lineStyle(4, color, 0.9);
+          gfx.moveTo(pc.center.x, pc.center.y);
+          gfx.lineTo(t.center.x, t.center.y);
+          gfx.beginFill(color, 0.95);
+          gfx.drawCircle(t.center.x, t.center.y, 5);
+          gfx.endFill();
+        }
+      }
+    },
+
+    _cbDestroyTargLines() {
+      try { this._targLineGfx?.destroy?.(); } catch { /* ignore */ }
+      this._targLineGfx = null;
     },
 
     /** Roll-gated move (LONG, SHORT MOVE ACTION): the taskbar's own Speed attribute

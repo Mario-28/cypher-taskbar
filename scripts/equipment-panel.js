@@ -233,8 +233,25 @@ export function applyEquipmentPanel(CypherTaskbar) {
       bar.querySelectorAll('[data-use-weapon]').forEach((btn) => btn.onclick = async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const wItem = this.actor?.items?.get(e.currentTarget.dataset.useWeapon);
+        const wState = this._weaponAmmoState(wItem);
+        if (wState === "unloaded") {
+          ui.notifications?.warn?.(`"${wItem?.name ?? "Weapon"}" is NOT LOADED — drag ammo onto it in Equipment → Weapons & Ammo.`);
+          return;
+        }
+        if (wState === "depleted") {
+          ui.notifications?.warn?.(`"${wItem?.name ?? "Weapon"}" is out of ammo — restock its linked ammo.`);
+          return;
+        }
         if (!this._combatFloatingOpen) this._closePanel();
         await this.openEquipmentUseDialog(e.currentTarget.dataset.useWeapon);
+      });
+      // Weapon/ammo card delete buttons — fancy confirm popup, then drop from actor
+      bar.querySelectorAll('[data-del-weapon]').forEach((btn) => btn.onclick = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const item = this.actor?.items.get(e.currentTarget.dataset.delWeapon);
+        if (item) this._confirmDropWeapon(item);
       });
       bar.querySelectorAll(".ct-equipment-draggable[data-equipment-id]").forEach(row => {
         row.oncontextmenu = (e) => {
@@ -258,8 +275,9 @@ export function applyEquipmentPanel(CypherTaskbar) {
         row.onmouseleave = () => this._equipmentHideTooltip();
         row.onmousedown = () => this._equipmentHideTooltip();
       });
-      // Weapon cards: right-click to open sheet + tooltip
+      // Weapon cards: right-click to open sheet + tooltip + drag (ammo link / remove zone)
       bar.querySelectorAll(".ct-weapon-card[data-weapon-id]").forEach(card => {
+        const cardItem = this.actor?.items.get(card.dataset.weaponId);
         card.oncontextmenu = (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -267,18 +285,49 @@ export function applyEquipmentPanel(CypherTaskbar) {
           if (this.activePanel === "equipment" && !this._combatFloatingOpen) {
             this._closePanel();
           }
-          const item = this.actor?.items.get(card.dataset.weaponId);
-          item?.sheet?.render(true);
+          cardItem?.sheet?.render(true);
         };
         card.onmouseenter = () => {
           this._equipmentHideTooltip();
-          const item = this.actor?.items.get(card.dataset.weaponId);
-          const description = this._equipmentGetDescription(item);
+          const description = this._equipmentGetDescription(cardItem);
           if (!description) return;
           this._equipmentTooltipTimer = setTimeout(() => this._equipmentShowTooltip(card, description), 2000);
         };
         card.onmouseleave = () => this._equipmentHideTooltip();
         card.onmousedown = () => this._equipmentHideTooltip();
+
+        // Drag source — tracked on the instance because dragover can't read the payload
+        card.ondragstart = (e) => {
+          this._equipmentHideTooltip();
+          this._equipmentDraggedItem = cardItem ?? null;
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = "all";
+            e.dataTransfer.setData("text/plain", JSON.stringify({ ctWeaponTab: true, id: card.dataset.weaponId }));
+          }
+        };
+        card.ondragend = () => {
+          this._equipmentDraggedItem = null;
+          bar.querySelectorAll(".ct-ammo-drop-hover").forEach(el => el.classList.remove("ct-ammo-drop-hover"));
+        };
+
+        // Weapons (not ammo cards) accept an ammo drop to link
+        if (!cardItem || cardItem.type === "ammo") return;
+        card.ondragenter = () => { if (this._equipmentDraggedItem?.type === "ammo") card.classList.add("ct-ammo-drop-hover"); };
+        card.ondragleave = () => card.classList.remove("ct-ammo-drop-hover");
+        card.ondragover = (e) => {
+          if (this._equipmentDraggedItem?.type !== "ammo") return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = "link";
+        };
+        card.ondrop = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          card.classList.remove("ct-ammo-drop-hover");
+          const ammo = this._equipmentDraggedItem;
+          if (!ammo || ammo.type !== "ammo" || !cardItem) return;
+          await this._linkAmmoToWeapon(cardItem, ammo);
+        };
       });
       bar.querySelectorAll("[data-equipment-category-header]").forEach(header => {
         header.oncontextmenu = (e) => {
@@ -287,6 +336,105 @@ export function applyEquipmentPanel(CypherTaskbar) {
           this._openEquipmentCategoryAppearanceSettings(e, header.dataset.equipmentCategoryHeader, { anchor: header });
         };
         header.onclick = null;
+      });
+    },
+
+    /* Classify an item as a Melee or Ranged weapon for the Weapon tab.
+       Returns "melee" | "ranged" | null. Sources: cypher-cool-items attackType
+       (melee/ranged/ability/special), native attack basic.type (light/medium/heavy
+       weapon = melee, *ranged* = ranged, melee weapon), weaponType fields, then
+       name keywords. Attack items default to melee when nothing matches (a plain
+       attack IS a weapon attack); other item types default to null. */
+    _weaponKind(item) {
+      if (!item) return null;
+      const sys = item?.system ?? {};
+      const basic = sys.basic ?? {};
+      const cci = item.getFlag?.("cypher-cool-items", "data") ?? {};
+
+      if (item.type === "attack") {
+        if (cci.attackType === "melee") return "melee";
+        if (cci.attackType === "ranged") return "ranged";
+        if (cci.attackType === "ability" || cci.attackType === "special") return null;
+        const t = (basic.type || "").toLowerCase();
+        if (t.includes("ranged")) return "ranged";
+        if (/light|medium|heavy weapon|melee weapon/.test(t)) return "melee";
+        const r = (basic.range || "").toLowerCase();
+        if (r && r !== "immediate") return "ranged";
+        return "melee";
+      }
+
+      // Non-attack items: only weapon-ish gear is eligible at all
+      if (!["equipment", "artifact", "cypher", "oddity", "material"].includes(item.type) || !this._isWeaponItem(item)) return null;
+      const wt = String(sys.weaponType ?? basic.weaponType ?? "").toLowerCase();
+      if (wt === "melee") return "melee";
+      if (wt === "ranged") return "ranged";
+      const bt = (basic.type || "").toLowerCase();
+      if (bt.includes("ranged")) return "ranged";
+      if (/light|medium|heavy weapon|melee weapon/.test(bt)) return "melee";
+      const nameLower = (item.name || "").toLowerCase();
+      if (/bow|crossbow|pistol|rifle|gun|musket|shotgun|sling|javelin|dart|blowgun|grenade/.test(nameLower)) return "ranged";
+      if (/sword|axe|dagger|mace|spear|staff|club|hammer|whip|blade|knife|scimitar|rapier|lance|pike|halberd|flail/.test(nameLower)) return "melee";
+      return null;
+    },
+
+    /* Fancy "Are you sure?" popup before dropping a weapon/ammo from the actor —
+       styled after the start-combat confirm (ct-popup chrome). */
+    /* Ammo lock state — drives weapons-tab grey-out, use blocking and the
+     * attack-roll gate. Returns:
+     *   null        — item has no ammo mechanics (never blocks)
+     *   "ok"        — linked ammo present with quantity > 0
+     *   "unloaded"  — uses ammo but no ammo item linked (NOT LOADED)
+     *   "depleted"  — linked ammo present but quantity is 0 (AMMO SPENT) */
+    _weaponAmmoState(weapon) {
+      if (!weapon || weapon.type === "ammo") return null;
+      const cci = weapon.getFlag?.("cypher-cool-items", "data") ?? {};
+      // Explicit opt-out: GM unchecked the ammo toggle in Cool Items panel.
+      if (cci.ammoEnabled === false) return null;
+      const sys = weapon.system ?? {};
+      const basic = sys.basic ?? {};
+      const nameLower = (weapon.name || "").toLowerCase();
+      const usesAmmo = cci.ammoEnabled === true
+        || !!basic.ammo || !!sys.ammo || !!basic.ammoType || !!sys.ammoType
+        || cci.attackType === "ranged"
+        || /\bbow\b|crossbow|pistol|rifle|\bgun\b|musket|shotgun|\bsling\b|blowgun/.test(nameLower);
+      if (!usesAmmo) return null;
+      const link = cci.ammoItem ?? cci.attackAmmoItem ?? null;
+      const live = link?.id ? this.actor?.items?.get(link.id) : null;
+      if (!live) return "unloaded";
+      return equipmentQuantityInfo(live).quantity > 0 ? "ok" : "depleted";
+    },
+
+    _confirmDropWeapon(item) {
+      document.querySelector("#ct-drop-weapon-confirm")?.remove();
+      const popup = document.createElement("div");
+      popup.id = "ct-drop-weapon-confirm";
+      popup.className = "ct-popup ct-drop-weapon-confirm";
+      popup.style.cssText = "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10036;min-width:420px;max-width:520px;";
+      popup.innerHTML = `
+        <div class="ct-popup-header"><i class="fas fa-trash-can"></i> Drop ${item.type === "ammo" ? "Ammo" : "Weapon"}<button class="ct-popup-close" title="Close"><i class="fas fa-times"></i></button></div>
+        <div class="ct-popup-body">
+          <div class="ct-start-combat-text">Are you sure you want to drop <strong>${escapeEquipmentText(item.name)}</strong>? It will be removed from ${escapeEquipmentText(this.actor?.name ?? "the actor")}.</div>
+          <div class="ct-start-combat-actions">
+            <button class="ct-start-combat-btn is-danger" data-choice="yes">YES! Drop it like it's hot!</button>
+            <button class="ct-start-combat-btn is-muted" data-choice="no">NO! I might still need it</button>
+          </div>
+        </div>`;
+      document.body.appendChild(popup);
+
+      const close = () => popup.remove();
+      popup.querySelector('.ct-popup-close')?.addEventListener('click', close);
+      popup.querySelectorAll('.ct-start-combat-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          if (btn.dataset.choice === 'yes') {
+            try {
+              await item.delete();
+              ui.notifications.info(`"${item.name}" removed from ${this.actor?.name}.`);
+            } catch {
+              ui.notifications.error(`Failed to remove "${item.name}".`);
+            }
+          }
+          close();
+        });
       });
     },
 
@@ -303,11 +451,30 @@ export function applyEquipmentPanel(CypherTaskbar) {
     _getWeaponStats(item) {
       const sys = item?.system ?? {};
       const basic = sys.basic ?? {};
-      const damage = basic.damage || sys.damage || "—";
-      const range = basic.range || sys.range || "—";
-      // Try to find ammo type from various possible locations
+      // Cypher Cool Items stores weapon stats on the item flag
+      const cci = item.getFlag?.("cypher-cool-items", "data") ?? {};
+
+      // Pure ammo items: the interesting stat is the stack size
+      if (item.type === "ammo") {
+        return { damage: "—", range: "—", level: basic.level || "—", ammo: `×${equipmentQuantityInfo(item).quantity}` };
+      }
+
+      const damage = basic.damage || sys.damage || cci.damage || "—";
+      let range = basic.range || sys.range || "—";
+      if (item.type === "attack") {
+        if (cci.attackType === "melee") range = "Melee";
+        else if (cci.attackRange) range = ({ immediate: "Immediate", short: "Short", long: "Long", veryLong: "Very Long" })[cci.attackRange] || range;
+        else if (/light|medium|heavy weapon/i.test(basic.type || "")) range = "Melee";
+      }
+      // Ammo: cool-items linked ammo reference wins (live count included), then native fields.
+      // cool-items attack panel stores ammoItem, ability panel stores attackAmmoItem.
       let ammo = "—";
-      if (basic.ammo) ammo = basic.ammo;
+      const linked = cci.ammoItem ?? cci.attackAmmoItem ?? null;
+      if (linked?.name) {
+        const liveAmmo = this.actor?.items?.get(linked.id);
+        ammo = liveAmmo ? `${linked.name} ×${equipmentQuantityInfo(liveAmmo).quantity}` : linked.name;
+      }
+      else if (basic.ammo) ammo = basic.ammo;
       else if (sys.ammo) ammo = sys.ammo;
       else if (basic.ammoType) ammo = basic.ammoType;
       else if (sys.ammoType) ammo = sys.ammoType;
@@ -319,7 +486,25 @@ export function applyEquipmentPanel(CypherTaskbar) {
         else if (nameLower.includes("bullet") || nameLower.includes("pistol") || nameLower.includes("rifle") || nameLower.includes("gun") || nameLower.includes("musket") || nameLower.includes("shotgun")) ammo = "Bullets";
         else if (nameLower.includes("grenade")) ammo = "Grenades";
       }
-      return { damage, range, ammo };
+      return { damage, range, level: basic.level || sys.level || cci.level || "—", ammo };
+    },
+
+    // Link an ammo item to a weapon via the Cypher Cool Items flag — writing the exact
+    // keys its panels read: attack panel (ammoEnabled/ammoItem), ability panel (attackAmmo/attackAmmoItem).
+    async _linkAmmoToWeapon(weapon, ammo) {
+      if (!weapon || !ammo) return;
+      try {
+        const cci = weapon.getFlag?.("cypher-cool-items", "data") ?? {};
+        const snapshot = { id: ammo.id, name: ammo.name, img: ammo.img, uuid: ammo.uuid };
+        const next = weapon.type === "ability"
+          ? { ...cci, attackAmmo: true, attackAmmoItem: snapshot }
+          : { ...cci, ammoEnabled: true, ammoItem: snapshot };
+        await weapon.setFlag("cypher-cool-items", "data", next);
+        ui.notifications.info(`${ammo.name} linked to ${weapon.name}.`);
+      } catch (err) {
+        console.error(`${MODULE_ID} | ammo link failed`, err);
+        ui.notifications.error(`Failed to link ${ammo.name}.`);
+      }
     },
 
     _isArmorItem(item) {
@@ -1306,17 +1491,29 @@ export function applyEquipmentPanel(CypherTaskbar) {
       if (subTab === "equip") {
         mainContent = `<div class="ct-equipment-placeholder"><i class="fas fa-shirt"></i><p>Equipment Doll is open</p><p class="ct-equipment-placeholder-sub">Click the Equip tab to toggle the doll</p></div>`;
       } else if (subTab === "weapon") {
-        // Weapon tab: clean weapon grid with stats
-        const weaponItems = actor.items.filter(i => ["equipment", "artifact", "cypher", "oddity", "material"].includes(i.type))
-          .filter(i => this._isWeaponItem(i))
+        // Weapon tab: ONLY Melee and Ranged weapons (attack items with an
+        // ability/special classification or unclassifiable gear are excluded).
+        // Ammo lives in its own section below.
+        const weaponItems = actor.items.filter(i => this._weaponKind(i) !== null)
           .sort((a, b) => a.name.localeCompare(b.name));
-        if (weaponItems.length === 0) {
-          mainContent = `<div class="ct-weapon-grid-empty"><i class="fas fa-khanda"></i><p>No weapons yet</p><p class="ct-weapon-grid-empty-sub">Drag weapons from the sidebar or compendium here</p></div>`;
-        } else {
-          const weaponCards = weaponItems.map(item => {
-            const stats = this._getWeaponStats(item);
-            const { quantity: qty } = equipmentQuantityInfo(item);
-            return `<div class="ct-weapon-card" data-weapon-id="${item.id}" draggable="true" title="${escapeEquipmentText(item.name)}">
+        const ammoItems = actor.items.filter(i => i.type === "ammo").sort((a, b) => a.name.localeCompare(b.name));
+
+        const weaponCard = (item) => {
+          const stats = this._getWeaponStats(item);
+          const { quantity: qty } = equipmentQuantityInfo(item);
+          const isAmmo = item.type === "ammo";
+          const ammoState = isAmmo ? null : this._weaponAmmoState(item);
+          const lockedCls = ammoState === "unloaded" ? " ct-weapon-locked"
+            : ammoState === "depleted" ? " ct-weapon-locked ct-weapon-depleted" : "";
+          const lockBanner = ammoState === "unloaded"
+            ? `<div class="ct-weapon-lock-banner"><i class="fas fa-circle-exclamation"></i> NOT LOADED <span class="ct-weapon-lock-hint">— drag ammo to load</span></div>`
+            : ammoState === "depleted"
+              ? `<div class="ct-weapon-lock-banner"><i class="fas fa-circle-exclamation"></i> AMMO SPENT <span class="ct-weapon-lock-hint">— restock linked ammo</span></div>`
+              : "";
+          const useTitle = ammoState === "unloaded" ? "Not loaded — drag ammo onto this weapon"
+            : ammoState === "depleted" ? "Ammo spent — restock the linked ammo"
+            : "Use weapon";
+          return `<div class="ct-weapon-card${isAmmo ? " ct-ammo-card" : ""}${lockedCls}" data-weapon-id="${item.id}" draggable="true" title="${escapeEquipmentText(item.name)}">
               <div class="ct-weapon-card-icon-wrap">
                 <img class="ct-weapon-card-icon" src="${item.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
                 ${qty > 1 ? `<span class="ct-weapon-card-qty">${qty}</span>` : ""}
@@ -1324,23 +1521,47 @@ export function applyEquipmentPanel(CypherTaskbar) {
               <div class="ct-weapon-card-info">
                 <div class="ct-weapon-card-name">${escapeEquipmentText(item.name)}</div>
                 <div class="ct-weapon-card-stats">
-                  <span class="ct-weapon-stat"><i class="fas fa-burst"></i> ${escapeEquipmentText(String(stats.damage))}</span>
-                  <span class="ct-weapon-stat"><i class="fas fa-ruler-horizontal"></i> ${escapeEquipmentText(String(stats.range))}</span>
-                  <span class="ct-weapon-stat"><i class="fas fa-box-open"></i> ${escapeEquipmentText(String(stats.ammo))}</span>
+                  <span class="ct-weapon-stat" title="Damage"><i class="fas fa-burst"></i> ${escapeEquipmentText(String(stats.damage))}</span>
+                  <span class="ct-weapon-stat" title="Range"><i class="fas fa-ruler-horizontal"></i> ${escapeEquipmentText(String(stats.range))}</span>
+                  <span class="ct-weapon-stat" title="Level"><i class="fas fa-layer-group"></i> ${escapeEquipmentText(String(stats.level))}</span>
                 </div>
               </div>
-              <button type="button" class="ct-weapon-use-btn" data-use-weapon="${item.id}" title="Use weapon"><i class="fas fa-hand-sparkles"></i></button>
+              ${lockBanner}
+              <button type="button" class="ct-weapon-del-btn" data-del-weapon="${item.id}" title="Drop ${isAmmo ? "ammo" : "weapon"} from actor"><i class="fas fa-trash-can"></i></button>
+              <button type="button" class="ct-weapon-use-btn" data-use-weapon="${item.id}" title="${useTitle}"><i class="fas fa-hand-sparkles"></i></button>
             </div>`;
-          }).join("");
-          mainContent = `<div class="ct-weapon-grid">${weaponCards}</div>`;
-        }
-        mainContent += `<div class="ct-weapon-drop-zone" data-weapon-dropzone><div class="ct-weapon-drop-zone-inner"><i class="fas fa-plus"></i><span>Drop weapons here</span></div></div>`;
+        };
+
+        mainContent = weaponItems.length
+          ? `<div class="ct-weapon-grid">${weaponItems.map(weaponCard).join("")}</div>`
+          : `<div class="ct-weapon-grid-empty"><i class="fas fa-khanda"></i><p>No melee or ranged weapons</p><p class="ct-weapon-grid-empty-sub">Drag weapons from the sidebar or compendium onto the add zone below</p></div>`;
+
+        mainContent += `<div class="ct-ammo-section-title"><i class="fas fa-box-open"></i> Ammo <span class="ct-ammo-section-hint">— drag onto a weapon to link</span></div>`;
+        mainContent += ammoItems.length
+          ? `<div class="ct-weapon-grid ct-ammo-grid">${ammoItems.map(weaponCard).join("")}</div>`
+          : `<div class="ct-empty-msg">No ammo yet — drag ammo from the sidebar or compendium onto the add zone below</div>`;
+
+        mainContent += `<div class="ct-weapon-drop-zone" data-weapon-dropzone><div class="ct-weapon-drop-zone-inner"><i class="fas fa-plus"></i><span>Drop weapons or ammo here to add</span></div></div>`;
       } else {
         mainContent = sections || `<div class="ct-empty-msg">No ${subTab === "home" ? "equipment" : subTab} items found.</div>`;
       }
 
       const showCategoriesBtn = subTab !== "weapon" && subTab !== "armor";
-      const equipmentPanel = `<div class="ct-panel ct-panel-equipment-custom" style="${this._equipmentMenuStyleVars()};${this._getMenuBackgroundVars("equipment")}"><div class="ct-panel-header ct-panel-header-equipment-menu"><div class="ct-panel-title-wrap"><i class="fas ${meta.icon}"></i> <span class="ct-panel-title-text ct-equipment-panel-title-text">${meta.title}</span></div><div class="ct-panel-action-group">${showCategoriesBtn ? `<button class="ct-panel-settings-btn" data-equipment-categories title="Equipment Categories"><i class="fas fa-folder-plus"></i></button>` : ""}<button class="ct-panel-settings-btn" data-equipment-settings title="Equipment Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-equipment-close title="Close Equipment Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-equipment-panel-body ct-equipment-panel-body-${subTab}">${mainContent}</div></div>`;
+
+      // ── CYPHERS/ARTIFACTS carry limit (GM Taskbar → system.basic.cypherLimit) ──
+      // Same field the GM's Player Settings → CYPHERS/ARTIFACTS steppers write,
+      // so the actor sheet, GM radial menu and this widget stay in sync. 0 = unlimited.
+      const cypherLimitRaw = Number(actor?.system?.basic?.cypherLimit ?? 2);
+      const cypherLimit    = Number.isFinite(cypherLimitRaw) ? Math.max(0, Math.min(99, Math.round(cypherLimitRaw))) : 2;
+      const cypherCarried  = actor?.items?.filter(i => i.type === "cypher" || i.type === "artifact").length ?? 0;
+      const cypherRemaining = cypherLimit > 0 ? Math.max(0, cypherLimit - cypherCarried) : 0;
+      const cypherPct      = cypherLimit > 0 ? Math.round((cypherRemaining / cypherLimit) * 100) : 0;
+      const cypherExhausted = cypherLimit > 0 && cypherRemaining <= 0;
+      const cypherHtml = cypherLimit > 0
+        ? `<div class="ct-eq-cypher${cypherExhausted ? ' ct-eq-cypher-exhausted' : ''}" title="Cyphers/Artifacts — ${cypherRemaining} of ${cypherLimit} slots remaining (set by GM)"><i class="fas fa-flask"></i><span class="ct-eq-cypher-value">${cypherRemaining}/${cypherLimit}</span><div class="ct-eq-cypher-bar"><div class="ct-eq-cypher-fill" style="width:${cypherPct}%"></div></div></div>`
+        : "";
+
+      const equipmentPanel = `<div class="ct-panel ct-panel-equipment-custom" style="${this._equipmentMenuStyleVars()};${this._getMenuBackgroundVars("equipment")}"><div class="ct-panel-header ct-panel-header-equipment-menu"><div class="ct-panel-title-wrap"><i class="fas ${meta.icon}"></i> <span class="ct-panel-title-text ct-equipment-panel-title-text">${meta.title}</span>${cypherHtml}</div><div class="ct-panel-action-group">${showCategoriesBtn ? `<button class="ct-panel-settings-btn" data-equipment-categories title="Equipment Categories"><i class="fas fa-folder-plus"></i></button>` : ""}<button class="ct-panel-settings-btn" data-equipment-settings title="Equipment Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-equipment-close title="Close Equipment Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-equipment-panel-body ct-equipment-panel-body-${subTab}">${mainContent}</div></div>`;
 
       const isHomeActive = subTab === "home";
       const isEquipActive = subTab === "equip" || this._combatFloatingOpen;
@@ -1396,7 +1617,14 @@ export function applyEquipmentPanel(CypherTaskbar) {
           if (e.dataTransfer) {
             e.dataTransfer.effectAllowed = "move";
             e.dataTransfer.dropEffect = "move";
-            e.dataTransfer.setData("text/plain", row.dataset.equipmentId);
+            const dragItem = this.actor?.items.get(row.dataset.equipmentId);
+            if (this._gs("partyStashDragDrop") && dragItem?.uuid) {
+              // Party Stash integration: standard Foundry drag data — the Item
+              // Piles window parses this JSON and transfers the item into the pile.
+              e.dataTransfer.setData("text/plain", JSON.stringify({ type: "Item", uuid: dragItem.uuid }));
+            } else {
+              e.dataTransfer.setData("text/plain", row.dataset.equipmentId);
+            }
           }
         };
         row.ondragend = async () => {
@@ -1426,11 +1654,14 @@ export function applyEquipmentPanel(CypherTaskbar) {
           if (!zone.contains(e.relatedTarget)) zone.classList.remove("ct-drop-target");
         };
         zone.ondrop = async (e) => {
+          const current = dragged;
+          zone.classList.remove("ct-drop-target");
+          // External drop (e.g. from an Item Piles window) — do NOT consume it;
+          // let it bubble to the panel-level pile drop handler.
+          if (!current) return;
           e.preventDefault();
           e.stopPropagation();
-          zone.classList.remove("ct-drop-target");
-          const current = dragged;
-          if (current && !zone.contains(current)) zone.appendChild(current);
+          if (!zone.contains(current)) zone.appendChild(current);
           await savePlacement();
         };
       });
@@ -1459,6 +1690,9 @@ export function applyEquipmentPanel(CypherTaskbar) {
 
         let data;
         try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch { data = {}; }
+
+        // Card drags are handled by the remove zone / ammo link, not the add zone
+        if (data.ctWeaponTab) return;
 
         let item = null;
         if (data.uuid) {
@@ -1504,6 +1738,70 @@ export function applyEquipmentPanel(CypherTaskbar) {
       dropzone.addEventListener("dragover", _onDragOver);
       dropzone.addEventListener("dragleave", _onDragLeave);
       dropzone.addEventListener("drop", _onDrop);
+
+      // NOTE: the drop-to-remove zone was removed in v4.1.226 — deletion now goes
+      // through the card's trash button + confirmation popup (_confirmDropWeapon).
+    },
+
+    /* External-drop sink for the equipment panel. Pile → equipment transfers
+     *  were removed in v4.1.180 — this only swallows drops of foreign items so
+     *  a released drag does not fall back to the canvas and end up on the
+     *  scene. Internal drags never reach it: their zones consume them with
+     *  stopPropagation (reorder zones, weapon add/remove, ammo links). */
+    _bindPileDropTarget(bar) {
+      const wrapper = bar.querySelector(".ct-equipment-tabs-wrapper");
+      if (!wrapper || wrapper._ctPileDropBound) return;
+      wrapper._ctPileDropBound = true;
+
+      wrapper.addEventListener("dragover", (e) => {
+        // Required so the drop fires here instead of falling back to the canvas.
+        e.preventDefault();
+      });
+
+      wrapper.addEventListener("drop", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        wrapper.querySelectorAll(".ct-weapon-drop-active, .ct-drop-target").forEach(el => el.classList.remove("ct-weapon-drop-active", "ct-drop-target"));
+      });
+    },
+
+    /* Combat utility-lock for item use buttons. While the combat bar is live,
+     *  Use/Expend buttons start greyed at the top of every turn; opening the
+     *  EQUIPMENT menu via the combat-bar ITEM button unlocks them for that
+     *  turn, and they re-lock whenever the utility pip hits 0. Outside combat
+     *  nothing is locked. */
+    _syncEquipmentUseButtons() {
+      const root = this.element?.querySelector?.("#ct-panel-container");
+      if (!root || this.activePanel !== "equipment") return;
+      const st = this._cbState?.();
+      const inCombat = !!st;
+      const unlocked = inCombat && this._equipmentUseTurnKey === st.combatantId;
+      const pips = inCombat ? (this._cbResCount?.("utility") ?? 0) : 1;
+      const locked = inCombat && (!unlocked || pips <= 0);
+      const reason = pips <= 0 ? "No utility pips left"
+                               : "Open the ITEM button on the combat bar to use items";
+      root.querySelectorAll("[data-use-equipment], [data-use-weapon]").forEach(btn => {
+        if (btn.dataset.ctEqOrig === undefined) btn.dataset.ctEqOrig = btn.title || "";
+        btn.classList.toggle("ct-range-locked", locked);
+        btn.disabled = locked;
+        btn.title = locked ? reason : btn.dataset.ctEqOrig;
+      });
+    },
+
+    /* Spend 1 utility pip for an item use/expend. In combat a pip is
+     *  required — at 0 the use is blocked with a warning. Outside combat the
+     *  spend is a no-op pass. Re-syncs the equipment use buttons so hitting
+     *  0 pips re-locks them. Returns false when the use must be aborted. */
+    _cbSpendUtilityForItem(item) {
+      if (this._cbState?.()) {
+        if ((this._cbResCount?.("utility") ?? 0) <= 0) {
+          ui.notifications?.warn?.(`No utility pips left — ${item?.name ?? "item"} use is locked.`);
+          return false;
+        }
+        this._cbExpendResource?.("utility");
+      }
+      this._syncEquipmentUseButtons?.();
+      return true;
     },
 
     openEquipmentUseDialog(itemId) {
@@ -1534,12 +1832,18 @@ export function applyEquipmentPanel(CypherTaskbar) {
           use: {
             icon: '<i class="fas fa-hand-sparkles"></i>',
             label: 'Use Item',
-            callback: async () => { await this.sendEquipmentUseToChat(actor, item); }
+            callback: async () => {
+              if (!this._cbSpendUtilityForItem(item)) return;
+              await this.sendEquipmentUseToChat(actor, item);
+            }
           },
           expend: {
             icon: '<i class="fas fa-burst"></i>',
             label: 'Expend Item',
-            callback: async () => { await this.expendEquipmentItem(actor, item); }
+            callback: async () => {
+              if (!this._cbSpendUtilityForItem(item)) return;
+              await this.expendEquipmentItem(actor, item);
+            }
           },
           cancel: {
             icon: '<i class="fas fa-times"></i>',
@@ -1658,17 +1962,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-equipment-settings-popup";
-      popup.classList.add("ct-popup");
-      // Position above the Equipment section button
-      const eqBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="equipment"]');
-      const btnRect = eqBtn?.getBoundingClientRect();
-      if (btnRect) {
-        popup.style.left = `${btnRect.left}px`;
-        popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
-      } else {
-        popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-        popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
-      }
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Equipment Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -1735,11 +2029,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
         </div>`;
       document.body.appendChild(popup);
 
-      requestAnimationFrame(() => {
-        const rect = popup.getBoundingClientRect();
-        popup.style.left = `${Math.min(Math.max(8, parseFloat(popup.style.left)), Math.max(8, window.innerWidth - rect.width - 8))}px`;
-        popup.style.top = `${Math.min(Math.max(8, parseFloat(popup.style.top)), Math.max(8, window.innerHeight - rect.height - 8))}px`;
-      });
+      this._positionPopupRightOfMenu(popup, event, { fallbackSelector: '#cypher-taskbar-bar .ct-btn[data-panel="equipment"]' });
 
       const collectState = () => ({
         equipmentMenuShadowColor: popup.querySelector("#em-shadow-color").value,
@@ -1858,9 +2148,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
       document.querySelector("#ct-equipment-category-popup")?.remove();
       const popup = document.createElement("div");
       popup.id = "ct-equipment-category-popup";
-      popup.classList.add("ct-popup");
-      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(8, event?.clientY ?? 120)}px`;
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-folder-plus"></i> Equipment Categories <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -1873,6 +2161,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
+      this._positionPopupRightOfMenu(popup, event);
 
       const renderCategories = () => {
         const list = popup.querySelector('#ct-equipment-category-list');
@@ -1957,7 +2246,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-equipment-category-appearance-popup";
-      popup.classList.add("ct-popup");
+      popup.classList.add("ct-popup", "ct-settings-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -1976,7 +2265,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
-      this._equipmentPositionPopupAboveEvent(popup, event);
+      this._positionPopupRightOfMenu(popup, event);
 
       const previewTarget = () => this.element?.querySelector(`[data-equipment-category-header="${categoryId}"]`) ?? anchorHeader;
       const syncVal = (id, fmt = v => v) => {
