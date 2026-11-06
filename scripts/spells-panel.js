@@ -166,17 +166,6 @@ export function applySpellsPanel(CypherTaskbar) {
       return cols.map(col => `<div class="ct-sp-masonry-column">${col.sections.join("")}</div>`).join("");
     },
 
-    /* ── SPELLS PER DAY (Cypher GM Taskbar → player taskbar) ──
-       GM sets the limit as an actor flag (cypher-gm-taskbar.spellsPerDayLimit);
-       0/unset = unlimited. Memorized (READY) spells deplete it; at 0 no more
-       spells can be memorized until one is removed from READY. */
-    _spellsPerDayLimit(actor) {
-      const raw = actor?.getFlag?.("cypher-gm-taskbar", "spellsPerDayLimit");
-      if (raw === undefined || raw === null || raw === "") return 0;
-      const v = Number(raw);
-      return Number.isFinite(v) ? Math.max(0, Math.min(99, Math.round(v))) : 0;
-    },
-
     _getMemorizedSpellIds(actorId) {
       const all = this._gjson("spellsReadyMemorized", {});
       const list = all?.[actorId];
@@ -184,19 +173,6 @@ export function applySpellsPanel(CypherTaskbar) {
     },
 
     async _setSpellMemorized(actorId, itemId, memorized) {
-      // SPELLS PER DAY guard: refuse new memorizations while the limit is spent.
-      if (memorized && this.actor) {
-        const limit = this._spellsPerDayLimit(this.actor);
-        if (limit > 0) {
-          const used = this._getMemorizedSpellIds(actorId)
-            .filter(id => id !== itemId && this.actor.items.has(id)).length;
-          if (used >= limit) {
-            ui.notifications?.warn?.(`Spells per day exhausted (${limit}/${limit}) — remove a spell from READY to memorize another.`);
-            this._refreshActivePanel();
-            return;
-          }
-        }
-      }
       try {
         const all = this._gjson("spellsReadyMemorized", {});
         const current = new Set(Array.isArray(all?.[actorId]) ? all[actorId] : []);
@@ -236,13 +212,10 @@ export function applySpellsPanel(CypherTaskbar) {
       return value === null || value === undefined || value === "" ? "—" : String(value);
     },
 
-    _renderSpellRow(item, { memorized = false, readyCopy = false, spdLocked = false } = {}) {
+    _renderSpellRow(item, { memorized = false, readyCopy = false } = {}) {
       const rowClass = ['ct-item-row', 'ct-sp-action-row'];
       if (!readyCopy) rowClass.push('ct-sp-draggable');
       if (memorized && !readyCopy) rowClass.push('is-ready');
-      // SPELLS PER DAY exhausted: non-memorized listing rows are greyed out
-      // and cannot be memorized until a READY spell is removed.
-      if (spdLocked && !readyCopy && !memorized) rowClass.push('ct-sp-row-spd-locked');
       // Only READY copies are castable — the category listings stay greyed
       // (visual signal; their memorize checkbox / drag still work).
       if (!readyCopy && this._cbState?.()) rowClass.push('ct-sp-row-disabled');
@@ -250,9 +223,7 @@ export function applySpellsPanel(CypherTaskbar) {
       const rangeLocked = readyCopy && !targetLocked && !!(this._ctRangeLocked?.(item, "spell"));
       const locked = targetLocked || rangeLocked;
       const lockTitle = targetLocked ? "Select an NPC target to cast" : "Out of range";
-      const memorizeDisabled = spdLocked && !readyCopy && !memorized;
-      const memorizeTitle = memorized ? 'Remove from Ready' : (memorizeDisabled ? 'Spells per day exhausted — remove a spell from READY first' : 'Memorize spell');
-      return `<div class="${rowClass.join(' ')}" ${readyCopy ? '' : 'draggable="true"'} data-spell-id="${item.id}" ${readyCopy ? 'data-spell-ready-copy="true"' : ''}><div class="ct-sp-row-main"><img class="ct-item-img" src="${item.img || 'icons/svg/magic-swirl.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span></div><div class="ct-sp-row-meta"><span class="ct-sp-meta-pill ct-sp-cost" title="Point Cost">${this._getSpellPointCost(item)}</span><label class="ct-sp-ready-toggle" title="${memorizeTitle}"><input type="checkbox" data-ready-spell="${item.id}" ${memorized ? 'checked' : ''} ${memorizeDisabled ? 'disabled' : ''}><span class="ct-sp-ready-toggle-box"></span></label>${readyCopy ? `<button type="button" class="ct-sp-cast-btn${locked ? " ct-range-locked" : ""}" data-cast-spell="${item.id}" title="${locked ? lockTitle : `Cast ${item.name}`}"${locked ? " disabled" : ""}><i class="fas fa-sparkles"></i></button>` : ""}</div></div>`;
+      return `<div class="${rowClass.join(' ')}" ${readyCopy ? '' : 'draggable="true"'} data-spell-id="${item.id}" ${readyCopy ? 'data-spell-ready-copy="true"' : ''}><div class="ct-sp-row-main"><img class="ct-item-img" src="${item.img || 'icons/svg/magic-swirl.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span></div><div class="ct-sp-row-meta"><span class="ct-sp-meta-pill ct-sp-cost" title="Point Cost">${this._getSpellPointCost(item)}</span><label class="ct-sp-ready-toggle" title="${memorized ? 'Remove from Ready' : 'Memorize spell'}"><input type="checkbox" data-ready-spell="${item.id}" ${memorized ? 'checked' : ''}><span class="ct-sp-ready-toggle-box"></span></label>${readyCopy ? `<button type="button" class="ct-sp-cast-btn${locked ? " ct-range-locked" : ""}" data-cast-spell="${item.id}" title="${locked ? lockTitle : `Cast ${item.name}`}"${locked ? " disabled" : ""}><i class="fas fa-sparkles"></i></button>` : ""}</div></div>`;
     },
 
     // ── Panel builder ────────────────────────
@@ -292,21 +263,11 @@ export function applySpellsPanel(CypherTaskbar) {
       const readyStyle = this._getSpellCategoryStyle('ready');
       const readyHtml = `<section class="ct-sp-category-section ct-sp-ready-section" data-sp-category-section="ready"><div class="ct-sp-category-header ct-sp-ready-header" data-sp-category-header="ready" style="${this._spellCategoryHeaderStyle(readyStyle)}" title="Right-click to edit category header"><span class="ct-sp-category-icon-wrap">${this._spellCategoryHeaderIconHtml(readyStyle)}</span><span class="ct-sp-category-title">READY</span></div><div class="ct-sp-ready-body ${readyEntries.length ? '' : 'ct-sp-ready-body-empty'}">${readyRows || `<div class="ct-sp-empty-drop ct-sp-ready-empty">Memorized spells appear here.</div>`}</div></section>`;
 
-      // ── SPELLS PER DAY: GM-set actor limit (0 = unlimited) ──
-      const spdLimit     = this._spellsPerDayLimit(actor);
-      const spdUsed      = readyEntries.length;
-      const spdRemaining = spdLimit > 0 ? Math.max(0, spdLimit - spdUsed) : 0;
-      const spdLocked    = spdLimit > 0 && spdRemaining <= 0;
-      const spdPct       = spdLimit > 0 ? Math.round((spdRemaining / spdLimit) * 100) : 0;
-      const spdHtml = spdLimit > 0
-        ? `<div class="ct-sp-spd${spdLocked ? ' ct-sp-spd-exhausted' : ''}" title="Spells per day — ${spdRemaining} of ${spdLimit} remaining (set by GM)"><i class="fas fa-hat-wizard"></i><span class="ct-sp-spd-value">${spdRemaining}/${spdLimit}</span><div class="ct-sp-spd-bar"><div class="ct-sp-spd-fill" style="width:${spdPct}%"></div></div></div>`
-        : "";
-
       const sectionData = visibleCats.filter(c => !hiddenCats.has(c.id)).map(category => {
         const entries = (grouped.get(category.id) ?? []).sort((a, b) => a.order - b.order || a.item.name.localeCompare(b.item.name));
         const bodyClass = entries.length ? "ct-sp-category-body" : "ct-sp-category-body ct-sp-category-body-empty";
         const rows = entries.length
-          ? entries.map(({ item }) => this._renderSpellRow(item, { memorized: memorizedIds.has(item.id), readyCopy: false, spdLocked })).join("")
+          ? entries.map(({ item }) => this._renderSpellRow(item, { memorized: memorizedIds.has(item.id), readyCopy: false })).join("")
           : `<div class="ct-sp-empty-drop">Drop spells here</div>`;
         const categoryStyle = this._getSpellCategoryStyle(category.id);
         const isSpellNamed  = this._isSpellName(category.name);
@@ -317,7 +278,7 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const sections = buildSpellsMasonryColumns(sectionData, this.actor?.id);
       const spellsGrid = sections ? `<div class="ct-sp-masonry-grid">${sections}</div>` : `<div class="ct-empty-msg">No spells found. Add abilities/skills to a category named Spell, Spells or Magic.</div>`;
-      return `<div class="ct-panel ct-panel-spells-custom" style="${this._spellsMenuStyleVars()};${this._getMenuBackgroundVars("spells")}"><div class="ct-panel-header ct-panel-header-spells-menu"><div class="ct-panel-title-wrap"><i class="fas fa-hat-wizard"></i> <span class="ct-sp-panel-title-text">Spells</span>${spdHtml}${hiddenIndicator}</div><div class="ct-panel-action-group"><button class="ct-panel-settings-btn" data-sp-categories title="Spell Categories"><i class="fas fa-folder-plus"></i></button><button class="ct-panel-settings-btn" data-sp-settings title="Spells Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-sp-close title="Close Spells Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-panel-body ct-sp-panel-body"><div class="ct-sp-layout-wrap">${readyHtml}${spellsGrid}</div></div></div>`;
+      return `<div class="ct-panel ct-panel-spells-custom" style="${this._spellsMenuStyleVars()};${this._getMenuBackgroundVars("spells")}"><div class="ct-panel-header ct-panel-header-spells-menu"><div class="ct-panel-title-wrap"><i class="fas fa-hat-wizard"></i> <span class="ct-sp-panel-title-text">Spells</span>${hiddenIndicator}</div><div class="ct-panel-action-group"><button class="ct-panel-settings-btn" data-sp-categories title="Spell Categories"><i class="fas fa-folder-plus"></i></button><button class="ct-panel-settings-btn" data-sp-settings title="Spells Menu Settings"><i class="fas fa-sliders-h"></i></button><button class="ct-panel-settings-btn" data-sp-close title="Close Spells Menu"><i class="fas fa-times"></i></button></div></div><div class="ct-panel-body ct-sp-panel-body"><div class="ct-sp-layout-wrap">${readyHtml}${spellsGrid}</div></div></div>`;
     },
 
     // ── DnD ─────────────────────────────────
@@ -460,7 +421,7 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id = "ct-spells-settings-popup";
-      popup.classList.add("ct-popup", "ct-settings-popup");
+      popup.classList.add("ct-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-sliders-h"></i> Spells Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -513,7 +474,6 @@ export function applySpellsPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
-      this._positionPopupRightOfMenu(popup, event, { fallbackSelector: '#cypher-taskbar-bar .ct-btn[data-panel="spells"]' });
 
       const collectState = () => ({
         spellsMenuShadowColor:     popup.querySelector("#sm-shadow-color").value,
@@ -623,7 +583,9 @@ export function applySpellsPanel(CypherTaskbar) {
 
       const popup = document.createElement("div");
       popup.id    = "ct-spell-category-appearance-popup";
-      popup.classList.add("ct-popup", "ct-settings-popup");
+      popup.classList.add("ct-popup");
+      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+      popup.style.top  = `${Math.max(8, event?.clientY ?? 120)}px`;
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -639,7 +601,7 @@ export function applySpellsPanel(CypherTaskbar) {
           <label>Header Color <input type="color" id="ct-sp-category-header-color" value="${state.headerColor}"></label>
         </div>`;
       document.body.appendChild(popup);
-      this._positionPopupRightOfMenu(popup, event);
+      this._positionPopupAboveEvent(popup, event);
 
       const previewTarget = () => this.element?.querySelector(`[data-sp-category-header="${categoryId}"]`);
       const syncVal = (id, fmt = v => v) => {
@@ -714,7 +676,9 @@ export function applySpellsPanel(CypherTaskbar) {
       document.querySelector("#ct-spell-category-popup")?.remove();
       const popup = document.createElement("div");
       popup.id    = "ct-spell-category-popup";
-      popup.classList.add("ct-popup", "ct-settings-popup");
+      popup.classList.add("ct-popup");
+      popup.style.left = `${Math.max(8, event?.clientX ?? 120)}px`;
+      popup.style.top  = `${Math.max(8, event?.clientY ?? 120)}px`;
       popup.style.transform = "none";
       popup.innerHTML = `
         <div class="ct-popup-header"><i class="fas fa-folder-plus"></i> Spell Categories <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -727,7 +691,6 @@ export function applySpellsPanel(CypherTaskbar) {
           </div>
         </div>`;
       document.body.appendChild(popup);
-      this._positionPopupRightOfMenu(popup, event);
 
       const renderCategories = () => {
         const list       = popup.querySelector("#ct-spell-category-list");
@@ -801,6 +764,8 @@ export function applySpellsPanel(CypherTaskbar) {
       // ── Target defense (combat + roll casts): presets the difficulty ──
       const tgt = (needsRoll && this._cbState?.()) ? this._getTargetDefenseDifficulty?.() : null;
       const diffDefault = tgt ? tgt.difficulty : 0;
+      // GM-assigned asset/hinder (from GM Taskbar portrait pills) — pre-filled below
+      const gm = this._getGMAssetHinder?.(actor) ?? { assets: 0, hinders: 0 };
 
       const effortCap = Math.max(0, Math.min(6, Number(actor?.system?.basic?.effort ?? actor?.system?.advancement?.effort ?? 0) || 0));
       const costStr = String(item.system?.basic?.cost ?? item.system?.cost ?? "").trim();
@@ -892,6 +857,7 @@ export function applySpellsPanel(CypherTaskbar) {
                 ${hasDamage ? `<span class="ct-skill-roll-badge">Base Damage: ${baseDamage}${damageFormula ? ` (${foundry.utils.escapeHTML(damageFormula)})` : ''}</span>` : ''}
                 ${!needsRoll ? `<span class="ct-skill-roll-badge" style="background:rgba(124,252,160,0.15);border-color:rgba(124,252,160,0.4);color:#7cffa0;">AUTOMATIC — NO ROLL</span>` : ''}
                 ${tgt ? `<span class="ct-skill-roll-badge" style="background:rgba(124,160,252,0.15);border-color:rgba(124,160,252,0.4);color:#7cffa0;">Target: ${foundry.utils.escapeHTML(tgt.name)} — Defense ${tgt.difficulty}</span>` : ''}
+                ${needsRoll && (gm.assets > 0 || gm.hinders > 0) ? `<span class="ct-skill-roll-badge ct-gm-ah-badge" title="Assigned by the GM from your portrait in the GM Taskbar — already applied below"><i class="fas fa-gavel"></i> GM: ${gm.assets > 0 ? `+${gm.assets} Asset` : ''}${gm.assets > 0 && gm.hinders > 0 ? ' · ' : ''}${gm.hinders > 0 ? `+${gm.hinders} Hindrance` : ''}</span>` : ''}
               </div>
             </div>
             <div class="ct-skill-roll-grid">
@@ -902,7 +868,7 @@ export function applySpellsPanel(CypherTaskbar) {
               </label>
               <label class="ct-skill-roll-field">
                 <span>Assets</span>
-                <select name="assets">${Array.from({length:3},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
+                <select name="assets">${Array.from({length:3},(_,i) => `<option value="${i}" ${i===gm.assets?'selected':''}>${i}</option>`).join('')}</select>
               </label>
               ` : ''}
               <label class="ct-skill-roll-field">
@@ -920,7 +886,7 @@ export function applySpellsPanel(CypherTaskbar) {
               </label>
               <label class="ct-skill-roll-field">
                 <span>Hindrance</span>
-                <select name="hinderedBy">${Array.from({length:7},(_,i) => `<option value="${i}" ${i===0?'selected':''}>${i}</option>`).join('')}</select>
+                <select name="hinderedBy">${Array.from({length:7},(_,i) => `<option value="${i}" ${i===gm.hinders?'selected':''}>${i}</option>`).join('')}</select>
               </label>
               ` : ''}
             </div>
@@ -1052,11 +1018,6 @@ export function applySpellsPanel(CypherTaskbar) {
                   console.error(`${MODULE_ID} | Spell cast chat message failed:`, err);
                 }
 
-                // Notify integrations (e.g. Cypher Cool Items → AutoAnimations)
-                if (Hooks.events?.['cciAbilityUsed']?.length) {
-                  Hooks.callAll('cciAbilityUsed', item);
-                }
-
                 // ── Post-cast outcome (attack framework):
                 //    Roll casts: YOU HIT!/YOU MISSED! floater + GM damage/effects dialog on success.
                 //    Automatic casts (no roll) with stated damage or effects: same GM confirmation
@@ -1070,12 +1031,7 @@ export function applySpellsPanel(CypherTaskbar) {
                   }
                   if (needsRoll) {
                     const ownToken = actor.getActiveTokens?.()[0]?.document ?? null;
-                    // Attack spells (with damage) keep HIT/MISS; defense/utility use SUCCESS/FAILURE
-                    this._showAttackOutcomeFloater?.(targetDoc ?? ownToken, success, hasDamage ? null : {
-                      kicker: "SPELL RESULT",
-                      successText: "SUCCESS!",
-                      failureText: "FAILURE!"
-                    });
+                    this._showAttackOutcomeFloater?.(targetDoc ?? ownToken, success);
                   }
                 } catch (err) {
                   console.error(`${MODULE_ID} | post-cast outcome failed`, err);

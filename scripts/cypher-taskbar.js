@@ -1,5 +1,5 @@
 /**
- * Cypher Taskbar v4.1.240
+ * Cypher Taskbar v4.1.198
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
@@ -42,8 +42,6 @@ class CypherTaskbar {
     this._cashSuppressTimer = null;
     this._cashPanelLocked = false;
     this._lastRollData = null; // Store last roll parameters for reroll
-    this._diceHistory = [];    // Last ~8 rolls for the dice history strip
-    this._stickySaveTimer = null;
     this._xpApi = null;        // Cached Cypher XP API
     this._acknowledgedTasks = new Set(); // Task IDs hovered/acknowledged by player
 
@@ -321,11 +319,6 @@ class CypherTaskbar {
       this._refreshCombatPlaceholder();
       this._setupPortraitAnim();
       this._updatePortraitTaskFlash();
-      this._syncPortraitDamageState();
-      this._syncTorchMode();
-      this._snapshotPools();
-      this._restoreStickyNotes();
-      this._restoreIntrusionBanner();
       this._adjustCanvasPadding(
         this._gs("locked") || !this._gs("autoHide")
       );
@@ -486,21 +479,13 @@ class CypherTaskbar {
     const shadowCSS = shadowEnabled
       ? `filter:drop-shadow(${sDist * dx}px ${sDist * dy}px ${sBlur}px ${hexToRGBA(sColor, sOp)});`
       : "";
-    // Mood portraits: a named mood (combat/exploration/social/wounded) with an
-    // assigned source overrides the base portrait.
-    const moodPortraits = this._moodPortraits(actor);
-    const activeMood = this._currentMood(actor);
-    const moodSrc = activeMood ? (moodPortraits[activeMood] ?? "") : "";
-    const effImg = moodSrc || img;
-    const isVideoPortrait = this._isPortraitVideo(effImg);
+    const isVideoPortrait = this._isPortraitVideo(img);
     const animFreq = this._gs("portraitAnimFrequency") ?? 0;
     const animLoops = this._gs("portraitAnimLoops") ?? 0;
     const useTimerAnim = isVideoPortrait && animFreq > 0;
     const portraitHTML = isVideoPortrait
-      ? `<video class="ct-portrait-video" src="${effImg}" style="width:${pWidth}px;${shadowCSS}" ${useTimerAnim ? '' : 'autoplay loop'} muted playsinline alt="${actor.name}" data-timer-anim="${useTimerAnim ? '1' : '0'}"></video>`
-      : `<img class="ct-portrait" src="${effImg}" style="width:${pWidth}px;${shadowCSS}" alt="${actor.name}" />`;
-
-    const dmgKey = this._damageStatusKey(actor);
+      ? `<video class="ct-portrait-video" src="${img}" style="width:${pWidth}px;${shadowCSS}" ${useTimerAnim ? '' : 'autoplay loop'} muted playsinline alt="${actor.name}" data-timer-anim="${useTimerAnim ? '1' : '0'}"></video>`
+      : `<img class="ct-portrait" src="${img}" style="width:${pWidth}px;${shadowCSS}" alt="${actor.name}" />`;
 
     return `
       <div class="ct-char-float${portraitAreaCollapsed ? " ct-char-float-collapsed ct-portrait-slide-away" : ""}" id="ct-char-float">
@@ -546,10 +531,8 @@ class CypherTaskbar {
           </div>
 
           <!-- Portrait below -->
-          <div class="ct-portrait-wrap${dmgKey !== "hale" ? ` ct-ps-${dmgKey}` : ""}" title="Left-click: Open Sheet · Right-click: Portrait Settings">
+          <div class="ct-portrait-wrap" title="Left-click: Open Sheet · Right-click: Portrait Settings">
             ${portraitHTML}
-            <div class="ct-portrait-fx"></div>
-            <div class="ct-torch-fx"></div>
             <!-- Dice bar — floating horizontally at bottom of portrait -->
             <div class="ct-dice-bar">
               <button class="ct-dice-btn" data-die="d100" title="Roll d100">
@@ -565,7 +548,6 @@ class CypherTaskbar {
                 <i class="fa-solid fa-dice-d20"></i>
               </button>
             </div>
-            ${this._buildMoodBar(actor)}
             ${this._buildRecoveryRolls(actor)}
             ${this._buildCombatBar(actor ?? null)}
           </div>
@@ -728,246 +710,6 @@ class CypherTaskbar {
     return 'hale';
   }
 
-  /** Dead check — canonical Cypher field is system.combat.damageTrack.state ("Dead"). */
-  _isActorDead(actor) {
-    const sys = actor?.system ?? {};
-    const dt = String(sys.combat?.damageTrack?.state ?? sys.damageTrack?.state ?? sys.combat?.damageTrack ?? sys.damageTrack ?? "").trim().toLowerCase();
-    if (dt === "dead") return true;
-    if (sys.combat?.dead === true || sys.dead === true || sys.basic?.dead === true) return true;
-    const token = actor?.getActiveTokens?.()[0];
-    if (token?.document?.hasStatusEffect?.("dead")) return true;
-    return false;
-  }
-
-  _damageStatusKey(actor) {
-    if (this._isActorDead(actor)) return "dead";
-    const k = this._getActorDamageStatus(actor);
-    return ["hale", "impaired", "debilitated"].includes(k) ? k : "hale";
-  }
-
-  _damageStatusInfo(actor) {
-    const statuses = {
-      hale:        { label: 'HALE',        icon: 'fas fa-heart-pulse',          cls: 'ct-status-hale' },
-      impaired:    { label: 'IMPAIRED',    icon: 'fas fa-triangle-exclamation', cls: 'ct-status-impaired' },
-      debilitated: { label: 'DEBILITATED', icon: 'fas fa-skull-crossbones',     cls: 'ct-status-debilitated' },
-      dead:        { label: 'DEAD',        icon: 'fas fa-skull',                cls: 'ct-status-dead' }
-    };
-    return statuses[this._damageStatusKey(actor)] ?? statuses.hale;
-  }
-
-  /**
-   * Paint the portrait with the actor's damage state (yellow = impaired,
-   * red = debilitated, faded = dead) and lock the taskbar when dead.
-   * Runs at render and on every actor update — refresh() alone only
-   * touches stat bars, so state classes would go stale otherwise.
-   */
-  _syncPortraitDamageState() {
-    const actor = this.actor;
-    const key = actor ? this._damageStatusKey(actor) : "hale";
-    const wrap = this.element?.querySelector(".ct-portrait-wrap");
-    if (wrap) {
-      wrap.classList.toggle("ct-ps-impaired", key === "impaired");
-      wrap.classList.toggle("ct-ps-debilitated", key === "debilitated");
-      wrap.classList.toggle("ct-ps-dead", key === "dead");
-    }
-    this.element?.classList.toggle("ct-actor-dead", key === "dead");
-    document.body.classList.toggle("ct-actor-dead-lock", key === "dead");
-    const stEl = this.element?.querySelector(".ct-bar-status");
-    if (stEl) {
-      const info = this._damageStatusInfo(actor);
-      stEl.className = `ct-bar-status ${info.cls}`;
-      stEl.setAttribute("aria-label", `Character status: ${info.label}`);
-      stEl.innerHTML = `<i class="${info.icon}"></i><span class="ct-bar-status-label">${info.label}</span>`;
-    }
-    this._syncWoundedMood(actor);
-  }
-
-  /** Remember pool values so updateActor can tell a hit from a heal. */
-  _snapshotPools() {
-    const pools = this.actor?.system?.pools ?? {};
-    const snap = {};
-    for (const k of ["might", "speed", "intellect"]) {
-      const v = Number(pools[k]?.value ?? pools[k]?.current ?? NaN);
-      snap[k] = Number.isFinite(v) ? v : null;
-    }
-    this._poolSnapshot = snap;
-  }
-
-  /** Brief shake + red flash on the portrait when a pool takes damage. */
-  _flashPortraitDamage() {
-    const wrap = this.element?.querySelector(".ct-portrait-wrap");
-    if (!wrap) return;
-    wrap.classList.remove("ct-dmg-shake", "ct-dmg-flash");
-    void wrap.offsetWidth; // restart the animations
-    wrap.classList.add("ct-dmg-shake", "ct-dmg-flash");
-    setTimeout(() => wrap.classList.remove("ct-dmg-shake", "ct-dmg-flash"), 700);
-  }
-
-  /** Floating combat text off the portrait: "-4 Might" on hits, "+2 Might" on heals. */
-  _floatCombatNumber(pool, delta) {
-    const wrap = this.element?.querySelector(".ct-portrait-wrap");
-    if (!wrap) return;
-    const r = wrap.getBoundingClientRect();
-    if (!r.width && !r.height) return;
-    const label = pool.charAt(0).toUpperCase() + pool.slice(1);
-    const el = document.createElement("div");
-    el.className = `ct-float-num ${delta < 0 ? "ct-float-dmg" : "ct-float-heal"}`;
-    el.textContent = `${delta > 0 ? "+" : ""}${delta} ${label}`;
-    // Stagger simultaneous floats + slight horizontal jitter
-    const n = document.querySelectorAll(".ct-float-num").length;
-    el.style.left = `${r.left + r.width / 2 + (Math.random() * 28 - 14)}px`;
-    el.style.top = `${r.top + r.height * 0.3}px`;
-    if (n) el.style.animationDelay = `${Math.min(n, 4) * 0.12}s`;
-    document.body.appendChild(el);
-    el.addEventListener("animationend", () => el.remove());
-  }
-
-  /* ── GM Intrusion banner ── */
-
-  _onIntrusionOffer(payload) {
-    if (game.user?.isGM) return;
-    if (payload.userId && payload.userId !== game.user?.id) return;
-    const actor = game.actors.get(payload.actorId);
-    if (!actor || !actor.isOwner) return;
-    this._showIntrusionBanner(actor, payload.description || "");
-  }
-
-  _intrusionXpPath(actor) {
-    const sys = actor?.system ?? {};
-    if (sys.basic && "xp" in sys.basic) return "system.basic.xp";
-    if (sys.advancement && "xp" in sys.advancement) return "system.advancement.xp";
-    return null;
-  }
-
-  async _intrusionModifyXp(actor, delta) {
-    const path = this._intrusionXpPath(actor);
-    if (!path) return null;
-    const current = Number(foundry.utils.getProperty(actor, path) ?? 0);
-    const next = Math.max(0, Math.min(10, current + delta));
-    if (next === current) return current;
-    try {
-      await actor.update({ [path]: next });
-      return next;
-    } catch (err) {
-      console.warn(`${MODULE_ID} | Intrusion XP update failed:`, err);
-      return null;
-    }
-  }
-
-  _showIntrusionBanner(actor, description = "") {
-    this._activeIntrusion = { actorId: actor.id, description };
-    this._renderIntrusionBanner(actor, description);
-  }
-
-  /** render() rebuilds the bar and wipes the banner node — re-show a pending offer. */
-  _restoreIntrusionBanner() {
-    if (!this._activeIntrusion) return;
-    const actor = game.actors.get(this._activeIntrusion.actorId);
-    if (!actor || !actor.isOwner) { this._activeIntrusion = null; return; }
-    this._renderIntrusionBanner(actor, this._activeIntrusion.description);
-  }
-
-  _closeIntrusionBanner() {
-    this._activeIntrusion = null;
-    const el = document.getElementById("ct-intrusion-banner");
-    if (el) { el.classList.add("ct-out"); setTimeout(() => el.remove(), 320); }
-  }
-
-  async _finishIntrusion(actor, accepted, gaveToName) {
-    await this._sendIntrusionChat(actor, accepted, gaveToName);
-    game.socket.emit(`module.${MODULE_ID}`, {
-      type: "intrusionOutcome",
-      actorId: actor.id,
-      actorName: actor.name,
-      userId: game.user.id,
-      userName: game.user.name,
-      accepted,
-      gaveToName
-    });
-    this._closeIntrusionBanner();
-  }
-
-  async _sendIntrusionChat(actor, accepted, gaveToName) {
-    const color = accepted ? "#40b060" : "#ff7070";
-    const icon = accepted ? "fa-check-circle" : "fa-times-circle";
-    const text = accepted ? "ACCEPTED" : "REFUSED";
-    const xpLine = accepted
-      ? `<div style="margin-top:6px;color:#c8a96e;font-size:12px;"><i class="fas fa-plus-circle" style="margin-right:4px;"></i> +1 XP (kept)${gaveToName ? ` · +1 XP given to <strong>${gaveToName}</strong>` : ""}</div>`
-      : `<div style="margin-top:6px;color:#ff7070;font-size:12px;"><i class="fas fa-minus-circle" style="margin-right:4px;"></i> −1 XP (refused intrusion)</div>`;
-    await ChatMessage.create({
-      speaker: { actor: actor.id, alias: actor.name },
-      content: `
-        <div style="display:flex;align-items:flex-start;gap:10px;padding:4px 0;">
-          <img src="${actor.img || "icons/svg/mystery-man.svg"}" style="width:36px;height:36px;border-radius:50%;border:2px solid ${color};object-fit:cover;flex-shrink:0;box-shadow:0 0 8px ${color}40;">
-          <div style="flex:1;">
-            <div style="font-weight:700;font-size:14px;color:#e0e0e0;margin-bottom:2px;">${actor.name} <span style="color:${color};font-size:12px;margin-left:6px;"><i class="fas ${icon}" style="margin-right:3px;"></i>${text}</span></div>
-            <div style="font-size:12px;color:#aaa;">GM Intrusion</div>
-            ${xpLine}
-          </div>
-        </div>`
-    });
-  }
-
-  _renderIntrusionBanner(actor, description) {
-    document.getElementById("ct-intrusion-banner")?.remove();
-    const float = this.element?.querySelector("#ct-char-float .ct-portrait-wrap") ? this.element.querySelector("#ct-char-float") : null;
-    const host = float ?? this.element;
-    if (!host) return;
-    const xp = Number(foundry.utils.getProperty(actor, this._intrusionXpPath(actor) ?? "system.basic.xp") ?? 0);
-    const canRefuse = xp >= 1;
-    const desc = (description || "").trim();
-    const el = document.createElement("div");
-    el.className = "ct-intrusion";
-    el.id = "ct-intrusion-banner";
-    el.innerHTML = `
-      <div class="ct-intrusion-frame">
-        <button class="ct-intrusion-close" title="Dismiss"><i class="fas fa-xmark"></i></button>
-        <div class="ct-intrusion-kicker"><i class="fas fa-bolt"></i> GM INTRUSION</div>
-        <div class="ct-intrusion-desc">${desc ? foundry.utils.escapeHTML(desc) : "The GM wants to make things <strong>interesting</strong>."}</div>
-        <div class="ct-intrusion-sub">ACCEPT — gain 2 XP (keep 1, give 1 away)<br>REFUSE — pay 1 XP</div>
-        <div class="ct-intrusion-btns">
-          <button class="ct-intrusion-accept"><i class="fas fa-check"></i> ACCEPT</button>
-          <button class="ct-intrusion-refuse" ${canRefuse ? "" : "disabled"} title="${canRefuse ? "Refuse — pay 1 XP" : "You need at least 1 XP to refuse"}"><i class="fas fa-xmark"></i> REFUSE</button>
-        </div>
-      </div>`;
-    host.appendChild(el);
-
-    el.querySelector(".ct-intrusion-close").addEventListener("click", () => this._closeIntrusionBanner());
-
-    el.querySelector(".ct-intrusion-accept").addEventListener("click", async () => {
-      const selfXp = await this._intrusionModifyXp(actor, +1);
-      if (selfXp === null) { ui.notifications?.error?.("XP update failed — GM will handle it."); return; }
-      const pcs = game.actors.filter(o => o.type === "pc" && o.id !== actor.id && o.hasPlayerOwner);
-      if (!pcs.length) { this._finishIntrusion(actor, true, null); return; }
-      // Phase 2: share the wealth — keep 1, give 1 away
-      el.querySelector(".ct-intrusion-frame").innerHTML = `
-        <button class="ct-intrusion-close" title="Dismiss"><i class="fas fa-xmark"></i></button>
-        <div class="ct-intrusion-kicker"><i class="fas fa-gift"></i> SHARE THE WEALTH</div>
-        <div class="ct-intrusion-desc">You keep 1 XP. Who gets the other?</div>
-        <select class="ct-intrusion-give">
-          <option value="" disabled selected>Choose a character…</option>
-          ${pcs.map(p => `<option value="${p.id}">${foundry.utils.escapeHTML(p.name)}</option>`).join("")}
-        </select>
-        <div class="ct-intrusion-btns">
-          <button class="ct-intrusion-accept"><i class="fas fa-gift"></i> GIVE 1 XP</button>
-        </div>`;
-      el.querySelector(".ct-intrusion-close").addEventListener("click", () => this._closeIntrusionBanner());
-      el.querySelector(".ct-intrusion-accept").addEventListener("click", async () => {
-        const target = game.actors.get(el.querySelector(".ct-intrusion-give")?.value);
-        if (!target) { ui.notifications?.warn?.("Pick a character first."); return; }
-        const ok = await this._intrusionModifyXp(target, +1);
-        if (ok === null) { ui.notifications?.error?.("XP update failed — GM will handle it."); return; }
-        this._finishIntrusion(actor, true, target.name);
-      });
-    });
-
-    el.querySelector(".ct-intrusion-refuse").addEventListener("click", async () => {
-      const res = await this._intrusionModifyXp(actor, -1);
-      if (res === null) { ui.notifications?.error?.("XP update failed — GM will handle it."); return; }
-      this._finishIntrusion(actor, false, null);
-    });
-  }
-
   _buildStatusEffects(actor) {
     if (!actor) return `<span class="ct-status-effects-empty">No active effects</span>`;
     const effects = actor.effects?.filter(e => !e.disabled) ?? [];
@@ -1109,7 +851,13 @@ class CypherTaskbar {
   }
 
   _buildBarMeta(actor) {
-    const status = this._damageStatusInfo(actor);
+    const statuses = {
+      hale: { label: 'HALE', icon: 'fas fa-heart-pulse', cls: 'ct-status-hale' },
+      impaired: { label: 'IMPAIRED', icon: 'fas fa-triangle-exclamation', cls: 'ct-status-impaired' },
+      debilitated: { label: 'DEBILITATED', icon: 'fas fa-skull-crossbones', cls: 'ct-status-debilitated' }
+    };
+    const statusKey = this._getActorDamageStatus(actor);
+    const status = statuses[statusKey] ?? statuses.hale;
     const portrait = actor.img ?? "icons/svg/mystery-man.svg";
     return `
       <div class="ct-bar-meta ct-bar-status-wrap">
@@ -1176,7 +924,7 @@ class CypherTaskbar {
       const isAvailable = available === true || Number(available) > 0;
       return `<button class="ct-recovery-drop${isAvailable ? '' : ' spent'}" data-recovery-index="${idx}" type="button" data-tt="${foundry.utils.escapeHTML(defs[idx].label)}" data-tt-desc="${foundry.utils.escapeHTML(defs[idx].desc)}" ${!isAvailable ? 'disabled' : ''}><i class="fas fa-tint"></i></button>`;
     }).join("");
-    return `<div class="ct-recovery-bar" style="--ct-rec-drop-color:${dropColor};background:${bgRgba};left:calc(50% + ${space}px);">${drops}${this._buildDiceHistoryChips()}</div>`;
+    return `<div class="ct-recovery-bar" style="--ct-rec-drop-color:${dropColor};background:${bgRgba};left:calc(50% + ${space}px);">${drops}</div>`;
   }
 
   async _spendRecoveryRoll(index) {
@@ -1520,7 +1268,6 @@ class CypherTaskbar {
     const locked = this._gs("locked");
     return `
       <div class="ct-controls-group">
-        <button class="ct-ctrl-btn" id="ct-btn-sticky" title="Sticky Notes"><i class="fas fa-note-sticky"></i></button>
         <button class="ct-ctrl-btn" id="ct-btn-settings" title="Taskbar Settings"><i class="fas fa-cog"></i></button>
         <button class="ct-ctrl-btn${locked?" ct-locked":""}" id="ct-btn-lock"
                 title="${locked?"Unlock Taskbar":"Lock Taskbar (disable auto-hide)"}">
@@ -1535,125 +1282,6 @@ class CypherTaskbar {
    * recovery drops, XP spend buttons, focused-arc widget). Extracted from
    * _bindEvents so _rebuildFloat() can re-bind after rebuilding the float.
    */
-  /* ── Mood portraits ── */
-
-  get _moodDefs() {
-    return [
-      { key: "combat",       icon: "fa-swords",      label: "Combat" },
-      { key: "exploration",  icon: "fa-map",         label: "Exploration" },
-      { key: "social",       icon: "fa-comments",    label: "Social" },
-      { key: "wounded",      icon: "fa-heart-crack", label: "Wounded" }
-    ];
-  }
-
-  _moodPortraits(actor) {
-    const v = actor?.getFlag?.(MODULE_ID, "moodPortraits");
-    return (v && typeof v === "object") ? v : {};
-  }
-
-  _currentMood(actor) {
-    const m = actor?.getFlag?.(MODULE_ID, "mood");
-    return typeof m === "string" && m ? m : null;
-  }
-
-  _buildMoodBar(actor) {
-    if (!actor || actor.type !== "pc") return "";
-    const portraits = this._moodPortraits(actor);
-    const current = this._currentMood(actor);
-    const btns = this._moodDefs.map(d => {
-      const set = !!portraits[d.key];
-      const active = current === d.key;
-      const cls = `ct-mood-btn${active ? " ct-mood-active" : ""}${set ? "" : " ct-mood-unset"}`;
-      const tip = active
-        ? `${d.label} — active. Click to deactivate · Right-click: change source`
-        : set
-          ? `${d.label}. Click to switch · Right-click: change source`
-          : `${d.label} — not set. Click to choose an image or webm`;
-      return `<button type="button" class="${cls}" data-mood="${d.key}" title="${tip}"><i class="fas ${d.icon}"></i></button>`;
-    }).join("");
-    return `<div class="ct-mood-bar">${btns}</div>`;
-  }
-
-  async _onMoodButton(mood) {
-    const actor = this.actor;
-    if (!actor || !actor.isOwner) { ui.notifications?.warn?.("You don't own this character."); return; }
-    if (!this._moodPortraits(actor)[mood]) { await this._assignMoodSource(mood); return; }
-    const current = this._currentMood(actor);
-    if (current === mood) await actor.unsetFlag(MODULE_ID, "mood");
-    else await actor.setFlag(MODULE_ID, "mood", mood);
-  }
-
-  async _assignMoodSource(mood) {
-    const actor = this.actor;
-    if (!actor || !actor.isOwner) { ui.notifications?.warn?.("You don't own this character."); return; }
-    const FilePickerClass = foundry.applications?.apps?.FilePicker?.implementation;
-    if (!FilePickerClass) { ui.notifications?.error?.("File picker not available in this Foundry version."); return; }
-    const portraits = { ...this._moodPortraits(actor) };
-    const fp = new FilePickerClass({
-      type: "imagevideo",
-      current: portraits[mood] ?? "",
-      callback: async (path) => {
-        if (!path) return;
-        portraits[mood] = path;
-        await actor.setFlag(MODULE_ID, "moodPortraits", portraits);
-        await actor.setFlag(MODULE_ID, "mood", mood);
-      }
-    });
-    fp.render(true);
-  }
-
-  /** Auto-switch to the wounded mood at 0 HP; restore the previous mood when healed. */
-  async _syncWoundedMood(actor) {
-    if (!actor || actor.type !== "pc" || !actor.isOwner) return;
-    if (!this._moodPortraits(actor).wounded) return; // no wounded portrait assigned — nothing to auto-switch
-    const dead = this._isActorDead(actor);
-    const current = this._currentMood(actor);
-    if (dead && current !== "wounded") {
-      if (current) await actor.setFlag(MODULE_ID, "moodBeforeWounded", current);
-      await actor.setFlag(MODULE_ID, "mood", "wounded");
-    } else if (!dead && current === "wounded") {
-      const prev = actor.getFlag?.(MODULE_ID, "moodBeforeWounded");
-      if (prev) {
-        await actor.setFlag(MODULE_ID, "mood", prev);
-        await actor.unsetFlag(MODULE_ID, "moodBeforeWounded");
-      } else {
-        await actor.unsetFlag(MODULE_ID, "mood");
-      }
-    }
-  }
-
-  /* ── Torch mode: warm flicker tied to scene darkness ── */
-
-  _syncTorchMode() {
-    const wrap = this.element?.querySelector(".ct-portrait-wrap");
-    if (!wrap) return;
-    let d = 0;
-    if (this._gs("torchMode") ?? true) {
-      // Scene darkness is what Calendaria writes from its clock (Scene Darkness
-      // feature) — reading it IS reading Calendaria time, plus it respects any
-      // per-scene override the GM sets manually.
-      d = Number(canvas.scene?.environment?.darkness ?? 0);
-      if (!Number.isFinite(d)) d = 0;
-      if (d <= 0 && game.modules.get("calendaria")?.active) {
-        // Calendaria active but this scene isn't auto-dimming — derive dusk from its clock
-        d = this._calendariaDarknessEstimate();
-      }
-    }
-    d = Math.max(0, Math.min(1, d));
-    // Ease-in: dusk starts as a whisper, deep night roars
-    wrap.style.setProperty("--ct-torch", Math.pow(d, 1.35).toFixed(3));
-  }
-
-  /** Fallback dusk curve straight from Calendaria's clock (0 = full day, 1 = deep night). */
-  _calendariaDarknessEstimate() {
-    try {
-      const api = window.CALENDARIA?.api;
-      if (!api || api.isDaytime?.()) return 0;
-      const p = Number(api.getProgressNight?.() ?? 1); // 0 at sunset → 1 at sunrise
-      return Math.min(1, 0.35 + 0.65 * (Number.isFinite(p) ? p : 1));
-    } catch { return 0; }
-  }
-
   _bindFloatEvents(bar) {
     const actor = this.actor;
     const portrait = bar.querySelector(".ct-portrait");
@@ -1722,35 +1350,10 @@ class CypherTaskbar {
           const roll = new Roll(`1${die}`);
           await roll.evaluate();
           await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: this.actor }) });
-          // Record for dice history strip
-          this._recordRoll({
-            type: "dice",
-            label: die,
-            total: Number(roll.total ?? 0),
-            detail: "",
-            tooltip: `${die} — Rolled ${roll.total}`,
-            flavor: `<p><strong>${die}</strong> — Rolled ${roll.total}</p>`,
-            success: null
-          });
         } catch (err) {
           console.error(`${MODULE_ID} | Dice roll failed:`, err);
           ui.notifications.error("Dice roll failed.");
         }
-      });
-    });
-
-    // Mood switcher: left-click activates (or picks a source if unset),
-    // right-click always re-picks the source for that mood.
-    bar.querySelectorAll(".ct-mood-btn").forEach(btn => {
-      btn.addEventListener("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._onMoodButton(btn.dataset.mood);
-      });
-      btn.addEventListener("contextmenu", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        await this._assignMoodSource(btn.dataset.mood);
       });
     });
     // XP spend buttons (Cypher XP integration)
@@ -1942,10 +1545,6 @@ class CypherTaskbar {
 
     const taskbarBtn = bar.querySelector("#ct-btn-settings");
     if (taskbarBtn) taskbarBtn.onclick = () => this._openTaskbarSettings();
-
-    // Sticky notes button
-    const stickyBtn = bar.querySelector("#ct-btn-sticky");
-    if (stickyBtn) stickyBtn.onclick = () => this._addStickyNote();
 
     this._bindPanelEvents();
 
@@ -3377,15 +2976,7 @@ class CypherTaskbar {
       case "abilities": return this._buildAbilitiesPanel(actor);
       case "spells": return this._buildSpellsPanel(actor);
       case "combat": {
-        // PLAYER ATTACKS (Cypher GM Taskbar): when the GM has pinned attacks
-        // (actor flag "cypher-taskbar".pinnedAttacks), the ATTACKS section shows
-        // exactly those, in pin order. Unset/empty flag = show all attacks.
-        const pinnedIds = actor.getFlag?.(MODULE_ID, "pinnedAttacks");
-        // undefined = pinning never used → show all attacks.
-        // Array (even empty) = GM curates the list → show exactly the pins.
-        const attacks   = Array.isArray(pinnedIds)
-          ? pinnedIds.map(id => all.find(i => i.id === id && i.type === "attack")).filter(Boolean)
-          : all.filter(i => i.type === "attack").sort((a,b) => a.name.localeCompare(b.name));
+        const attacks   = all.filter(i => i.type === "attack").sort((a,b) => a.name.localeCompare(b.name));
         const armor     = all.filter(i => i.type === "armor").sort((a,b) => a.name.localeCompare(b.name));
         const ammo      = all.filter(i => i.type === "ammo").sort((a,b) => a.name.localeCompare(b.name));
         const cyphers   = all.filter(i => i.type === "cypher").sort((a,b) => a.name.localeCompare(b.name));
@@ -3797,7 +3388,6 @@ class CypherTaskbar {
     const customPortraitImage = this._gs("customPortraitImage") ?? "";
     const customPortraitEnabled = this._gs("customPortraitEnabled") ?? false;
     const portraitFilesEnabled = this._gs("portraitFilesEnabled") ?? false;
-    const torchMode = this._gs("torchMode") ?? true;
     const portraitAnimFrequency = this._gs("portraitAnimFrequency") ?? 0;
     const portraitAnimLoops = this._gs("portraitAnimLoops") ?? 0;
     const arcWidgetX         = this._gs("arcWidgetOffsetX")   ?? 82;
@@ -3845,7 +3435,7 @@ class CypherTaskbar {
 
     const popup = document.createElement("div");
     popup.id = "ct-portrait-settings-popup";
-    popup.classList.add("ct-popup", "ct-settings-popup");
+    popup.classList.add("ct-popup");
     // Position: use saved position if available, else next to portrait
     const savedPos = this._gjson("portraitSettingsPos");
     if (savedPos && typeof savedPos.left === "number" && typeof savedPos.top === "number") {
@@ -3920,7 +3510,6 @@ class CypherTaskbar {
             <div class="ct-settings-section-title"><i class="fas fa-portrait"></i> Custom Portrait</div>
             <label class="ct-toggle-row">Use Custom Portrait <input type="checkbox" id="ps-custom-portrait-en" ${customPortraitEnabled?"checked":""}></label>
             <label class="ct-toggle-row">Use Actor File Container <input type="checkbox" id="ps-portrait-files-en" ${portraitFilesEnabled?"checked":""}></label>
-            <label class="ct-toggle-row" title="Warm flicker tint on the portrait, driven by scene darkness — Calendaria's clock keeps it in sync">Torch Mode (darkness) <input type="checkbox" id="ps-torch-mode" ${torchMode?"checked":""}></label>
             <div class="ct-settings-section${customPortraitEnabled?"":" ct-hidden"}" id="ps-custom-portrait-group">
               <label class="ct-file-input-row">
                 <span>Image Path or URL</span>
@@ -4184,7 +3773,6 @@ class CypherTaskbar {
         await this._ss("customPortraitEnabled", popup.querySelector("#ps-custom-portrait-en").checked);
         await this._ss("customPortraitImage",   popup.querySelector("#ps-custom-portrait-path").value.trim());
         await this._ss("portraitFilesEnabled", popup.querySelector("#ps-portrait-files-en").checked);
-        await this._ss("torchMode", popup.querySelector("#ps-torch-mode").checked);
         await this._ss("portraitAnimFrequency", parseInt(popup.querySelector("#ps-anim-freq").value));
         await this._ss("portraitAnimLoops", parseInt(popup.querySelector("#ps-anim-loops").value));
         await this._ss("portraitSpaceTransparent", popup.querySelector("#ps-space-transparent").checked);
@@ -4578,122 +4166,6 @@ class CypherTaskbar {
     popup.style.top = `${top}px`;
   }
 
-  /* Position a settings popup to the RIGHT of the menu (panel) it belongs to.
-     Anchor priority: options.anchor → panel/float containing the click →
-     options.fallbackSelector taskbar button → mouse position.
-     Flips to the left side of the anchor when there's no room on the right.
-     Call right after the popup is appended (a rAF pass clamps once laid out). */
-  _positionPopupRightOfMenu(popup, event = null, options = {}) {
-    const margin = 8;
-    const gap = Number(options.gap ?? 10);
-    popup.style.transform = "none";
-    popup.style.right = "";
-    popup.style.bottom = "";
-
-    // A position the user dragged this popup to before wins over anchoring
-    const saved = this._getSavedPopupPos(popup.id);
-
-    let anchor = options.anchor || null;
-    const above = options.above === true;
-    if (!anchor && !above && event?.target?.closest) {
-      anchor = event.target.closest(".ct-panel, .cgt-panel, #ct-char-float");
-    }
-    if (!anchor && options.fallbackSelector) {
-      anchor = document.querySelector(options.fallbackSelector);
-    }
-    if (saved) {
-      popup.style.left = `${saved.left}px`;
-      popup.style.top = `${saved.top}px`;
-    } else if (anchor) {
-      const r = anchor.getBoundingClientRect();
-      if (above) {
-        // provisional spot; rAF pass re-anchors with real dimensions
-        popup.style.left = `${Math.max(margin, r.right - 320)}px`;
-        popup.style.top = `${Math.max(margin, r.top - 240)}px`;
-      } else {
-        popup.style.left = `${r.right + gap}px`;
-        popup.style.top = `${Math.max(margin, r.top)}px`;
-      }
-    } else {
-      popup.style.left = `${Math.max(margin, event?.clientX ?? 120)}px`;
-      popup.style.top = `${Math.max(margin, event?.clientY ?? 120)}px`;
-    }
-    requestAnimationFrame(() => {
-      const rect = popup.getBoundingClientRect();
-      if (!rect.width) return;
-      let left = parseFloat(popup.style.left) || margin;
-      let top = parseFloat(popup.style.top) || margin;
-      if (!saved && above && anchor) {
-        // Sit above the anchor (taskbar), right-aligned to it; drop below if no room
-        const r = anchor.getBoundingClientRect();
-        top = r.top - rect.height - gap;
-        if (top < margin) top = r.bottom + gap;
-        left = r.right - rect.width;
-      } else if (!saved && left + rect.width > window.innerWidth - margin && anchor) {
-        // Flip to the left of the anchor if overflowing right and there's room
-        const flipped = anchor.getBoundingClientRect().left - rect.width - gap;
-        if (flipped >= margin) left = flipped;
-      }
-      popup.style.left = `${Math.min(Math.max(margin, left), Math.max(margin, window.innerWidth - rect.width - margin))}px`;
-      popup.style.top = `${Math.min(Math.max(margin, top), Math.max(margin, window.innerHeight - rect.height - margin))}px`;
-    });
-    this._bindSettingsPopupDrag(popup);
-  }
-
-  /** Client-local remembered popup position (one per popup id). */
-  _getSavedPopupPos(popupId) {
-    if (!popupId) return null;
-    try {
-      const raw = localStorage.getItem(`ct-popup-pos-${popupId}`);
-      if (!raw) return null;
-      const pos = JSON.parse(raw);
-      if (typeof pos?.left !== "number" || typeof pos?.top !== "number") return null;
-      return pos;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Make a settings popup draggable by its header and remember where the
-   * user left it (per client). The drag is clamped to the viewport; the
-   * remembered position takes over the next time the popup opens.
-   */
-  _bindSettingsPopupDrag(popup) {
-    if (!popup || popup._ctDragBound || !popup.id) return;
-    popup._ctDragBound = true;
-    const header = popup.querySelector(".ct-popup-header");
-    if (!header) return;
-    const key = `ct-popup-pos-${popup.id}`;
-    let dragState = null;
-    const onMove = (ev) => {
-      if (!dragState) return;
-      const rect = popup.getBoundingClientRect();
-      const left = Math.min(Math.max(8, ev.clientX - dragState.offsetX), Math.max(8, window.innerWidth - rect.width - 8));
-      const top = Math.min(Math.max(8, ev.clientY - dragState.offsetY), Math.max(8, window.innerHeight - rect.height - 8));
-      popup.style.left = `${left}px`;
-      popup.style.top = `${top}px`;
-      popup.style.transform = "none";
-    };
-    const onUp = () => {
-      dragState = null;
-      document.body.classList.remove("ct-dragging-popup");
-      try {
-        const rect = popup.getBoundingClientRect();
-        localStorage.setItem(key, JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }));
-      } catch { /* storage unavailable — drag still works */ }
-    };
-    header.addEventListener("mousedown", (ev) => {
-      if (ev.target.closest("button, input, select, a")) return;
-      ev.preventDefault();
-      const rect = popup.getBoundingClientRect();
-      dragState = { offsetX: ev.clientX - rect.left, offsetY: ev.clientY - rect.top };
-      document.body.classList.add("ct-dragging-popup");
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp, { once: true });
-    });
-  }
-
   _openTaskbarSettings() {
     document.querySelector("#ct-taskbar-settings-popup")?.remove();
     const h     = this._gs("taskbarHeight");
@@ -4710,9 +4182,22 @@ class CypherTaskbar {
     const gtOffset = this._gs("galleryTabsOffsetX") ?? 0;
     const ownedPCs = this._getOwnedPCs();
     const selectedActorId = game.settings.get(MODULE_ID, "selectedActorId") ?? "";
+    const barRect = this.element.getBoundingClientRect();
     const popup = document.createElement("div");
     popup.id = "ct-taskbar-settings-popup";
-    popup.classList.add("ct-popup", "ct-settings-popup");
+    popup.classList.add("ct-popup");
+    // Position: right-bottom corner above the Settings button
+    const settingsBtn = this.element?.querySelector("#ct-btn-settings");
+    const btnRect = settingsBtn?.getBoundingClientRect();
+    if (btnRect) {
+      popup.style.right = `${window.innerWidth - btnRect.right}px`;
+      popup.style.bottom = `${window.innerHeight - btnRect.top + 8}px`;
+      popup.style.left = "auto";
+    } else {
+      popup.style.right = "16px";
+      popup.style.bottom = `${window.innerHeight - barRect.top + 8}px`;
+      popup.style.left = "auto";
+    }
     const lastTab = this._gs("lastSettingsTab") || "general";
     const tabs = ["general","sections","fonts","gallery","minimenu","icons","cash"];
     const activeTab = tabs.includes(lastTab) ? lastTab : "general";
@@ -4813,7 +4298,6 @@ class CypherTaskbar {
         </div>
       </div>`;
     document.body.appendChild(popup);
-    this._positionPopupRightOfMenu(popup, null, { fallbackSelector: "#ct-btn-settings", above: true });
     popup.querySelectorAll(".ct-popup-tab").forEach(btn => {
       btn.addEventListener("click", async () => {
         const tab = btn.dataset.tab;
@@ -5112,10 +4596,21 @@ class CypherTaskbar {
     document.querySelector("#ct-menu-icon-settings-popup")?.remove();
     const popup = document.createElement("div");
     popup.id = "ct-menu-icon-settings-popup";
-    popup.classList.add("ct-popup", "ct-settings-popup");
+    popup.classList.add("ct-popup");
     popup.style.minWidth = "220px";
-    // Anchored to the right of the clicked taskbar button (set after append)
+
+    // Position above the clicked button
     const btn = e.currentTarget;
+    const rect = btn?.getBoundingClientRect?.();
+    if (rect) {
+      popup.style.left = `${rect.left + rect.width / 2}px`;
+      popup.style.bottom = `${window.innerHeight - rect.top + 8}px`;
+      popup.style.top = "auto";
+      popup.style.transform = "translateX(-50%)";
+    } else {
+      popup.style.left = `${e.clientX}px`;
+      popup.style.top = `${e.clientY - 10}px`;
+    }
 
     const s = this._getIconSettings(panelKey);
     const panelNames = { persona: "Persona", skills: "Skills", abilities: "Abilities", combat: "Combat", equipment: "Equipment", spells: "Spells" };
@@ -5131,7 +4626,6 @@ class CypherTaskbar {
         <button class="ct-btn" id="mi-reset" style="margin-top:6px;font-size:0.7em;"><i class="fas fa-undo"></i> Reset to Defaults</button>
       </div>`;
     document.body.appendChild(popup);
-    this._positionPopupRightOfMenu(popup, null, { anchor: btn });
 
     const apply = async () => {
       await this._setIconSetting(panelKey, "iconSize", parseInt(popup.querySelector("#mi-size").value));
@@ -5673,11 +5167,7 @@ class CypherTaskbar {
     popup.querySelector("#ct-book-my-tasks")?.addEventListener("click", () => {
       popup.remove();
       if (game.cypherTaskbar?.instance) {
-        if (typeof game.cypherTaskbar.instance._toggleTasksPanel === "function") {
-          game.cypherTaskbar.instance._toggleTasksPanel();
-        } else {
-          ui.notifications.info("Tasks panel not implemented yet.");
-        }
+        game.cypherTaskbar.instance._toggleTasksPanel?.() ?? ui.notifications.info("Tasks panel not implemented yet.");
       } else {
         ui.notifications.warn("Taskbar not available.");
       }
@@ -5861,7 +5351,12 @@ class CypherTaskbar {
 
     const popup = document.createElement("div");
     popup.id = "ct-book-settings-popup";
-    popup.className = "ct-popup ct-settings-popup";
+    popup.className = "ct-popup";
+
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
 
     popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-cog"></i> Book Menu Settings <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -5911,7 +5406,6 @@ class CypherTaskbar {
         </div>
       </div>`;
     document.body.appendChild(popup);
-    this._positionPopupRightOfMenu(popup, null, { anchor: bookPanel });
 
     const collectState = () => ({
       bookBtnIconColor: popup.querySelector("#bset-btn-icon-color").value,
@@ -6851,7 +6345,20 @@ class CypherTaskbar {
     if (!actor) { ui.notifications.warn("No character assigned."); return; }
     const esc = foundry.utils.escapeHTML;
 
-    // Wrapper holds popup + side tabs (horizontal layout)
+    // Read shared documents from GM taskbar world setting
+    let sharedDocs = [];
+    try {
+      const gmMod = game.modules.get("cypher-gm-taskbar");
+      if (gmMod?.active) {
+        const raw = game.settings.get("cypher-gm-taskbar", "gmMenuDocs");
+        const parsed = JSON.parse(raw || "{}");
+        sharedDocs = parsed.shared || [];
+      }
+    } catch {
+      sharedDocs = [];
+    }
+
+    // Wrapper holds popup + side buttons (horizontal layout)
     const wrapper = document.createElement("div");
     wrapper.id = "ct-portrait-menu-wrapper";
     wrapper.style.position = "fixed";
@@ -6864,155 +6371,60 @@ class CypherTaskbar {
     popup.id = "ct-portrait-menu-popup";
     popup.className = "ct-popup ct-portrait-menu-popup";
     popup.style.position = "relative";
+    popup.style.width = "500px";
+    popup.style.height = "600px";
     popup.style.overflow = "hidden";
     popup.style.display = "flex";
     popup.style.flexDirection = "column";
 
-    // Read last opened tab (client preference)
-    let lastTab = "shared";
-    try { lastTab = game.settings.get("cypher-taskbar", "portraitMenuLastTab") || "shared"; } catch { /* default */ }
-    const _validTabs = ["shared", "character", "gm-tasks", "my-tasks"];
-    if (!_validTabs.includes(lastTab)) lastTab = "shared";
+    const itemsHtml = sharedDocs.length === 0
+      ? `<div class="ct-portrait-menu-empty">No shared documents</div>`
+      : sharedDocs.map(uuid => {
+          try {
+            const doc = fromUuidSync(uuid);
+            if (!doc) return null;
+            const img = doc.img || "icons/svg/book.svg";
+            return `<div class="ct-portrait-menu-item" data-uuid="${uuid}">
+              <img src="${img}" alt="" draggable="false">
+              <span>${esc(doc.name)}</span>
+            </div>`;
+          } catch { return null; }
+        }).filter(Boolean).join("");
 
-    // Default popup dimensions — 65% width, 95% height
-    const _defaultW = "65vw";
-    const _defaultH = "95vh";
-
-    // Resize helper — CHARACTER tab needs more width for the sheet
-    const _resizeForTab = (tab) => {
-      if (tab === "character") {
-        popup.style.width = "85vw";
-        popup.style.height = "95vh";
-      } else {
-        popup.style.width = _defaultW;
-        popup.style.height = _defaultH;
-      }
-    };
-
-    // Apply initial size for restored tab
-    _resizeForTab(lastTab);
-
-    // Title/color maps
-    const _titles = {
-      "shared": '<i class="fas fa-book-open"></i> SHARED',
-      "character": '<i class="fas fa-user"></i> CHARACTER',
-      "gm-tasks": '<i class="fas fa-user-shield"></i> GM TASKS',
-      "my-tasks": '<i class="fas fa-clipboard-list"></i> MY TASKS'
-    };
-    const _titleColors = {
-      "shared": "#4ade80",
-      "character": "#6bbdff",
-      "gm-tasks": "#c8a96e",
-      "my-tasks": "#c8a96e"
-    };
-
-    // Popup content area — switches between panes
-    const _paneDisplay = (tab) => tab === "my-tasks" ? "flex" : (tab === "character" ? "flex" : "block");
     popup.innerHTML = `
-      <div class="ct-popup-header ct-portrait-menu-header">
-        <span id="ct-portrait-menu-title" style="color:${_titleColors[lastTab]}">${_titles[lastTab]}</span>
-        <div class="ct-popup-header-actions">
-          <button class="ct-popup-action-btn ct-pm-add-btn" id="ct-pm-add" title="Add" style="display:${lastTab === "shared" || lastTab === "character" ? "none" : ""};"><i class="fas fa-plus"></i></button>
-          <button class="ct-popup-close" id="ct-portrait-menu-close" title="Close"><i class="fas fa-times"></i></button>
-        </div>
+      <div class="ct-popup-header">
+        <span style="color:#4ade80"><i class="fas fa-book-open"></i> SHARED</span>
+        <button class="ct-popup-close" id="ct-portrait-menu-close" title="Close"><i class="fas fa-times"></i></button>
       </div>
-      <div class="ct-portrait-menu-panes" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;">
-        <div class="ct-portrait-menu-pane${lastTab === "shared" ? " is-active" : ""}" data-pane="shared" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;${lastTab !== "shared" ? "display:none;" : ""}"></div>
-        <div class="ct-portrait-menu-pane${lastTab === "character" ? " is-active" : ""}" data-pane="character" style="flex:1;min-height:0;overflow:hidden;${_paneDisplay(lastTab === "character" ? "character" : "hidden")};"></div>
-        <div class="ct-portrait-menu-pane${lastTab === "gm-tasks" ? " is-active" : ""}" data-pane="gm-tasks" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;${lastTab !== "gm-tasks" ? "display:none;" : ""}"></div>
-        <div class="ct-portrait-menu-pane${lastTab === "my-tasks" ? " is-active" : ""}" data-pane="my-tasks" style="flex:1;min-height:0;overflow:hidden;flex-direction:column;${lastTab !== "my-tasks" ? "display:none;" : "display:flex;"}">
-          <div class="ct-my-tasks-tabs" style="padding:4px 8px;border-bottom:1px solid rgba(200,169,110,0.1);">
-            <button class="ct-my-tasks-tab is-active" data-my-tab="active"><i class="fas fa-list"></i> ACTIVE</button>
-            <button class="ct-my-tasks-tab" data-my-tab="archive"><i class="fas fa-box-archive"></i> ARCHIVE</button>
-          </div>
-          <div class="ct-popup-body ct-my-tasks-body" id="ct-portrait-my-tasks-list" style="flex:1;overflow-y:auto;min-height:0;"></div>
-        </div>
+      <div class="ct-popup-body" style="overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;">
+        ${itemsHtml}
       </div>`;
 
-    // Side tabs attached to right border of popup
+    // Side buttons attached to right border of popup (vertical tabs)
     const btnContainer = document.createElement("div");
     btnContainer.className = "ct-portrait-menu-side-btns";
     btnContainer.innerHTML = `
-      <button class="ct-portrait-side-btn ct-portrait-btn-shared${lastTab === "shared" ? " is-active" : ""}" data-pm-tab="shared" title="Shared Documents"><i class="fas fa-book-open"></i><span>SHARED</span></button>
-      <button class="ct-portrait-side-btn ct-portrait-btn-character${lastTab === "character" ? " is-active" : ""}" data-pm-tab="character" title="Character"><i class="fas fa-user"></i><span>CHARACTER</span></button>
-      <button class="ct-portrait-side-btn ct-portrait-btn-gm${lastTab === "gm-tasks" ? " is-active" : ""}" data-pm-tab="gm-tasks" title="GM Tasks"><i class="fas fa-user-shield"></i><span>GM TASKS</span></button>
-      <button class="ct-portrait-side-btn ct-portrait-btn-my${lastTab === "my-tasks" ? " is-active" : ""}" data-pm-tab="my-tasks" title="My Tasks"><i class="fas fa-clipboard-list"></i><span>MY TASKS</span></button>
+      <button class="ct-portrait-side-btn ct-portrait-btn-gm" id="ct-portrait-gm-tasks" title="Open GM Tasks"><i class="fas fa-user-shield"></i><span>GM TASKS</span></button>
+      <button class="ct-portrait-side-btn ct-portrait-btn-my" id="ct-portrait-my-tasks" title="Open My Tasks"><i class="fas fa-clipboard-list"></i><span>MY TASKS</span></button>
     `;
 
     wrapper.appendChild(popup);
     wrapper.appendChild(btnContainer);
     document.body.appendChild(wrapper);
 
-    // Center on screen — popup is now 65vw × 95vh
-    wrapper.style.left = "50%";
-    wrapper.style.top = "50%";
-    wrapper.style.transform = "translate(-50%, -50%)";
-    wrapper.style.bottom = "auto";
+    // Position above the source button
+    if (sourceBtn) {
+      const rect = sourceBtn.getBoundingClientRect();
+      wrapper.style.left = `${rect.left}px`;
+      wrapper.style.bottom = `${window.innerHeight - rect.top + 6}px`;
+      wrapper.style.top = "auto";
+    } else {
+      wrapper.style.left = "50%";
+      wrapper.style.top = "50%";
+      wrapper.style.transform = "translate(-50%, -50%)";
+    }
 
     requestAnimationFrame(() => popup.classList.add("is-open"));
-
-    // ── Populate SHARED pane (default) ──
-    this._renderSharedPane(popup.querySelector('[data-pane="shared"]'));
-
-    // ── Populate CHARACTER pane ──
-    this._renderCharacterPane(popup.querySelector('[data-pane="character"]'));
-
-    // ── Populate GM TASKS pane ──
-    this._renderGMTasksList(popup.querySelector('[data-pane="gm-tasks"]'));
-
-    // ── Populate MY TASKS pane ──
-    this._renderMyTasksList(popup.querySelector("#ct-portrait-my-tasks-list"), "active");
-
-    // ── Side tab switching ──
-    btnContainer.querySelectorAll(".ct-portrait-side-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const target = btn.dataset.pmTab;
-
-        // Remember this tab as the default for next open
-        try { game.settings.set("cypher-taskbar", "portraitMenuLastTab", target); } catch { /* ignore */ }
-
-        // Highlight active side tab
-        btnContainer.querySelectorAll(".ct-portrait-side-btn").forEach(b => b.classList.remove("is-active"));
-        btn.classList.add("is-active");
-
-        // Switch pane
-        popup.querySelectorAll(".ct-portrait-menu-pane").forEach(pane => {
-          const isTarget = pane.dataset.pane === target;
-          pane.style.display = isTarget ? (target === "my-tasks" || target === "character" ? "flex" : "block") : "none";
-          pane.classList.toggle("is-active", isTarget);
-        });
-
-        // Update header title
-        const titleEl = popup.querySelector("#ct-portrait-menu-title");
-        titleEl.innerHTML = _titles[target];
-        titleEl.style.color = _titleColors[target];
-
-        // Show/hide + button (only for tasks tabs)
-        const addBtn = popup.querySelector("#ct-pm-add");
-        addBtn.style.display = (target === "shared" || target === "character") ? "none" : "";
-        addBtn.title = target === "gm-tasks" ? "New GM Task" : "Create Task";
-        addBtn.dataset.mode = target;
-
-        // Resize popup for CHARACTER tab (needs more width for sheet)
-        _resizeForTab(target);
-      });
-    });
-
-    // ── Add button ──
-    popup.querySelector("#ct-pm-add")?.addEventListener("click", () => {
-      const mode = popup.querySelector("#ct-pm-add").dataset.mode;
-      if (mode === "gm-tasks") this._openGMTaskForm();
-      else if (mode === "my-tasks") this._openMyTaskEditor();
-    });
-
-    // ── My Tasks sub-tab switching ──
-    popup.querySelectorAll(".ct-my-tasks-tab").forEach(tab => {
-      tab.addEventListener("click", () => {
-        popup.querySelectorAll(".ct-my-tasks-tab").forEach(t => t.classList.remove("is-active"));
-        tab.classList.add("is-active");
-        this._renderMyTasksList(popup.querySelector("#ct-portrait-my-tasks-list"), tab.dataset.myTab);
-      });
-    });
 
     // Slide-out helper
     const _closePopup = () => {
@@ -7034,102 +6446,31 @@ class CypherTaskbar {
     popup.querySelector("#ct-portrait-menu-close")?.addEventListener("click", () => {
       _closePopup();
     });
-  }
-
-  /** Render the SHARED pane content (shared documents from GM taskbar) */
-  _renderSharedPane(container) {
-    if (!container) return;
-    const esc = foundry.utils.escapeHTML;
-    let sharedDocs = [];
-    try {
-      const gmMod = game.modules.get("cypher-gm-taskbar");
-      if (gmMod?.active) {
-        const raw = game.settings.get("cypher-gm-taskbar", "gmMenuDocs");
-        const parsed = JSON.parse(raw || "{}");
-        sharedDocs = parsed.shared || [];
-      }
-    } catch {
-      sharedDocs = [];
-    }
-
-    const itemsHtml = sharedDocs.length === 0
-      ? `<div class="ct-portrait-menu-empty">No shared documents</div>`
-      : sharedDocs.map(uuid => {
-          try {
-            const doc = fromUuidSync(uuid);
-            if (!doc) return null;
-            const img = doc.img || "icons/svg/book.svg";
-            return `<div class="ct-portrait-menu-item" data-uuid="${uuid}">
-              <img src="${img}" alt="" draggable="false">
-              <span>${esc(doc.name)}</span>
-            </div>`;
-          } catch { return null; }
-        }).filter(Boolean).join("");
-
-    container.innerHTML = itemsHtml;
 
     // Click to open journal
-    container.querySelectorAll(".ct-portrait-menu-item").forEach(item => {
+    popup.querySelectorAll(".ct-portrait-menu-item").forEach(item => {
       item.addEventListener("click", () => {
         const doc = fromUuidSync(item.dataset.uuid);
         if (doc) doc.sheet.render(true);
       });
     });
-  }
 
-  /** Render the CHARACTER pane — displays the GM-uploaded HTML sheet for this actor via iframe (raw, no sanitization) */
-  _renderCharacterPane(container) {
-    if (!container) return;
-    const actor = this.actor;
-    if (!actor) {
-      container.innerHTML = `<div class="ct-portrait-menu-empty"><i class="fas fa-user-slash"></i> No character assigned.</div>`;
-      return;
-    }
+    // GM TASKS button
+    // GM TASKS button — open GM Tasks panel
+    btnContainer.querySelector("#ct-portrait-gm-tasks")?.addEventListener("click", () => {
+      _closePopup();
+      this._openGMTasksPanel();
+    });
 
-    // Read sheet from GM taskbar world setting
-    let sheet = null;
-    try {
-      const gmMod = game.modules.get("cypher-gm-taskbar");
-      if (gmMod?.active) {
-        const raw = game.settings.get("cypher-gm-taskbar", "playerSheets");
-        const parsed = JSON.parse(raw || "{}");
-        sheet = parsed[actor.id] || null;
+    // MY TASKS button
+    btnContainer.querySelector("#ct-portrait-my-tasks")?.addEventListener("click", () => {
+      _closePopup();
+      if (game.cypherTaskbar?.instance?._toggleTasksPanel) {
+        game.cypherTaskbar.instance._toggleTasksPanel();
+      } else {
+        ui.notifications.warn("Task panel not available.");
       }
-    } catch { sheet = null; }
-
-    if (!sheet?.html) {
-      container.innerHTML = `<div class="ct-portrait-menu-empty"><i class="fas fa-id-card"></i> No character sheet uploaded for ${foundry.utils.escapeHTML(actor.name)}.</div>`;
-      return;
-    }
-
-    // Render raw HTML in an isolated iframe — fills 100% of pane, scaled to fit
-    container.style.display = "flex";
-    container.innerHTML = `<iframe class="ct-character-sheet-frame" sandbox="allow-same-origin allow-scripts" style="width:100%;height:100%;border:none;display:block;"></iframe>`;
-    const iframe = container.querySelector("iframe");
-    if (iframe) {
-      iframe.srcdoc = sheet.html;
-      // After load, scale the sheet content to fit the iframe width
-      iframe.addEventListener("load", () => {
-        try {
-          const doc = iframe.contentDocument;
-          if (!doc) return;
-          const body = doc.body;
-          if (!body) return;
-          // Inject a meta viewport + scaling styles so the sheet fits
-          const head = doc.head || doc.querySelector("head");
-          if (head) {
-            const style = doc.createElement("style");
-            style.textContent = `
-              html, body { margin:0; padding:0; overflow-x:hidden; }
-              body { transform-origin: top left; }
-              img { max-width: 100%; height: auto; }
-              * { box-sizing: border-box; }
-            `;
-            head.appendChild(style);
-          }
-        } catch { /* cross-origin restrictions */ }
-      });
-    }
+    });
   }
 
   /**
@@ -7542,7 +6883,12 @@ class CypherTaskbar {
 
     const popup = document.createElement("div");
     popup.id = "ct-stuff-settings-popup";
-    popup.className = "ct-popup ct-settings-popup";
+    popup.className = "ct-popup";
+
+    // Position centered on screen
+    popup.style.left = "50%";
+    popup.style.top = "50%";
+    popup.style.transform = "translate(-50%, -50%)";
 
     const tabOptions = tabs.map((t, i) => `<option value="${i}" ${i === state.stuffDefaultTab ? "selected" : ""}>${foundry.utils.escapeHTML(t.name)}</option>`).join('');
 
@@ -7630,7 +6976,6 @@ class CypherTaskbar {
         </div>
       </div>`;
     document.body.appendChild(popup);
-    this._positionPopupRightOfMenu(popup, null, { anchor: stuffPanel });
 
     const collectState = () => ({
       stuffMenuShadowColor: popup.querySelector("#stm-shadow-color").value,
@@ -8382,17 +7727,6 @@ class CypherTaskbar {
       rollMode: game.settings.get('core', 'rollMode')
     });
 
-    // Record for dice history strip
-    this._recordRoll({
-      type: "skill",
-      label: item?.name ?? "Skill",
-      total,
-      detail: `vs ${summary.finalDifficulty}`,
-      tooltip: `Skill: ${item?.name} — Roll ${total} vs Difficulty ${summary.finalDifficulty} (Target ${summary.target || 0})${specialEvent ? ` — ${specialEvent.title}!` : ''}`,
-      flavor,
-      success: achievedDifficulty >= summary.finalDifficulty
-    });
-
     // ── GM adjudication: does this skill use cost a utility pip? ──
     // Fired for player-owned rolls while the combat bar is live (the utility
     // pip only exists in combat). The GM Taskbar owns the review dialog; the
@@ -8425,23 +7759,13 @@ class CypherTaskbar {
     // Opening the roll dialog closes the combat menu panel (dialog stays open).
     try { this._closePanel?.(); } catch { /* panel already closed */ }
     const baseDamage = Number(item?.system?.basic?.damage ?? item?.system?.damage ?? 0) || 0;
-    // cypher-cool-items ATTACK ROLL preset: GM-configured pool multiselect +
-    // ease/hindrance. When pools are configured they replace the dialog's pool
-    // options; the ease value prefills Other Ease / Hindrance.
-    const cci = item?.getFlag?.("cypher-cool-items", "data") || {};
-    const cciPools = Array.isArray(cci.attackRoll) ? cci.attackRoll.filter(p => ["might", "speed", "intellect"].includes(p)) : [];
-    const poolChoices = cciPools.length ? cciPools.map(p => p.charAt(0).toUpperCase() + p.slice(1)) : ["Might", "Speed", "Intellect"];
-    const detectedPool = this._detectSkillPoolMeta(item).pool;
-    const defaultPool = poolChoices.includes(detectedPool) ? detectedPool : poolChoices[0];
-    const easeVal = Math.max(0, Math.min(2, Number(cci.attackEase?.value) || 0));
-    const easeDir = cci.attackEase?.direction === "hindered" ? "hindered" : "eased";
-    const presetEased = easeVal > 0 && easeDir === "eased" ? easeVal : 0;
-    const presetHindered = easeVal > 0 && easeDir === "hindered" ? easeVal : 0;
+    const defaultPool = this._detectSkillPoolMeta(item).pool;
     const effortCap = Math.max(0, Math.min(6, Number(actor?.system?.basic?.effort ?? actor?.system?.advancement?.effort ?? 0) || 0));
     const ratingLabel = this._skillRatingLabel(item);
     const skillSteps = this._skillStepFromRating(item);
     const title = `Attack Roll: ${item.name}`;
     const diffDefault = presetDifficulty ?? 0;
+    const gm = this._getGMAssetHinder(actor);
 
     const content = `
       <form class="ct-native-skill-roll-form ct-native-attack-roll-form">
@@ -8454,11 +7778,9 @@ class CypherTaskbar {
             </div>
             <div class="ct-skill-roll-badges">
               <span class="ct-skill-roll-badge">Pool: ${foundry.utils.escapeHTML(defaultPool)}</span>
-              ${cciPools.length > 1 ? `<span class="ct-skill-roll-badge ct-atk-pool-badge" title="Configured on the item (Cypher Cool Items → Attack Roll)"><i class="fas fa-list-check"></i> Pools: ${cciPools.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(" / ")}</span>` : ''}
-              ${presetEased ? `<span class="ct-skill-roll-badge ct-atk-ease-badge"><i class="fas fa-arrow-down"></i> Eased ×${presetEased} (item)</span>` : ''}
-              ${presetHindered ? `<span class="ct-skill-roll-badge ct-atk-hinder-badge"><i class="fas fa-arrow-up"></i> Hindered ×${presetHindered} (item)</span>` : ''}
               <span class="ct-skill-roll-badge">Rating: ${foundry.utils.escapeHTML(ratingLabel)}</span>
               <span class="ct-skill-roll-badge">Base Damage: ${baseDamage}</span>
+              ${gm.assets > 0 || gm.hinders > 0 ? `<span class="ct-skill-roll-badge ct-gm-ah-badge" title="Assigned by the GM from your portrait in the GM Taskbar — already applied below"><i class="fas fa-gavel"></i> GM: ${gm.assets > 0 ? `+${gm.assets} Asset` : ''}${gm.assets > 0 && gm.hinders > 0 ? ' · ' : ''}${gm.hinders > 0 ? `+${gm.hinders} Hindrance` : ''}</span>` : ''}
               ${targetInfo ? `<span class="ct-skill-roll-badge ct-atk-target-badge" title="${foundry.utils.escapeHTML(targetInfo.defenseName)} — Level ${targetInfo.level}${targetInfo.armorMod ? ` +${targetInfo.armorMod}` : ''}"><i class="fas fa-crosshairs"></i> Target: ${foundry.utils.escapeHTML(targetInfo.name)} · Defense ${targetInfo.difficulty}</span>` : ''}
             </div>
           </div>
@@ -8466,7 +7788,7 @@ class CypherTaskbar {
           <div class="ct-skill-roll-grid">
             <label class="ct-skill-roll-field">
               <span>Pool</span>
-              <select name="pool">${poolChoices.map(p => `<option value="${p}" ${p === defaultPool ? 'selected' : ''}>${p}</option>`).join('')}</select>
+              <select name="pool">${['Might','Speed','Intellect'].map(p => `<option value="${p}" ${p === defaultPool ? 'selected' : ''}>${p}</option>`).join('')}</select>
             </label>
             <label class="ct-skill-roll-field">
               <span>Difficulty</span>
@@ -8474,7 +7796,7 @@ class CypherTaskbar {
             </label>
             <label class="ct-skill-roll-field">
               <span>Assets</span>
-              <select name="assets">${this._skillRollSelectOptions(0, 2, 0)}</select>
+              <select name="assets">${this._skillRollSelectOptions(0, 2, gm.assets)}</select>
             </label>
             <label class="ct-skill-roll-field">
               <span>Effort (Attack)</span>
@@ -8486,11 +7808,11 @@ class CypherTaskbar {
             </label>
             <label class="ct-skill-roll-field">
               <span>Other Ease</span>
-              <select name="easedBy">${this._skillRollSelectOptions(0, 6, presetEased)}</select>
+              <select name="easedBy">${this._skillRollSelectOptions(0, 6, 0)}</select>
             </label>
             <label class="ct-skill-roll-field">
               <span>Hindrance</span>
-              <select name="hinderedBy">${this._skillRollSelectOptions(0, 6, presetHindered)}</select>
+              <select name="hinderedBy">${this._skillRollSelectOptions(0, 6, gm.hinders)}</select>
             </label>
             <label class="ct-skill-roll-field">
               <span>Bonus Damage</span>
@@ -8658,16 +7980,7 @@ class CypherTaskbar {
       rollMode: game.settings.get('core', 'rollMode')
     });
 
-    // Record for dice history strip
-    this._recordRoll({
-      type: "attack",
-      label: item?.name ?? "Attack",
-      total,
-      detail: hit ? `HIT · ${totalDamage} dmg` : "MISS",
-      tooltip: `Attack: ${item?.name} — Roll ${total} vs Difficulty ${summary.finalDifficulty} — ${hit ? `HIT · ${totalDamage} damage` : "MISS"}${specialEvent ? ` — ${specialEvent.title}!` : ''}`,
-      flavor,
-      success: hit
-    });
+    // ── Post-roll outcome: floater + target damage/effects + action pip ──
     try {
       const targetDoc = this._getFirstTargetTokenDoc();
       if (hit && targetDoc?.actor) await this._applyAttackToTarget(targetDoc, totalDamage, item);
@@ -8689,6 +8002,7 @@ class CypherTaskbar {
     const skillSteps = this._skillStepFromRating(item);
     const title = `Roll Skill: ${item.name} (${defaultPool})`;
     const diffDefault = presetDifficulty ?? 0;
+    const gm = this._getGMAssetHinder(actor);
     const content = `
       <form class="ct-native-skill-roll-form">
         <div class="ct-skill-roll-shell">
@@ -8699,6 +8013,7 @@ class CypherTaskbar {
               <span class="ct-skill-roll-badge">Pool: ${foundry.utils.escapeHTML(defaultPool)}</span>
               <span class="ct-skill-roll-badge">Rating: ${foundry.utils.escapeHTML(ratingLabel)}</span>
               <span class="ct-skill-roll-badge">Skill Step: ${skillSteps >= 0 ? '+' + skillSteps : String(skillSteps)}</span>
+              ${gm.assets > 0 || gm.hinders > 0 ? `<span class="ct-skill-roll-badge ct-gm-ah-badge" title="Assigned by the GM from your portrait in the GM Taskbar — already applied below"><i class="fas fa-gavel"></i> GM: ${gm.assets > 0 ? `+${gm.assets} Asset` : ''}${gm.assets > 0 && gm.hinders > 0 ? ' · ' : ''}${gm.hinders > 0 ? `+${gm.hinders} Hindrance` : ''}</span>` : ''}
             </div>
           </div>
           <div class="ct-skill-roll-grid">
@@ -8712,7 +8027,7 @@ class CypherTaskbar {
             </label>
             <label class="ct-skill-roll-field">
               <span>Assets</span>
-              <select name="assets">${this._skillRollSelectOptions(0, 2, 0)}</select>
+              <select name="assets">${this._skillRollSelectOptions(0, 2, gm.assets)}</select>
             </label>
             <label class="ct-skill-roll-field">
               <span>Effort</span>
@@ -8724,7 +8039,7 @@ class CypherTaskbar {
             </label>
             <label class="ct-skill-roll-field">
               <span>Hindrance</span>
-              <select name="hinderedBy">${this._skillRollSelectOptions(0, 6, 0)}</select>
+              <select name="hinderedBy">${this._skillRollSelectOptions(0, 6, gm.hinders)}</select>
             </label>
           </div>
           <div class="ct-skill-roll-summary" data-skill-roll-summary>
@@ -8872,12 +8187,9 @@ class CypherTaskbar {
     document.querySelectorAll(".ct-attack-tooltip").forEach(t => t.remove());
   }
 
-  /* Expend 1 ammo from the weapon's linked ammo item (cool-items attackAmmoItem flag).
-   * Silently no-ops for items with no ammo mechanics (melee, abilities) — no checks,
-   * no messages. Only genuinely ammo-using weapons get spend/warn behavior. */
+  /* Expend 1 ammo from the weapon's linked ammo item (cool-items attackAmmoItem flag). */
   async _expendAttackAmmo(weapon) {
     try {
-      if (this._weaponAmmoState?.(weapon) === null) return;
       const actor = this.actor;
       const cci = weapon?.getFlag?.("cypher-cool-items", "data") ?? {};
       const link = cci.ammoItem ?? cci.attackAmmoItem ?? null;
@@ -8898,9 +8210,6 @@ class CypherTaskbar {
       }
       const key = basic.quantity !== undefined ? "system.basic.quantity" : "system.basic.amount";
       await ammo.update({ [key]: qty - 1 });
-      if (qty - 1 <= 0) {
-        ui.notifications?.warn?.(`"${weapon.name}" is now out of ammo — it is locked until you restock ${ammo.name}.`);
-      }
     } catch (err) {
       console.error(`${MODULE_ID} | ammo expend failed`, err);
     }
@@ -8912,16 +8221,6 @@ class CypherTaskbar {
       if (!actor) return;
       const item = actor.items.get(attackId);
       if (!item) return;
-      // Ammo lock: ranged/ammo-using attacks cannot roll while NOT LOADED or AMMO SPENT.
-      const lock = this._weaponAmmoState?.(item);
-      if (lock === "unloaded") {
-        ui.notifications?.warn?.(`"${item.name}" is NOT LOADED — drag ammo onto it in Equipment → Weapons & Ammo.`);
-        return;
-      }
-      if (lock === "depleted") {
-        ui.notifications?.warn?.(`"${item.name}" is out of ammo — restock its linked ammo.`);
-        return;
-      }
       const gmDiff = this._getGMDifficulty(actor);
       const tgt = this._getTargetDefenseDifficulty();
       const diff = tgt ? tgt.difficulty : gmDiff;
@@ -8973,6 +8272,34 @@ class CypherTaskbar {
     if (hasIndividual) return Math.max(0, Math.min(15, individual));
     if (hasGlobal) return Math.max(0, Math.min(15, global));
     return null;
+  }
+
+  /* GM-assigned asset/hinder modifiers (Cypher GM Taskbar portrait buttons),
+     PLUS the party-wide global layer from the GM Taskbar's strip above the
+     difficulty box. The two stack and are clamped to rules caps
+     (2 assets / 6 hinders). Read fresh every time a roll dialog opens. */
+  _getGMAssetHinder(actor) {
+    if (!actor) return { assets: 0, hinders: 0 };
+    try {
+      const flagA = Math.max(0, Math.min(2, Number(actor.getFlag("cypher-gm-taskbar", "gmAssets") ?? 0) || 0));
+      const flagH = Math.max(0, Math.min(6, Number(actor.getFlag("cypher-gm-taskbar", "gmHinders") ?? 0) || 0));
+      // Party-wide layer — GM Taskbar instance first (always current), then settings
+      let gA = 0, gH = 0;
+      const gmt = window.cypherGMTaskbar;
+      if (gmt) {
+        gA = Number(gmt._globalAssets ?? 0) || 0;
+        gH = Number(gmt._globalHinders ?? 0) || 0;
+      } else {
+        try { gA = Number(game.settings.get("cypher-gm-taskbar", "globalAssets") ?? 0) || 0; } catch (e) { /* GM Taskbar not loaded */ }
+        try { gH = Number(game.settings.get("cypher-gm-taskbar", "globalHinders") ?? 0) || 0; } catch (e) { /* GM Taskbar not loaded */ }
+      }
+      return {
+        assets: Math.max(0, Math.min(2, flagA + gA)),
+        hinders: Math.max(0, Math.min(6, flagH + gH))
+      };
+    } catch {
+      return { assets: 0, hinders: 0 };
+    }
   }
 
   _getFirstTargetTokenDoc() {
@@ -9027,25 +8354,15 @@ class CypherTaskbar {
     return Number(cci.defenseArmor ?? 0) || 0;
   }
 
-  /* Armor reduction declared on the ATTACK item's cool-items data (0-5, CCI
-     ARMOR REDUCTION row). Effective armor = max(0, targetArmor - reduction). */
-  _attackArmorReduction(item) {
-    const cci = item?.getFlag?.("cypher-cool-items", "data") ?? {};
-    return Math.max(0, Math.min(5, Number(cci.armorReduction) || 0));
-  }
-
   /* Apply a successful attack's total damage to the targeted NPC (health pool,
-     armor-soaked after the item's armor reduction, floored at 0) and transfer
-     any Active Effects embedded on the attack item (deduped by name+origin so
-     repeat attacks don't stack copies). Players lack update rights on NPC
-     actors, so the mutation is routed to the GM via socket; the GM re-runs
-     the same math and applies it with GM rights. */
+     armor-soaked, floored at 0) and transfer any Active Effects embedded on the
+     attack item (deduped by name+origin so repeat attacks don't stack copies).
+     Players lack update rights on NPC actors, so the mutation is routed to the
+     GM via socket; the GM re-runs the same math and applies it with GM rights. */
   async _applyAttackToTarget(tokenDoc, totalDamage, item) {
     const target = tokenDoc?.actor;
     if (!target) return { applied: 0, armor: 0 };
-    const rawArmor = this._npcArmorRating(target);
-    const red = this._attackArmorReduction(item);
-    const armor = Math.max(0, rawArmor - red);
+    const armor = this._npcArmorRating(target);
     const applied = Math.max(0, Math.round(Number(totalDamage) || 0) - armor);
     if (!game.user?.isGM) {
       const uuid = tokenDoc.uuid ?? tokenDoc.document?.uuid;
@@ -9057,8 +8374,7 @@ class CypherTaskbar {
           userId: game.user.id,
           tokenUuid: uuid,
           itemUuid: item?.uuid ?? null,
-          totalDamage: Math.round(Number(totalDamage) || 0),
-          armorReduction: red
+          totalDamage: Math.round(Number(totalDamage) || 0)
         });
         const gmUsers = game.users?.filter(u => u.active && u.isGM) ?? [];
         if (!gmUsers.length) ui.notifications?.warn?.("No GM online — damage was not applied to the NPC.");
@@ -9315,9 +8631,8 @@ class CypherTaskbar {
   }
 
   /* Fancy 2-second fade in/out outcome window above a token (fall back to
-     screen center when the token isn't on screen).
-     `labels` optionally overrides the kicker/text (e.g. spells use SUCCESS/FAILURE). */
-  _showAttackOutcomeFloater(tokenDoc, hit, labels) {
+     screen center when the token isn't on screen). */
+  _showAttackOutcomeFloater(tokenDoc, hit) {
     try {
       const t = tokenDoc?.object ?? tokenDoc;
       const el = document.createElement("div");
@@ -9331,11 +8646,7 @@ class CypherTaskbar {
         placed = true;
       }
       if (!placed) el.classList.add("ct-attack-outcome-center");
-      const kicker = labels?.kicker ?? "ATTACK RESULT";
-      const text = hit
-        ? (labels?.successText ?? "YOU HIT!")
-        : (labels?.failureText ?? "YOU MISSED!");
-      el.innerHTML = `<div class="ct-attack-outcome-window"><div class="ct-attack-outcome-kicker">${kicker}</div><div class="ct-attack-outcome-text">${text}</div></div>`;
+      el.innerHTML = `<div class="ct-attack-outcome-window"><div class="ct-attack-outcome-kicker">ATTACK RESULT</div><div class="ct-attack-outcome-text">${hit ? "YOU HIT!" : "YOU MISSED!"}</div></div>`;
       document.body.appendChild(el);
       setTimeout(() => el.remove(), 2100);
     } catch (err) {
@@ -9366,6 +8677,7 @@ class CypherTaskbar {
     const defaultPool = rawPool.charAt(0).toUpperCase() + rawPool.slice(1);
     const presetDifficulty = Number.isFinite(Number(options?.presetDifficulty)) ? Math.max(0, Math.round(Number(options.presetDifficulty))) : null;
     const title = options.title || `Roll ${defaultPool}`;
+    const gm = this._getGMAssetHinder(actor);
     const difficultyLabels = {0:'0 \u2013 Routine',1:'1 \u2013 Simple',2:'2 \u2013 Standard',3:'3 \u2013 Demanding',4:'4 \u2013 Difficult',5:'5 \u2013 Challenging',6:'6 \u2013 Intimidating',7:'7 \u2013 Formidable',8:'8 \u2013 Heroic',9:'9 \u2013 Immortal',10:'10',11:'11',12:'12',13:'13',14:'14',15:'15 \u2013 Impossible'};
     const content = `
       <form class="ct-native-attribute-roll-form">
@@ -9377,6 +8689,7 @@ class CypherTaskbar {
               <span class="ct-skill-roll-badge">Pool: ${foundry.utils.escapeHTML(defaultPool)}</span>
               <span class="ct-skill-roll-badge">Current: ${poolValue}</span>
               <span class="ct-skill-roll-badge">Edge: ${edge}</span>
+              ${gm.assets > 0 || gm.hinders > 0 ? `<span class="ct-skill-roll-badge ct-gm-ah-badge" title="Assigned by the GM from your portrait in the GM Taskbar — already applied below"><i class="fas fa-gavel"></i> GM: ${gm.assets > 0 ? `+${gm.assets} Asset` : ''}${gm.assets > 0 && gm.hinders > 0 ? ' · ' : ''}${gm.hinders > 0 ? `+${gm.hinders} Hindrance` : ''}</span>` : ''}
             </div>
           </div>
           <div class="ct-skill-roll-grid">
@@ -9391,7 +8704,7 @@ class CypherTaskbar {
             </label>
             <label class="ct-skill-roll-field">
               <span>Assets</span>
-              <select name="assets">${this._skillRollSelectOptions(0, 2, 0)}</select>
+              <select name="assets">${this._skillRollSelectOptions(0, 2, gm.assets)}</select>
             </label>
             <label class="ct-skill-roll-field">
               <span>Effort</span>
@@ -9403,7 +8716,7 @@ class CypherTaskbar {
             </label>
             <label class="ct-skill-roll-field">
               <span>Hindrance</span>
-              <select name="hinderedBy">${this._skillRollSelectOptions(0, 6, 0)}</select>
+              <select name="hinderedBy">${this._skillRollSelectOptions(0, 6, gm.hinders)}</select>
             </label>
           </div>
           <div class="ct-skill-roll-summary" data-attr-roll-summary>
@@ -9541,18 +8854,6 @@ class CypherTaskbar {
       speaker: ChatMessage.getSpeaker({ actor }),
       flavor
     }, { rollMode: game.settings.get('core', 'rollMode') });
-
-    // Record for dice history strip
-    this._recordRoll({
-      type: "attribute",
-      label: statName ?? "Attribute",
-      total,
-      detail: `vs ${summary.finalDifficulty}`,
-      tooltip: `Attribute: ${statName} — Roll ${total} vs Difficulty ${summary.finalDifficulty} (Target ${summary.target || 0})${specialEvent ? ` — ${specialEvent.title}!` : ''}`,
-      flavor,
-      success: achievedDifficulty >= summary.finalDifficulty
-    });
-
     // Return the achieved total (die + assets/effort/ease modifiers) so
     // callers can compare it against the target number (difficulty × 3).
     return total + modifier;
@@ -10822,916 +10123,7 @@ class CypherTaskbar {
       ui.notifications.info(`Task "${title}" ${editIdx !== null ? 'updated' : 'created'}.`);
     });
   }
-
-  // ═════════════════════════════════════════════════════════════════════════════
-  //  MY TASKS SYSTEM — Player personal task management
-  // ═════════════════════════════════════════════════════════════════════════════
-
-  /** Get My Tasks from actor flags */
-  _getMyTasks() {
-    const v = this.actor?.getFlag?.(MODULE_ID, "myTasks");
-    return Array.isArray(v) ? v : [];
-  }
-
-  /** Save My Tasks to actor flags */
-  async _setMyTasks(tasks) {
-    if (!this.actor) return;
-    await this.actor.setFlag(MODULE_ID, "myTasks", tasks);
-  }
-
-  /** Toggle the My Tasks panel open/closed */
-  _toggleTasksPanel() {
-    const existing = document.querySelector("#ct-my-tasks-wrapper");
-    if (existing) { existing.remove(); return; }
-    this._openMyTasksPanel();
-  }
-
-  /** Priority config for My Tasks */
-  _myTaskPriorities() {
-    return {
-      yesterday: { label: "YESTERDAY", color: "#ff4444", icon: "fa-fire" },
-      soon:      { label: "SOON ENOUGH", color: "#ffaa00", icon: "fa-clock" },
-      wait:      { label: "CAN WAIT", color: "#44cc44", icon: "fa-coffee" }
-    };
-  }
-
-  /** Open the My Tasks panel */
-  _openMyTasksPanel() {
-    const existing = document.querySelector("#ct-my-tasks-wrapper");
-    if (existing) { existing.remove(); return; }
-
-    const wrapper = document.createElement("div");
-    wrapper.id = "ct-my-tasks-wrapper";
-
-    // Restore saved position or default to left side
-    const saved = this._getSavedPopupPos?.("ct-my-tasks-wrapper");
-    if (saved) {
-      wrapper.style.cssText = `position:fixed;z-index:10002;left:${saved.left}px;top:${saved.top}px;`;
-    } else {
-      wrapper.style.cssText = "position:fixed;z-index:10002;left:20px;top:50%;transform:translateY(-50%);";
-    }
-
-    const panel = document.createElement("div");
-    panel.id = "ct-my-tasks-panel";
-    panel.className = "ct-popup ct-my-tasks-panel";
-    panel.style.cssText = "position:relative;width:560px;height:680px;display:flex;flex-direction:column;overflow:hidden;";
-
-    const tasks = this._getMyTasks();
-    const esc = foundry.utils.escapeHTML;
-
-    panel.innerHTML = `
-      <div class="ct-popup-header">
-        <span style="color:#c8a96e"><i class="fas fa-clipboard-list"></i> MY TASKS</span>
-        <div class="ct-popup-header-actions">
-          <button class="ct-popup-action-btn" id="ct-my-tasks-add" title="Create Task"><i class="fas fa-plus"></i></button>
-          <button class="ct-popup-close" id="ct-my-tasks-close" title="Close"><i class="fas fa-times"></i></button>
-        </div>
-      </div>
-      <div class="ct-my-tasks-tabs">
-        <button class="ct-my-tasks-tab is-active" data-tab="active"><i class="fas fa-list"></i> ACTIVE</button>
-        <button class="ct-my-tasks-tab" data-tab="archive"><i class="fas fa-box-archive"></i> ARCHIVE</button>
-      </div>
-      <div class="ct-popup-body ct-my-tasks-body" id="ct-my-tasks-list" style="flex:1;overflow-y:auto;min-height:0;"></div>`;
-
-    wrapper.appendChild(panel);
-    document.body.appendChild(wrapper);
-
-    // Draggable header + position persistence
-    this._bindSettingsPopupDrag?.(wrapper);
-
-    requestAnimationFrame(() => {
-      panel.classList.add("is-open");
-      this._renderMyTasksList(panel.querySelector("#ct-my-tasks-list"));
-    });
-
-    const _closePanel = () => {
-      panel.classList.remove("is-open");
-      panel.classList.add("is-closing");
-      panel.addEventListener("transitionend", () => wrapper.remove(), { once: true });
-    };
-
-    panel.querySelector("#ct-my-tasks-close")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      _closePanel();
-    });
-
-    panel.querySelector("#ct-my-tasks-add")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this._openMyTaskEditor();
-    });
-
-    // Tab switching
-    panel.querySelectorAll(".ct-my-tasks-tab").forEach(tab => {
-      tab.addEventListener("click", () => {
-        panel.querySelectorAll(".ct-my-tasks-tab").forEach(t => t.classList.remove("is-active"));
-        tab.classList.add("is-active");
-        this._renderMyTasksList(panel.querySelector("#ct-my-tasks-list"), tab.dataset.tab);
-      });
-    });
-  }
-
-  /** Render the My Tasks list */
-  _renderMyTasksList(container, tab = "active") {
-    if (!container) return;
-    const tasks = this._getMyTasks();
-    const priorities = this._myTaskPriorities();
-    const esc = foundry.utils.escapeHTML;
-
-    // Filter by tab
-    const filtered = tasks.map((t, idx) => ({ ...t, _idx: idx })).filter(t =>
-      tab === "archive" ? !!t.solved : !t.solved
-    );
-
-    if (filtered.length === 0) {
-      container.innerHTML = `<div class="ct-gm-tasks-empty"><i class="fas fa-${tab === 'archive' ? 'box-archive' : 'clipboard-list'}"></i><p>No ${tab} tasks.</p></div>`;
-      return;
-    }
-
-    // Sort by priority then newest (approval-pending first within same priority)
-    const prioOrder = { yesterday: 0, soon: 1, wait: 2 };
-    const sorted = filtered.sort((a, b) => {
-      if (!!a.approvalPending !== !!b.approvalPending) return a.approvalPending ? -1 : 1;
-      const pa = prioOrder[a.priority] ?? 1;
-      const pb = prioOrder[b.priority] ?? 1;
-      if (pa !== pb) return pa - pb;
-      return (b.createdAt || 0) - (a.createdAt || 0);
-    });
-
-    container.innerHTML = sorted.map(task => {
-      const p = priorities[task.priority] || priorities.soon;
-      const isSolved = !!task.solved;
-      const isApproval = !!task.approvalPending && !task.solved;
-      const isGMTask = task.createdBy === "gm";
-      // Strip HTML from description for preview
-      const tmp = document.createElement("div");
-      tmp.innerHTML = task.description || "";
-      const plainDesc = (tmp.textContent || "").trim();
-      const rowClasses = [
-        "ct-my-task-item",
-        isSolved ? "ct-my-task-solved" : "",
-        !isSolved && task.priority === "yesterday" ? "ct-my-task-urgent" : "",
-        isApproval ? "ct-my-task-approval-pending" : ""
-      ].filter(Boolean).join(" ");
-
-      // Determine solve button based on task type
-      let solveButton;
-      if (isGMTask && !isSolved) {
-        if (isApproval) {
-          solveButton = `<button class="ct-my-task-action-btn ct-my-task-solve ct-my-task-awaiting" data-solve-idx="${task._idx}" title="Awaiting GM approval..." disabled>
-            <i class="fas fa-hourglass-half" style="color:#ffaa00"></i>
-          </button>`;
-        } else {
-          solveButton = `<button class="ct-my-task-action-btn ct-my-task-solve ct-my-task-approval" data-solve-idx="${task._idx}" title="Mark for approval — let GM know it's done">
-            <i class="fas fa-check"></i>
-          </button>`;
-        }
-      } else {
-        solveButton = `<button class="ct-my-task-action-btn ct-my-task-solve ${isSolved ? 'is-solved' : ''}" data-solve-idx="${task._idx}" title="${isSolved ? 'Mark as unsolved' : 'Mark as SOLVED'}">
-          <i class="fas ${isSolved ? 'fa-check-circle' : 'fa-circle'}"></i>
-        </button>`;
-      }
-
-      return `
-        <div class="${rowClasses}" data-task-idx="${task._idx}" data-task-id="${task.id}">
-          <div class="ct-gm-task-priority" style="--ct-priority-color:${p.color}" title="${p.label}">
-            <i class="fas ${p.icon}"></i>
-          </div>
-          <div class="ct-gm-task-content">
-            <div class="ct-gm-task-title">${esc(task.name || "Untitled")}
-              ${isApproval ? '<span class="ct-my-task-approval-badge"><i class="fas fa-hourglass-half"></i> PENDING</span>' : ''}
-            </div>
-            <div class="ct-gm-task-desc-short">${esc(plainDesc.slice(0, 120))}${plainDesc.length > 120 ? "…" : ""}</div>
-            <div class="ct-gm-task-meta">
-              <span class="ct-gm-task-type" style="color:${p.color}"><i class="fas ${p.icon}"></i> ${p.label}</span>
-              <span class="ct-gm-task-date">${task.createdAt ? new Date(task.createdAt).toLocaleDateString() : ""}</span>
-              ${isGMTask ? '<span class="ct-my-task-gm-badge"><i class="fas fa-user-shield"></i> GM</span>' : ''}
-            </div>
-          </div>
-          <div class="ct-my-task-actions">
-            <button class="ct-my-task-action-btn ct-my-task-edit" data-edit-idx="${task._idx}" title="Edit task"><i class="fas fa-pen"></i></button>
-            ${solveButton}
-            <button class="ct-my-task-action-btn ct-my-task-delete" data-delete-idx="${task._idx}" title="Delete task"><i class="fas fa-trash"></i></button>
-          </div>
-        </div>`;
-    }).join("");
-
-    // Row click opens detail view
-    container.querySelectorAll(".ct-my-task-item").forEach(item => {
-      item.addEventListener("click", (e) => {
-        if (e.target.closest(".ct-my-task-actions")) return;
-        const idx = parseInt(item.dataset.taskIdx);
-        this._openMyTaskDetail(idx);
-      });
-    });
-
-    // Bind action buttons
-    container.querySelectorAll("[data-edit-idx]").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const idx = parseInt(btn.dataset.editIdx);
-        this._openMyTaskEditor(idx);
-      });
-    });
-
-    container.querySelectorAll("[data-solve-idx]").forEach(btn => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const idx = parseInt(btn.dataset.solveIdx);
-        const tasks = this._getMyTasks();
-        if (!tasks[idx]) return;
-
-        const isGMTask = tasks[idx].createdBy === "gm";
-
-        if (isGMTask && !tasks[idx].solved) {
-          // GM task — mark for approval instead of solving
-          if (tasks[idx].approvalPending) return; // already awaiting
-          tasks[idx].approvalPending = true;
-          await this._setMyTasks(tasks);
-
-          // Notify GM via socket
-          const activeGM = game.users.find(u => u.isGM && u.active);
-          if (game.socket && activeGM) {
-            game.socket.emit("module.cypher-gm-taskbar", {
-              action: "taskApprovalRequest",
-              userId: activeGM.id,
-              actorName: this.actor?.name || game.user.name,
-              taskName: tasks[idx].name
-            });
-          }
-
-          ui.notifications.info(`"${tasks[idx].name}" marked for approval. GM will review.`);
-        } else {
-          // Player's own task — direct toggle
-          tasks[idx].solved = !tasks[idx].solved;
-          if (!tasks[idx].solved) tasks[idx].approvalPending = false;
-          await this._setMyTasks(tasks);
-        }
-        this._renderMyTasksList(container, tab);
-      });
-    });
-
-    container.querySelectorAll("[data-delete-idx]").forEach(btn => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const idx = parseInt(btn.dataset.deleteIdx);
-        const tasks = this._getMyTasks();
-        const taskName = tasks[idx]?.name || "Task";
-        const confirmed = await Dialog.confirm({
-          title: "Delete Task",
-          content: `<p>Delete "<strong>${esc(taskName)}</strong>"?</p>`,
-          options: { classes: ["ct-dialog"] }
-        });
-        if (!confirmed) return;
-        tasks.splice(idx, 1);
-        await this._setMyTasks(tasks);
-        this._renderMyTasksList(container, tab);
-        ui.notifications.info(`"${taskName}" deleted.`);
-      });
-    });
-  }
-
-  /** Open the My Task editor (create or edit) */
-  _openMyTaskEditor(editIdx = null) {
-    const existing = document.querySelector("#ct-my-task-form-wrapper");
-    if (existing) existing.remove();
-
-    const tasks = this._getMyTasks();
-    const task = editIdx !== null ? tasks[editIdx] : null;
-    const esc = foundry.utils.escapeHTML;
-    const priorities = this._myTaskPriorities();
-
-    const wrapper = document.createElement("div");
-    wrapper.id = "ct-my-task-form-wrapper";
-
-    // Position next to My Tasks panel if open
-    const myPanel = document.querySelector("#ct-my-tasks-panel");
-    let formLeft = "50%";
-    let formTop = "50%";
-    let formTransform = "translate(-50%,-50%)";
-    if (myPanel) {
-      const rect = myPanel.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const formWidth = 560;
-      const formHeight = 620;
-      if (rect.right + formWidth + 20 < vw) {
-        formLeft = `${rect.right + 20}px`;
-        formTop = `${Math.max(10, Math.min(rect.top, vh - formHeight - 10))}px`;
-        formTransform = "none";
-      } else if (rect.left - formWidth - 20 > 0) {
-        formLeft = `${rect.left - formWidth - 20}px`;
-        formTop = `${Math.max(10, Math.min(rect.top, vh - formHeight - 10))}px`;
-        formTransform = "none";
-      }
-    }
-    wrapper.style.cssText = `position:fixed;z-index:10005;left:${formLeft};top:${formTop};transform:${formTransform};`;
-
-    const form = document.createElement("div");
-    form.id = "ct-my-task-form";
-    form.className = "ct-popup ct-my-task-form";
-    form.style.cssText = "position:relative;width:560px;display:flex;flex-direction:column;overflow:hidden;";
-
-    form.innerHTML = `
-      <div class="ct-popup-header">
-        <span style="color:#c8a96e"><i class="fas fa-${task ? 'pen' : 'plus'}"></i> ${task ? 'EDIT' : 'CREATE'} TASK</span>
-        <button class="ct-popup-close" id="ct-my-task-form-close" title="Close"><i class="fas fa-times"></i></button>
-      </div>
-      <div class="ct-popup-body" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto;max-height:600px;">
-        <label class="ct-gm-task-label">
-          <span>Task Name</span>
-          <input type="text" id="ct-my-task-name" value="${esc(task?.name || "")}" placeholder="What needs doing?" maxlength="100">
-        </label>
-        <label class="ct-gm-task-label">
-          <span>Priority</span>
-          <div class="ct-gm-task-priority-options">
-            ${Object.entries(priorities).map(([key, p]) => `
-              <button type="button" class="ct-gm-task-priority-btn ${(task?.priority || 'soon') === key ? 'is-selected' : ''}" data-priority="${key}" style="--ct-prio-color:${p.color}">
-                <i class="fas ${p.icon}"></i> ${p.label}
-              </button>
-            `).join("")}
-          </div>
-        </label>
-        <label class="ct-gm-task-label">
-          <span>Details</span>
-          <div class="ct-my-task-wysiwyg-toolbar">
-            <button type="button" data-cmd="bold" title="Bold"><i class="fas fa-bold"></i></button>
-            <button type="button" data-cmd="italic" title="Italic"><i class="fas fa-italic"></i></button>
-            <button type="button" data-cmd="underline" title="Underline"><i class="fas fa-underline"></i></button>
-            <span class="ct-wysiwyg-sep"></span>
-            <button type="button" data-cmd="insertUnorderedList" title="Bullet list"><i class="fas fa-list-ul"></i></button>
-            <button type="button" data-cmd="insertOrderedList" title="Numbered list"><i class="fas fa-list-ol"></i></button>
-            <span class="ct-wysiwyg-sep"></span>
-            <button type="button" data-cmd="h3" title="Heading"><i class="fas fa-heading"></i></button>
-            <button type="button" data-cmd="removeFormat" title="Clear formatting"><i class="fas fa-eraser"></i></button>
-          </div>
-          <div class="ct-my-task-wysiwyg-editor" id="ct-my-task-desc" contenteditable="true" data-placeholder="Describe the task...">${task?.description || ""}</div>
-        </label>
-      </div>
-      <div class="ct-popup-actions-row">
-        <button class="ct-popup-btn ct-popup-btn-primary" id="ct-my-task-save"><i class="fas fa-save"></i> Save</button>
-      </div>`;
-
-    wrapper.appendChild(form);
-    document.body.appendChild(wrapper);
-
-    requestAnimationFrame(() => form.classList.add("is-open"));
-
-    // Draggable header
-    const header = form.querySelector(".ct-popup-header");
-    let isDragging = false;
-    let dragOffsetX = 0;
-    let dragOffsetY = 0;
-    header.style.cursor = "grab";
-    header.addEventListener("mousedown", (e) => {
-      if (e.target.closest("button")) return;
-      isDragging = true;
-      const rect = wrapper.getBoundingClientRect();
-      dragOffsetX = e.clientX - rect.left;
-      dragOffsetY = e.clientY - rect.top;
-      wrapper.style.transform = "none";
-      header.style.cursor = "grabbing";
-    });
-    const onMouseMove = (e) => {
-      if (!isDragging) return;
-      wrapper.style.left = `${e.clientX - dragOffsetX}px`;
-      wrapper.style.top = `${e.clientY - dragOffsetY}px`;
-    };
-    const onMouseUp = () => { isDragging = false; header.style.cursor = "grab"; };
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-
-    // Priority selection
-    let selectedPriority = task?.priority || "soon";
-    form.querySelectorAll("[data-priority]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        form.querySelectorAll("[data-priority]").forEach(b => b.classList.remove("is-selected"));
-        btn.classList.add("is-selected");
-        selectedPriority = btn.dataset.priority;
-      });
-    });
-
-    // WYSIWYG toolbar
-    const editor = form.querySelector("#ct-my-task-desc");
-    form.querySelectorAll("[data-cmd]").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const cmd = btn.dataset.cmd;
-        editor.focus();
-        if (cmd === "h3") {
-          document.execCommand("formatBlock", false, "<h3>");
-        } else {
-          document.execCommand(cmd, false, null);
-        }
-      });
-    });
-
-    const _closeForm = () => {
-      form.classList.remove("is-open");
-      form.classList.add("is-closing");
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      form.addEventListener("transitionend", () => wrapper.remove(), { once: true });
-    };
-
-    form.querySelector("#ct-my-task-form-close")?.addEventListener("click", (e) => { e.stopPropagation(); _closeForm(); });
-
-    form.querySelector("#ct-my-task-save")?.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const name = form.querySelector("#ct-my-task-name").value.trim();
-      const description = editor.innerHTML.trim();
-
-      if (!name) {
-        ui.notifications.warn("Please enter a task name.");
-        return;
-      }
-
-      const tasks = this._getMyTasks();
-      const taskData = {
-        id: task?.id || foundry.utils.randomID(),
-        name,
-        priority: selectedPriority,
-        description,
-        solved: task?.solved ?? false,
-        createdAt: task?.createdAt || Date.now(),
-        createdBy: task?.createdBy || (game.user.isGM ? "gm" : "player")
-      };
-
-      if (editIdx !== null && tasks[editIdx]) {
-        tasks[editIdx] = taskData;
-      } else {
-        tasks.push(taskData);
-      }
-
-      await this._setMyTasks(tasks);
-      _closeForm();
-
-      const list = document.querySelector("#ct-my-tasks-list");
-      if (list) this._renderMyTasksList(list);
-
-      ui.notifications.info(`Task "${name}" ${editIdx !== null ? 'updated' : 'created'}.`);
-    });
-  }
-
-  /** Open the full task detail view */
-  _openMyTaskDetail(idx) {
-    document.querySelector("#ct-my-task-detail-wrapper")?.remove();
-
-    const tasks = this._getMyTasks();
-    const task = tasks[idx];
-    if (!task) return;
-
-    const priorities = this._myTaskPriorities();
-    const p = priorities[task.priority] || priorities.soon;
-    const esc = foundry.utils.escapeHTML;
-    const isSolved = !!task.solved;
-
-    const wrapper = document.createElement("div");
-    wrapper.id = "ct-my-task-detail-wrapper";
-
-    // Position next to My Tasks panel if open
-    const myPanel = document.querySelector("#ct-my-tasks-wrapper");
-    let formLeft = "50%";
-    let formTop = "50%";
-    let formTransform = "translate(-50%,-50%)";
-    if (myPanel) {
-      const rect = myPanel.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const detailWidth = 480;
-      const detailHeight = 520;
-      if (rect.right + detailWidth + 20 < vw) {
-        formLeft = `${rect.right + 16}px`;
-        formTop = `${Math.max(10, Math.min(rect.top, vh - detailHeight - 10))}px`;
-        formTransform = "none";
-      } else if (rect.left - detailWidth - 20 > 0) {
-        formLeft = `${rect.left - detailWidth - 16}px`;
-        formTop = `${Math.max(10, Math.min(rect.top, vh - detailHeight - 10))}px`;
-        formTransform = "none";
-      }
-    }
-    wrapper.style.cssText = `position:fixed;z-index:10004;left:${formLeft};top:${formTop};transform:${formTransform};`;
-
-    const panel = document.createElement("div");
-    panel.id = "ct-my-task-detail";
-    panel.className = "ct-popup ct-my-task-detail";
-    panel.style.cssText = "position:relative;width:480px;max-height:520px;display:flex;flex-direction:column;overflow:hidden;";
-
-    const dateStr = task.createdAt ? new Date(task.createdAt).toLocaleString() : "";
-    const isGMTask = task.createdBy === "gm";
-    const isApproval = !!task.approvalPending && !isSolved;
-
-    // Determine solve button behavior for detail header
-    let solveBtnHtml;
-    if (isGMTask && !isSolved) {
-      if (isApproval) {
-        solveBtnHtml = `<button class="ct-popup-action-btn ct-my-task-detail-solve ct-my-task-awaiting" title="Awaiting GM approval..." disabled>
-          <i class="fas fa-hourglass-half" style="color:#ffaa00"></i>
-        </button>`;
-      } else {
-        solveBtnHtml = `<button class="ct-popup-action-btn ct-my-task-detail-solve ct-my-task-detail-approval" title="Mark for approval — let GM know it's done">
-          <i class="fas fa-check" style="color:#7ecf7e"></i>
-        </button>`;
-      }
-    } else {
-      solveBtnHtml = `<button class="ct-popup-action-btn ct-my-task-detail-solve" title="${isSolved ? 'Mark as unsolved' : 'Mark as SOLVED'}">
-        <i class="fas ${isSolved ? 'fa-check-circle' : 'fa-circle'}" style="color:${isSolved ? '#7ecf7e' : 'inherit'}"></i>
-      </button>`;
-    }
-
-    panel.innerHTML = `
-      <div class="ct-popup-header" style="cursor:grab">
-        <span style="color:${p.color}">
-          <i class="fas ${p.icon}"></i> ${esc(task.name || "Untitled")}
-        </span>
-        <div class="ct-popup-header-actions">
-          ${solveBtnHtml}
-          <button class="ct-popup-action-btn ct-my-task-detail-edit" title="Edit task">
-            <i class="fas fa-pen"></i>
-          </button>
-          <button class="ct-popup-action-btn ct-my-task-detail-delete" title="Delete task" style="color:#cf7e7e">
-            <i class="fas fa-trash"></i>
-          </button>
-          <button class="ct-popup-close" title="Close">
-            <i class="fas fa-times"></i>
-          </button>
-        </div>
-      </div>
-      <div class="ct-popup-body ct-my-task-detail-body">
-        <div class="ct-my-task-detail-meta">
-          <span class="ct-my-task-detail-badge" style="--ct-badge-color:${p.color}">
-            <i class="fas ${p.icon}"></i> ${p.label}
-          </span>
-          ${isApproval ? '<span class="ct-my-task-detail-badge ct-my-task-approval-badge"><i class="fas fa-hourglass-half"></i> PENDING APPROVAL</span>' : ''}
-          ${isSolved ? '<span class="ct-my-task-detail-badge ct-my-task-detail-solved-badge"><i class="fas fa-check-circle"></i> SOLVED</span>' : ''}
-          ${isGMTask ? '<span class="ct-my-task-detail-badge ct-my-task-detail-gm-badge"><i class="fas fa-user-shield"></i> GM</span>' : ''}
-          <span class="ct-my-task-detail-date">${dateStr}</span>
-        </div>
-        <div class="ct-my-task-detail-desc">${task.description || '<em style="opacity:0.4">No description</em>'}</div>
-      </div>`;
-
-    wrapper.appendChild(panel);
-    document.body.appendChild(wrapper);
-
-    requestAnimationFrame(() => panel.classList.add("is-open"));
-
-    // Draggable header
-    const header = panel.querySelector(".ct-popup-header");
-    let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
-    header.addEventListener("mousedown", (e) => {
-      if (e.target.closest("button")) return;
-      isDragging = true;
-      const rect = wrapper.getBoundingClientRect();
-      dragOffsetX = e.clientX - rect.left;
-      dragOffsetY = e.clientY - rect.top;
-      wrapper.style.transform = "none";
-      header.style.cursor = "grabbing";
-    });
-    const onMove = (e) => {
-      if (!isDragging) return;
-      wrapper.style.left = `${e.clientX - dragOffsetX}px`;
-      wrapper.style.top = `${e.clientY - dragOffsetY}px`;
-    };
-    const onUp = () => { isDragging = false; header.style.cursor = "grab"; };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-
-    const _close = () => {
-      panel.classList.remove("is-open");
-      panel.classList.add("is-closing");
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      panel.addEventListener("transitionend", () => wrapper.remove(), { once: true });
-    };
-
-    panel.querySelector(".ct-popup-close")?.addEventListener("click", (e) => { e.stopPropagation(); _close(); });
-
-    // Header action buttons — same as listing
-    panel.querySelector(".ct-my-task-detail-edit")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      _close();
-      this._openMyTaskEditor(idx);
-    });
-
-    panel.querySelector(".ct-my-task-detail-solve")?.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      if (e.currentTarget.disabled) return;
-      const tasks = this._getMyTasks();
-      if (!tasks[idx]) return;
-
-      const isGMTask = tasks[idx].createdBy === "gm";
-
-      if (isGMTask && !tasks[idx].solved) {
-        if (tasks[idx].approvalPending) return;
-        tasks[idx].approvalPending = true;
-        await this._setMyTasks(tasks);
-
-        // Notify GM via socket
-        const activeGM = game.users.find(u => u.isGM && u.active);
-        if (game.socket && activeGM) {
-          game.socket.emit("module.cypher-gm-taskbar", {
-            action: "taskApprovalRequest",
-            userId: activeGM.id,
-            actorName: this.actor?.name || game.user.name,
-            taskName: tasks[idx].name
-          });
-        }
-
-        ui.notifications.info(`"${tasks[idx].name}" marked for approval.`);
-      } else {
-        tasks[idx].solved = !tasks[idx].solved;
-        if (!tasks[idx].solved) tasks[idx].approvalPending = false;
-        await this._setMyTasks(tasks);
-      }
-
-      _close();
-      const list = document.querySelector("#ct-my-tasks-list");
-      if (list) {
-        const activeTab = document.querySelector(".ct-my-tasks-tab.is-active")?.dataset.tab || "active";
-        this._renderMyTasksList(list, activeTab);
-      }
-    });
-
-    panel.querySelector(".ct-my-task-detail-delete")?.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const tasks = this._getMyTasks();
-      const taskName = tasks[idx]?.name || "Task";
-      const confirmed = await Dialog.confirm({
-        title: "Delete Task",
-        content: `<p>Delete "<strong>${esc(taskName)}</strong>"?</p>`,
-        options: { classes: ["ct-dialog"] }
-      });
-      if (!confirmed) return;
-      tasks.splice(idx, 1);
-      await this._setMyTasks(tasks);
-      _close();
-      const list = document.querySelector("#ct-my-tasks-list");
-      if (list) {
-        const activeTab = document.querySelector(".ct-my-tasks-tab.is-active")?.dataset.tab || "active";
-        this._renderMyTasksList(list, activeTab);
-      }
-      ui.notifications.info(`"${taskName}" deleted.`);
-    });
-  }
-
-  /** Check for urgent unsolved tasks on login — show notification dialog */
-  _checkMyTasksOnLogin() {
-    if (this._myTasksLoginChecked) return;
-    this._myTasksLoginChecked = true;
-
-    const actor = this.actor;
-    if (!actor) return;
-
-    const tasks = this._getMyTasks();
-    const urgent = tasks.filter(t => !t.solved && (t.priority === "yesterday" || t.priority === "soon"));
-    if (urgent.length === 0) return;
-
-    const priorities = this._myTaskPriorities();
-    const esc = foundry.utils.escapeHTML;
-
-    // Sort by priority
-    const prioOrder = { yesterday: 0, soon: 1 };
-    urgent.sort((a, b) => (prioOrder[a.priority] ?? 1) - (prioOrder[b.priority] ?? 1));
-
-    const wrapper = document.createElement("div");
-    wrapper.id = "ct-my-tasks-login-wrapper";
-    wrapper.style.cssText = "position:fixed;z-index:10003;left:50%;top:30%;transform:translate(-50%,-30%);";
-
-    const panel = document.createElement("div");
-    panel.className = "ct-popup ct-my-tasks-login-panel";
-    panel.style.cssText = "position:relative;width:480px;max-height:500px;display:flex;flex-direction:column;overflow:hidden;";
-
-    panel.innerHTML = `
-      <div class="ct-popup-header">
-        <span style="color:#ffaa00"><i class="fas fa-bell"></i> PENDING TASKS (${urgent.length})</span>
-        <button class="ct-popup-close" id="ct-my-tasks-login-close" title="Dismiss"><i class="fas fa-times"></i></button>
-      </div>
-      <div class="ct-popup-body ct-my-tasks-login-body" style="flex:1;overflow-y:auto;min-height:0;">
-        ${urgent.map(t => {
-          const p = priorities[t.priority] || priorities.soon;
-          return `
-            <div class="ct-my-task-login-item ct-my-task-login-${t.priority}">
-              <div class="ct-gm-task-priority" style="--ct-priority-color:${p.color}"><i class="fas ${p.icon}"></i></div>
-              <div class="ct-gm-task-content">
-                <div class="ct-gm-task-title">${esc(t.name || "Untitled")}</div>
-                <div class="ct-gm-task-meta">
-                  <span style="color:${p.color};font-size:0.75em;"><i class="fas ${p.icon}"></i> ${p.label}</span>
-                </div>
-              </div>
-            </div>`;
-        }).join("")}
-      </div>
-      <div class="ct-popup-actions-row">
-        <button class="ct-popup-btn ct-popup-btn-primary" id="ct-my-tasks-login-open"><i class="fas fa-clipboard-list"></i> Open My Tasks</button>
-      </div>`;
-
-    wrapper.appendChild(panel);
-    document.body.appendChild(wrapper);
-
-    requestAnimationFrame(() => panel.classList.add("is-open"));
-
-    const _closePanel = () => {
-      panel.classList.remove("is-open");
-      panel.classList.add("is-closing");
-      panel.addEventListener("transitionend", () => wrapper.remove(), { once: true });
-    };
-
-    panel.querySelector("#ct-my-tasks-login-close")?.addEventListener("click", (e) => { e.stopPropagation(); _closePanel(); });
-    panel.querySelector("#ct-my-tasks-login-open")?.addEventListener("click", (e) => { e.stopPropagation(); _closePanel(); this._openMyTasksPanel(); });
-  }
-
-  /* ═══════════════════════════════════════════
-     DICE HISTORY STRIP
-     ═══════════════════════════════════════════ */
-
-  _buildDiceHistoryChips() {
-    return this._diceHistory.map((r, i) => this._buildDiceChip(r, i)).join("");
-  }
-
-  _buildDiceChip(entry, idx) {
-    const cls = entry.success === true ? " ct-chip-hit" : entry.success === false ? " ct-chip-miss" : "";
-    const icon = entry.type === "attack" ? "fa-sword" : entry.type === "skill" ? "fa-graduation-cap" : entry.type === "attribute" ? "fa-person-running" : "fa-dice-d20";
-    return `<button class="ct-dice-chip${cls}" data-chip-index="${idx}" title="${foundry.utils.escapeHTML(entry.tooltip)}">
-      <i class="fas ${icon}"></i>
-      <span class="ct-chip-total">${entry.total}</span>
-      ${entry.detail ? `<span class="ct-chip-detail">${foundry.utils.escapeHTML(entry.detail)}</span>` : ""}
-    </button>`;
-  }
-
-  _recordRoll(entry) {
-    this._diceHistory.unshift({ ...entry, ts: Date.now() });
-    if (this._diceHistory.length > 8) this._diceHistory.length = 8;
-    this._renderDiceHistory();
-  }
-
-  _renderDiceHistory() {
-    const recBar = this.element?.querySelector(".ct-recovery-bar");
-    if (!recBar) return;
-    // Remove old chips
-    recBar.querySelectorAll(".ct-dice-chip").forEach(c => c.remove());
-    // Insert new chips after drops
-    recBar.insertAdjacentHTML("beforeend", this._buildDiceHistoryChips());
-    // Bind clicks
-    recBar.querySelectorAll(".ct-dice-chip").forEach(chip => {
-      chip.addEventListener("click", async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const idx = parseInt(chip.dataset.chipIndex);
-        await this._announceRoll(this._diceHistory[idx]);
-      });
-    });
-  }
-
-  async _announceRoll(entry) {
-    if (!entry) return;
-    await ChatMessage.create({
-      speaker: ChatMessage.getSpeaker({ actor: this.actor }),
-      content: `<div class="ct-reroll-flavor"><em style="opacity:0.7;font-size:0.85em;"><i class="fas fa-rotate-left"></i> Re-announced roll:</em></div>${entry.flavor}`
-    });
-  }
-
-  /* ═══════════════════════════════════════════
-     STICKY NOTES
-     ═══════════════════════════════════════════ */
-
-  _getStickyNotes() {
-    const v = this.actor?.getFlag?.(MODULE_ID, "stickyNotes");
-    return Array.isArray(v) ? v : [];
-  }
-
-  async _saveStickyNotes(notes) {
-    if (!this.actor) return;
-    await this.actor.setFlag(MODULE_ID, "stickyNotes", notes);
-  }
-
-  async _addStickyNote() {
-    if (!this.actor) { ui.notifications.warn("Assign a character first."); return; }
-    const notes = this._getStickyNotes();
-    const id = foundry.utils.randomID();
-    const count = notes.length;
-    const note = {
-      id,
-      text: "",
-      x: 180 + (count * 32) % 200,
-      y: 120 + (count * 32) % 200,
-      color: "#fef3a0"
-    };
-    notes.push(note);
-    await this._saveStickyNotes(notes);
-    this._renderStickyNote(note);
-  }
-
-  _renderStickyNote(note) {
-    document.querySelector(`.ct-sticky-note[data-note-id="${note.id}"]`)?.remove();
-    const el = document.createElement("div");
-    el.className = "ct-sticky-note";
-    el.dataset.noteId = note.id;
-    el.style.left = `${note.x}px`;
-    el.style.top = `${note.y}px`;
-    el.style.background = note.color;
-    el.innerHTML = `
-      <div class="ct-sticky-header">
-        <div class="ct-sticky-colors">
-          ${["#fef3a0", "#a0e8fe", "#fea0c8", "#c8fea0", "#e8c8fe"].map(c =>
-            `<button class="ct-sticky-color${c === note.color ? " active" : ""}" data-color="${c}" style="background:${c}" title="${c}"></button>`
-          ).join("")}
-        </div>
-        <button class="ct-sticky-close" title="Delete note"><i class="fas fa-times"></i></button>
-      </div>
-      <textarea class="ct-sticky-text" placeholder="Write a note..." spellcheck="false">${foundry.utils.escapeHTML(note.text)}</textarea>`;
-    document.body.appendChild(el);
-    this._bindStickyNoteEvents(el, note.id);
-    return el;
-  }
-
-  _restoreStickyNotes() {
-    document.querySelectorAll(".ct-sticky-note").forEach(el => el.remove());
-    if (!this.actor) return;
-    for (const note of this._getStickyNotes()) this._renderStickyNote(note);
-  }
-
-  _bindStickyNoteEvents(el, noteId) {
-    // ── Drag via header ──
-    const header = el.querySelector(".ct-sticky-header");
-    let dragOff = null;
-    header.addEventListener("mousedown", (e) => {
-      if (e.target.closest(".ct-sticky-close") || e.target.closest(".ct-sticky-color")) return;
-      dragOff = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
-      el.classList.add("ct-sticky-dragging");
-      e.preventDefault();
-    });
-    const onMove = (e) => {
-      if (!dragOff) return;
-      el.style.left = `${Math.max(0, e.clientX - dragOff.dx)}px`;
-      el.style.top = `${Math.max(0, e.clientY - dragOff.dy)}px`;
-    };
-    const onUp = async () => {
-      if (!dragOff) return;
-      dragOff = null;
-      el.classList.remove("ct-sticky-dragging");
-      const notes = this._getStickyNotes();
-      const n = notes.find(n => n.id === noteId);
-      if (n) {
-        n.x = parseInt(el.style.left) || 0;
-        n.y = parseInt(el.style.top) || 0;
-        this._debouncedStickySave(notes);
-      }
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-
-    // ── Text input (debounced save) ──
-    const textarea = el.querySelector(".ct-sticky-text");
-    textarea.addEventListener("input", () => {
-      const notes = this._getStickyNotes();
-      const n = notes.find(n => n.id === noteId);
-      if (n) { n.text = textarea.value; this._debouncedStickySave(notes); }
-    });
-
-    // ── Delete ──
-    el.querySelector(".ct-sticky-close").addEventListener("click", async () => {
-      const notes = this._getStickyNotes().filter(n => n.id !== noteId);
-      await this._saveStickyNotes(notes);
-      el.remove();
-    });
-
-    // ── Color picker ──
-    el.querySelectorAll(".ct-sticky-color").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const color = btn.dataset.color;
-        el.style.background = color;
-        el.querySelectorAll(".ct-sticky-color").forEach(b => b.classList.toggle("active", b === btn));
-        const notes = this._getStickyNotes();
-        const n = notes.find(n => n.id === noteId);
-        if (n) { n.color = color; this._debouncedStickySave(notes); }
-      });
-    });
-  }
-
-  _debouncedStickySave(notes) {
-    clearTimeout(this._stickySaveTimer);
-    this._stickySaveTimer = setTimeout(() => this._saveStickyNotes(notes), 400);
-  }
-
-  /* ── PLAYER ATTACKS pin sync (Cypher GM Taskbar feature).
-     The GM pins attacks into the Combat Menu → ATTACKS section via the actor
-     flag "cypher-taskbar".pinnedAttacks; the menu shows the pin list when it
-     exists, else all attacks. This helper adds/removes an attack id in that
-     list so the sheet ⇄ ATTACKS section stay in sync both ways. No-op while
-     the flag is unset (pinning not in use → show-all mode). ── */
-  async _autoPinAttack(actor, itemId, pin) {
-    try {
-      const ids = actor?.getFlag?.(MODULE_ID, "pinnedAttacks");
-      if (!Array.isArray(ids)) return;
-      const has = ids.includes(itemId);
-      if (pin && !has) await actor.setFlag(MODULE_ID, "pinnedAttacks", [...ids, itemId]);
-      else if (!pin && has) await actor.setFlag(MODULE_ID, "pinnedAttacks", ids.filter(x => x !== itemId));
-    } catch (err) {
-      console.warn(`${MODULE_ID} | _autoPinAttack failed:`, err);
-    }
-  }
-
-} // end CypherTaskbar class
+}
 
 // Apply panel mixins
 applyPersonaPanel(CypherTaskbar);
@@ -11816,7 +10208,6 @@ _whenHooks(() => Hooks.once("ready", () => {
     // Register the class so companion files (gallery-tabs.js) can reach the
     // live instance without a circular import
     window.cypherTaskbar = CypherTaskbar;
-    game.cypherTaskbar = CypherTaskbar;
 
     if (game.system.id !== "cyphersystem") {
       console.warn(`${MODULE_ID} | Requires the Cypher System.`);
@@ -11852,11 +10243,6 @@ _whenHooks(() => Hooks.once("ready", () => {
     } catch (err) {
       console.error(`${MODULE_ID} | Failed to render CypherTaskbar:`, err);
     }
-
-    // Login check: show urgent unsolved tasks after a short delay
-    try {
-      setTimeout(() => CypherTaskbar.instance?._checkMyTasksOnLogin?.(), 3000);
-    } catch (_) { /* silent */ }
   } catch (err) {
     console.error(`${MODULE_ID} | ready hook failed:`, err);
   }
@@ -12037,12 +10423,7 @@ _whenHooks(() => Hooks.once("ready", () => {
 
   /* ── GM Taskbar GROUP ROLL REQUESTS ── */
   game.socket.on("module.cypher-gm-taskbar", async (payload) => {
-    if (!payload) return;
-    if (payload.action === "requestIntrusion") {
-      CypherTaskbar.instance?._onIntrusionOffer?.(payload);
-      return;
-    }
-    if (payload.action !== "groupRollRequest") return;
+    if (!payload || payload.action !== "groupRollRequest") return;
     if (game.user?.isGM) return; // Only players respond
 
     const actor = game.user?.character;
@@ -12240,44 +10621,11 @@ Hooks.on("updateActor", (actor, changes) => {
     tb.actor = actor;
     _getDebouncedRefresh(tb)();
     // Pin/flag changes reshape open menus (Combat → ATTACKS) — rebuild them.
-    // cypher-gm-taskbar flags (e.g. SPELLS PER DAY limit) reshape the Spells menu;
-    // system.basic.cypherLimit (GM Taskbar CYPHERS/ARTIFACTS) reshapes the Equipment menu.
-    if (changes?.flags?.[MODULE_ID] !== undefined || changes?.flags?.["cypher-gm-taskbar"] !== undefined || changes?.system?.basic?.cypherLimit !== undefined) _getDebouncedPanelRefresh()();
-    // Damage-state painting + taskbar lock track the actor in real time
-    tb._syncPortraitDamageState();
-    // Pool changes during combat = hits/heals → shake + floating numbers
-    if (game.combat) {
-      const pools = actor.system?.pools ?? {};
-      const prev = tb._poolSnapshot ?? {};
-      const deltas = [];
-      const snap = {};
-      for (const k of ["might", "speed", "intellect"]) {
-        const v = Number(pools[k]?.value ?? pools[k]?.current ?? NaN);
-        snap[k] = Number.isFinite(v) ? v : null;
-        if (snap[k] !== null && prev[k] !== null && prev[k] !== undefined && snap[k] !== prev[k]) {
-          deltas.push({ pool: k, delta: snap[k] - prev[k] });
-        }
-      }
-      tb._poolSnapshot = snap;
-      if (deltas.length) {
-        // Flash only when it isn't this actor's turn — on your own turn the
-        // shake is noise (you chose to spend the pool yourself).
-        const combatant = game.combat?.combatant ?? null;
-        const turnActorId = combatant?.actor?.id ?? combatant?.token?.actor?.id ?? null;
-        const isOwnTurn = !!turnActorId && turnActorId === actor.id;
-        if (deltas.some(d => d.delta < 0) && !isOwnTurn) tb._flashPortraitDamage();
-        for (const { pool, delta } of deltas) tb._floatCombatNumber(pool, delta);
-      }
-    }
+    if (changes?.flags?.[MODULE_ID] !== undefined) _getDebouncedPanelRefresh()();
   } 
 });
 Hooks.on("createItem", (item) => { 
-  const tb = CypherTaskbar.instance;
-  if (tb?.actor?.id !== item.parent?.id) return;
-  // PLAYER ATTACKS live sync (Cypher GM Taskbar): an attack created on the
-  // sheet joins the pinned list (only when pinning is in use — an unset list
-  // means "show all attacks", so don't create one here).
-  if (item.type === "attack") tb?._autoPinAttack?.(item.parent, item.id, true);
+  if (CypherTaskbar.instance?.actor?.id !== item.parent?.id) return;
   _getDebouncedRefresh()();
   _getDebouncedPanelRefresh()();
 });
@@ -12287,10 +10635,7 @@ Hooks.on("updateItem", (item) => {
   _getDebouncedPanelRefresh()();
 });
 Hooks.on("deleteItem", (item) => { 
-  const tb = CypherTaskbar.instance;
-  if (tb?.actor?.id !== item.parent?.id) return;
-  // PLAYER ATTACKS live sync: drop the deleted attack from the pinned list.
-  if (item.type === "attack") tb?._autoPinAttack?.(item.parent, item.id, false);
+  if (CypherTaskbar.instance?.actor?.id !== item.parent?.id) return;
   _getDebouncedRefresh()();
   _getDebouncedPanelRefresh()();
 });
@@ -12448,10 +10793,6 @@ Hooks.on("deleteCombatant", () => { CypherTaskbar.instance?.refresh(); CypherTas
 Hooks.on("updateCombat", () => { CypherTaskbar.instance?.refresh(); CypherTaskbar.instance?._updateCombatBar?.(); CypherTaskbar.instance?._syncTurnLock?.(); CypherTaskbar.instance?._ctApplyRangeLocks?.(); });
 Hooks.on("deleteCombat", () => { CypherTaskbar.instance?.refresh(); CypherTaskbar.instance?._updateCombatBar?.(); CypherTaskbar.instance?._syncTurnLock?.(); CypherTaskbar.instance?._ctApplyRangeLocks?.(); });
 Hooks.on("combatStart", () => CypherTaskbar.instance?._updateCombatBar?.());
-// Torch mode: react to darkness changes (Calendaria writes scene.environment.darkness at dusk/dawn)
-Hooks.on("updateScene", (scene, changes) => { if (scene.id === canvas.scene?.id && changes?.environment) CypherTaskbar.instance?._syncTorchMode?.(); });
-Hooks.on("canvasReady", () => CypherTaskbar.instance?._syncTorchMode?.());
-setInterval(() => { const tb = CypherTaskbar.instance; if (tb?.element) tb._syncTorchMode(); }, 20000);
 
 // ── Cash & Values: GM interaction with USE chat cards ──
 Hooks.on("renderChatMessage", (message, html) => {

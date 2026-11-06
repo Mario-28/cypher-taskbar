@@ -480,8 +480,8 @@ export function applyCombatPanel(CypherTaskbar) {
       };
       const popup = document.createElement("div");
       popup.id = "ct-cp-settings-popup";
-      popup.className = "ct-popup ct-popup-draggable ct-settings-popup";
-      popup.style.cssText = "position:fixed;z-index:10020;";
+      popup.className = "ct-popup ct-popup-draggable";
+      popup.style.cssText = "min-width:380px;max-width:460px;position:fixed;z-index:10020;";
       const tr = (label, input) => `<label class="ct-cps-row">${label}<div class="ct-cps-ctrl">${input}</div></label>`;
       const rng = (n, mn, mx, st, val, unit) => `<input type="range" name="${n}" min="${mn}" max="${mx}" step="${st}" value="${val}"><span class="ct-setting-value" data-for="${n}">${val}${unit}</span>`;
       const tabs = [
@@ -544,7 +544,18 @@ export function applyCombatPanel(CypherTaskbar) {
           `)}
         </div>`;
       document.body.appendChild(popup);
-      this._positionPopupRightOfMenu(popup, event, { fallbackSelector: '#cypher-taskbar-bar .ct-btn[data-panel="combat"]' });
+      // Position above the Combat section button
+      const combatBtn = document.querySelector('#cypher-taskbar-bar .ct-btn[data-panel="combat"]');
+      const btnRect = combatBtn?.getBoundingClientRect();
+      if (btnRect) {
+        popup.style.left = Math.min(Math.max(8, btnRect.left), window.innerWidth - 460) + "px";
+        popup.style.bottom = (window.innerHeight - btnRect.top + 8) + "px";
+        popup.style.top = "auto";
+      } else {
+        const rect = event?.currentTarget?.getBoundingClientRect?.() ?? {left: 200, bottom: 200};
+        popup.style.left = Math.min(Math.max(8, rect.left), window.innerWidth - 460) + "px";
+        popup.style.top = Math.min(rect.bottom + 8, window.innerHeight - 520) + "px";
+      }
       popup.querySelector(".ct-popup-close").onclick = () => popup.remove();
       // Draggable header
       const handle = popup.querySelector(".ct-popup-drag-handle");
