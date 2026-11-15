@@ -38,26 +38,60 @@ export function applyCombatPanel(CypherTaskbar) {
     },
 
     async _createEncounterAndJoin(actor, requestedSceneId = null) {
+      if (!game.user?.isGM) {
+        this._emitGMCombatRequest(actor);
+        return false;
+      }
+      const currentActor = game.actors.get(actor?.id);
+      if (!currentActor?.isOwner || currentActor.type !== "pc") {
+        ui.notifications.warn("Select a valid, owned player character before creating combat.");
+        return false;
+      }
+      actor = currentActor;
+      const sceneId = requestedSceneId ?? canvas?.scene?.id ?? game.scenes?.current?.id ?? game.user?.viewedScene ?? null;
+      if (sceneId && !game.scenes?.get(sceneId)) {
+        ui.notifications?.warn?.("The requested scene no longer exists.");
+        return false;
+      }
       let combat = game.combat;
       if (!combat) {
-        const sceneId = requestedSceneId ?? canvas?.scene?.id ?? game.scenes?.current?.id ?? game.user?.viewedScene ?? null;
         try {
           combat = await Combat.create({ scene: sceneId, active: true });
         } catch (err) {
           console.error(`${MODULE_ID} | could not create combat encounter`, err);
           ui.notifications?.error?.("Could not create a combat encounter.");
-          return;
+          return false;
         }
+      }
+      combat = game.combats.get(combat?.id);
+      if (!combat) {
+        ui.notifications.error("The combat encounter is no longer available.");
+        return false;
+      }
+      if (combat.scene?.id && sceneId && combat.scene.id !== sceneId) {
+        ui.notifications?.warn?.("The active encounter belongs to another scene. Join it from that scene instead.");
+        return false;
       }
 
       const existing = combat.combatants.find(c => c.actorId === actor.id);
       if (!existing) {
-        const token = actor.getActiveTokens?.()?.[0];
-        await combat.createEmbeddedDocuments("Combatant", [{ actorId: actor.id, tokenId: token?.id ?? null, hidden: false }]);
+        const token = actor.getActiveTokens?.()?.find(t => !sceneId || t.document?.parent?.id === sceneId || t.scene?.id === sceneId);
+        try {
+          await combat.createEmbeddedDocuments("Combatant", [{ actorId: actor.id, tokenId: token?.id ?? null, hidden: false }]);
+        } catch (err) {
+          console.error(`${MODULE_ID} | could not add combatant`, err);
+          ui.notifications.error(`${actor.name} could not join combat.`);
+          return false;
+        }
       }
 
+      combat = game.combats.get(combat.id);
+      if (!combat) {
+        ui.notifications.warn("The encounter changed while joining. Verify the combat tracker before retrying.");
+        return false;
+      }
       const combatant = combat.combatants.find(c => c.actorId === actor.id);
-      ui.notifications?.info?.(`${actor.name} joined combat.`);
+      ui.notifications.info(`${actor.name} joined combat.`);
       if (combatant) {
         try {
           if (typeof combat.rollInitiative === "function") {
@@ -73,6 +107,7 @@ export function applyCombatPanel(CypherTaskbar) {
         }
       }
       this._refreshCombatUIState();
+      return true;
     },
 
     _emitGMCombatRequest(actor) {
@@ -84,6 +119,7 @@ export function applyCombatPanel(CypherTaskbar) {
 
       const payload = {
         type: "gmCombatRequest",
+        requestId: foundry.utils.randomID(),
         actorId: actor.id,
         actorName: actor.name,
         sceneId: canvas?.scene?.id ?? game.scenes?.current?.id ?? game.user?.viewedScene ?? null,
@@ -134,10 +170,15 @@ export function applyCombatPanel(CypherTaskbar) {
       popup.id = "ct-gm-combat-request";
       popup.className = "ct-popup ct-gm-combat-request";
       popup.style.cssText = "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10036;min-width:420px;max-width:580px;";
+      const esc = value => foundry.utils.escapeHTML(String(value ?? ""));
+      const requester = game.users?.get(payload.userId);
+      const actor = game.actors?.get(payload.actorId);
+      const userName = requester?.name ?? "A player";
+      const actorName = actor?.name ?? "an actor";
       popup.innerHTML = `
-        <div class="ct-popup-header"><i class="fas fa-user-shield"></i> GM Combat Approval<button class="ct-popup-close" title="Close"><i class="fas fa-times"></i></button></div>
+        <div class="ct-popup-header"><i class="fas fa-user-shield"></i> GM Combat Approval<button class="ct-popup-close" type="button" title="Close" aria-label="Close"><i class="fas fa-times"></i></button></div>
         <div class="ct-popup-body">
-          <div class="ct-start-combat-text"><strong>${payload.userName ?? "A player"}</strong> asks to start combat for <strong>${payload.actorName ?? "an actor"}</strong>.</div>
+          <div class="ct-start-combat-text"><strong>${esc(userName)}</strong> asks to start combat for <strong>${esc(actorName)}</strong>.</div>
           <div class="ct-start-combat-actions">
             <button class="ct-start-combat-btn is-danger" data-gm-choice="create">CREATE COMBAT ENCOUNTER</button>
             <button class="ct-start-combat-btn is-muted" data-gm-choice="deny">HELL NO!</button>
@@ -151,15 +192,22 @@ export function applyCombatPanel(CypherTaskbar) {
         ui.notifications?.info?.('Combat request denied.');
         close();
       });
-      popup.querySelector('[data-gm-choice="create"]')?.addEventListener('click', async () => {
+      popup.querySelector('[data-gm-choice="create"]')?.addEventListener('click', async event => {
+        const button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
         const actor = game.actors?.get(payload.actorId);
-        if (!actor) {
-          ui.notifications?.warn?.('Requested actor was not found.');
+        const requester = game.users?.get(payload.userId);
+        if (!actor || actor.type !== "pc" || !requester || !actor.testUserPermission(requester, "OWNER")) {
+          ui.notifications?.warn?.('The request is stale or the requesting user no longer owns that character.');
           close();
           return;
         }
-        await this._createEncounterAndJoin(actor, payload.sceneId);
-        close();
+        try {
+          await this._createEncounterAndJoin(actor, payload.sceneId);
+        } finally {
+          close();
+        }
       });
     },
 
@@ -321,6 +369,7 @@ export function applyCombatPanel(CypherTaskbar) {
 
       const payload = {
         type: "gmLeaveCombatRequest",
+        requestId: foundry.utils.randomID(),
         actorId: actor.id,
         actorName: actor.name,
         combatantId: combatant?.id ?? null,
@@ -372,10 +421,11 @@ export function applyCombatPanel(CypherTaskbar) {
       popup.id = "ct-gm-leave-combat-request";
       popup.className = "ct-popup ct-gm-combat-request";
       popup.style.cssText = "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10036;min-width:420px;max-width:620px;";
+      const actorName = game.actors?.get(payload.actorId)?.name ?? "This character";
       popup.innerHTML = `
-        <div class="ct-popup-header"><i class="fas fa-user-shield"></i> GM Combat Approval<button class="ct-popup-close" title="Close"><i class="fas fa-times"></i></button></div>
+        <div class="ct-popup-header"><i class="fas fa-user-shield"></i> GM Combat Approval<button class="ct-popup-close" type="button" title="Close" aria-label="Close"><i class="fas fa-times"></i></button></div>
         <div class="ct-popup-body">
-          <div class="ct-start-combat-text">${payload.actorName ?? "This character"} is attempting to leave combat. Do you approve?</div>
+          <div class="ct-start-combat-text">${foundry.utils.escapeHTML(actorName)} is attempting to leave combat. Do you approve?</div>
           <div class="ct-start-combat-actions">
             <button class="ct-start-combat-btn is-danger" data-gm-leave-choice="yes">YES</button>
             <button class="ct-start-combat-btn is-muted" data-gm-leave-choice="no">NO</button>
@@ -389,23 +439,28 @@ export function applyCombatPanel(CypherTaskbar) {
         ui.notifications?.info?.('Leave combat request denied.');
         close();
       });
-      popup.querySelector('[data-gm-leave-choice="yes"]')?.addEventListener('click', async () => {
-        const combat = payload.combatId ? game.combats?.get(payload.combatId) : game.combat;
-        if (!combat) {
-          ui.notifications?.warn?.('Combat encounter was not found.');
+      popup.querySelector('[data-gm-leave-choice="yes"]')?.addEventListener('click', async event => {
+        const button = event.currentTarget;
+        if (button.disabled) return;
+        button.disabled = true;
+        const combat = payload.combatId ? game.combats?.get(payload.combatId) : null;
+        const requester = game.users?.get(payload.userId);
+        const actor = game.actors?.get(payload.actorId);
+        if (!combat || !actor || !requester || !actor.testUserPermission(requester, "OWNER")) {
+          ui.notifications?.warn?.('The leave-combat request is stale or invalid.');
           close();
           return;
         }
         const combatant = (payload.combatantId && combat.combatants.get(payload.combatantId))
           || combat.combatants.find(c => c.actorId === payload.actorId);
-        if (!combatant) {
-          ui.notifications?.warn?.('Combatant was not found.');
+        if (!combatant || combatant.actorId !== actor.id) {
+          ui.notifications?.warn?.('Combatant was not found or no longer matches the request.');
           close();
           return;
         }
         try {
           await combat.deleteEmbeddedDocuments("Combatant", [combatant.id]);
-          ui.notifications?.info?.(`${payload.actorName ?? 'Actor'} removed from combat.`);
+          ui.notifications?.info?.(`${actor.name} removed from combat.`);
         } catch (err) {
           console.error(`${MODULE_ID} | leave combat failed`, err);
           ui.notifications?.error?.('Could not remove actor from combat.');
@@ -413,6 +468,28 @@ export function applyCombatPanel(CypherTaskbar) {
         close();
         this._refreshCombatUIState();
       });
+    },
+
+    /** Advance a player's current owned-PC turn automatically on the designated GM client. */
+    async _processGMEndTurn(payload) {
+      if (!game.user?.isGM || !this._claimGmRequest(payload)) return false;
+      const requester = game.users?.get(payload.userId);
+      const currentCombat = game.combats?.get(payload.combatId);
+      const currentCombatant = currentCombat?.combatant;
+      const currentActor = currentCombatant?.actor;
+      if (!requester || !currentCombat?.started || currentCombatant?.id !== payload.combatantId || !currentActor
+        || !currentActor.testUserPermission(requester, "OWNER")) {
+        if (CONFIG.debug?.cypherTaskbar) console.debug(`${MODULE_ID} | ignored stale or unowned end-turn instruction`);
+        return false;
+      }
+      try {
+        await currentCombat.nextTurn();
+        return true;
+      } catch (error) {
+        console.error(`${MODULE_ID} | automatic end-turn failed`, error);
+        ui.notifications?.error?.("Could not advance the turn.");
+        return false;
+      }
     },
 
     _shouldShowCombatPlaceholder() {
@@ -667,7 +744,7 @@ export function applyCombatPanel(CypherTaskbar) {
         case "use-ability": {
           const abilities = actor.items.filter(i => ["ability","abilities"].includes(i.type)).sort((a,b) => a.name.localeCompare(b.name));
           if (!abilities.length) { ui.notifications?.info?.("No abilities found."); return; }
-          const list = abilities.map(a => `<option value="${a.id}">${foundry.utils.escapeHTML(a.name)}${a.system?.basic?.cost ? ` (Cost: ${a.system.basic.cost})` : ''}</option>`).join("");
+          const list = abilities.map(a => `<option value="${foundry.utils.escapeHTML(a.id)}">${foundry.utils.escapeHTML(a.name)}${a.system?.basic?.cost ? ` (Cost: ${foundry.utils.escapeHTML(a.system.basic.cost)})` : ''}</option>`).join("");
           const d = new Dialog({ title: "Use Ability", content: `<div style="padding:8px 4px"><select id="ct-ability-select" style="width:100%">${list}</select></div>`, buttons: { use: { icon: '<i class="fas fa-hand-sparkles"></i>', label: "Use", callback: async (html) => { const id = html[0].querySelector("#ct-ability-select")?.value; if (id) await this._rollAbilityItem(id); } }, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" } }, default: "use" });
           d.render(true);
           break;
@@ -675,7 +752,7 @@ export function applyCombatPanel(CypherTaskbar) {
         case "use-item": {
           const items = actor.items.filter(i => ["equipment","artifact","oddity","material","ammo"].includes(i.type)).sort((a,b) => a.name.localeCompare(b.name));
           if (!items.length) { ui.notifications?.info?.("No items found."); return; }
-          const list = items.map(i => `<option value="${i.id}">${foundry.utils.escapeHTML(i.name)} ×${i.system?.basic?.quantity ?? 1}</option>`).join("");
+          const list = items.map(i => `<option value="${foundry.utils.escapeHTML(i.id)}">${foundry.utils.escapeHTML(i.name)} ×${foundry.utils.escapeHTML(i.system?.basic?.quantity ?? 1)}</option>`).join("");
           const d = new Dialog({ title: "Use Item", content: `<div style="padding:8px 4px"><select id="ct-item-select" style="width:100%">${list}</select></div>`, buttons: { use: { icon: '<i class="fas fa-flask"></i>', label: "Use", callback: async (html) => { const id = html[0].querySelector("#ct-item-select")?.value; const item = actor.items.get(id); if (item) item.sheet?.render?.(true); } }, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" } }, default: "use" });
           d.render(true);
           break;
@@ -683,7 +760,7 @@ export function applyCombatPanel(CypherTaskbar) {
         case "use-cypher": {
           const cyphers = actor.items.filter(i => ["cypher","artifact"].includes(i.type)).sort((a,b) => a.name.localeCompare(b.name));
           if (!cyphers.length) { ui.notifications?.info?.("No cyphers found."); return; }
-          const list = cyphers.map(c => `<option value="${c.id}">${foundry.utils.escapeHTML(c.name)}${c.system?.basic?.level ? ` (Lvl ${c.system.basic.level})` : ''}</option>`).join("");
+          const list = cyphers.map(c => `<option value="${foundry.utils.escapeHTML(c.id)}">${foundry.utils.escapeHTML(c.name)}${c.system?.basic?.level ? ` (Lvl ${foundry.utils.escapeHTML(c.system.basic.level)})` : ''}</option>`).join("");
           const d = new Dialog({ title: "Use Cypher", content: `<div style="padding:8px 4px"><select id="ct-cypher-select" style="width:100%">${list}</select></div>`, buttons: { use: { icon: '<i class="fas fa-atom"></i>', label: "Activate", callback: async (html) => { const id = html[0].querySelector("#ct-cypher-select")?.value; const cypher = actor.items.get(id); if (cypher) cypher.sheet?.render?.(true); } }, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" } }, default: "use" });
           d.render(true);
           break;
@@ -691,7 +768,7 @@ export function applyCombatPanel(CypherTaskbar) {
         case "cast-spell": {
           const spellItems = this._getSpellableItems(actor);
           if (!spellItems.length) { ui.notifications?.info?.("No spells found."); return; }
-          const list = spellItems.map(s => `<option value="${s.id}">${foundry.utils.escapeHTML(s.name)}</option>`).join("");
+          const list = spellItems.map(s => `<option value="${foundry.utils.escapeHTML(s.id)}">${foundry.utils.escapeHTML(s.name)}</option>`).join("");
           const d = new Dialog({ title: "Cast Spell", content: `<div style="padding:8px 4px"><select id="ct-spell-select" style="width:100%">${list}</select></div>`, buttons: { cast: { icon: '<i class="fas fa-wand-magic-sparkles"></i>', label: "Cast", callback: async (html) => { const id = html[0].querySelector("#ct-spell-select")?.value; if (id) await this._rollSpellItem(id); } }, cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" } }, default: "cast" });
           d.render(true);
           break;
@@ -713,11 +790,12 @@ export function applyCombatPanel(CypherTaskbar) {
         if (mod) metaParts.push(`Mod ${mod}`);
         if (range) metaParts.push(range);
         const meta = metaParts.join(' | ') || 'Attack';
-        return `<button class="ct-attack-card" data-attack-id="${a.id}" type="button">
-          <img class="ct-attack-card-img" src="${a.img || 'icons/svg/combat.svg'}" alt="" draggable="false">
+        const esc = foundry.utils.escapeHTML;
+        return `<button class="ct-attack-card" data-attack-id="${esc(a.id)}" type="button" aria-label="Roll ${esc(a.name)}">
+          <img class="ct-attack-card-img" src="${esc(a.img || 'icons/svg/combat.svg')}" alt="" draggable="false">
           <div class="ct-attack-card-body">
-            <div class="ct-attack-card-name">${foundry.utils.escapeHTML(a.name)}</div>
-            <div class="ct-attack-card-meta">${meta}</div>
+            <div class="ct-attack-card-name">${esc(a.name)}</div>
+            <div class="ct-attack-card-meta">${esc(meta)}</div>
           </div>
           <div class="ct-attack-card-roll"><i class="fas fa-dice-d20"></i></div>
         </button>`;

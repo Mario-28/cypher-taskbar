@@ -1,4 +1,7 @@
 import { MODULE_ID, hexToRGBA, bgFitMap, buildAbilitiesMasonryColumns } from "./utils.js";
+import { calculateEffortCost } from "./cypher-system-adapter.js";
+
+const escapeAbilityText = value => foundry.utils.escapeHTML(String(value ?? ""));
 
 export function applyAbilitiesPanel(CypherTaskbar) {
   Object.assign(CypherTaskbar.prototype, {
@@ -118,7 +121,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
     },
 
     _abilityCategoryHeaderIconHtml(style) {
-      return style?.icon ? `<i class="ct-ab-category-icon ${style.icon}"></i>` : "";
+      return style?.icon ? `<i class="ct-ab-category-icon ${escapeAbilityText(style.icon)}"></i>` : "";
     },
 
     async _saveAbilityCategoryStyle(categoryId, style) {
@@ -156,6 +159,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
     },
 
     _buildAbilitiesPanel(actor) {
+      const esc = escapeAbilityText;
       const abilities = this._getActorAbilities(actor);
       const customCategories = this._getAbilityCategories();
       const allCategories = [{ id: "uncategorized", name: "Uncategorized", system: true }, ...customCategories];
@@ -185,19 +189,19 @@ export function applyAbilitiesPanel(CypherTaskbar) {
         const entries = (grouped.get(category.id) ?? []).sort((a, b) => a.order - b.order || a.item.name.localeCompare(b.item.name));
         const bodyClass = entries.length ? "ct-ab-category-body" : "ct-ab-category-body ct-ab-category-body-empty";
         const rows = entries.length ? entries.map(({ item }) => {
-          const cost = item.system.basic?.cost ? `<span class="ct-item-cost">${item.system.basic.cost}</span>` : "";
+          const cost = item.system.basic?.cost ? `<span class="ct-item-cost">${esc(item.system.basic.cost)}</span>` : "";
           const costNum = Number((String(item.system?.basic?.cost ?? "").match(/^(\d+)/)?.[1]) ?? 0);
           // Abilities with ACTIVATION "action" (cypher-cool-items dropdown,
           // system field fallback) need a free ACTION pip — when the combat
           // bar's action pool is spent the row is greyed and unclickable.
           const locked = noActionLeft && this._cbAbilityActivation(item) === "action";
           const rangeLocked = !locked && !!(this._ctRangeLocked?.(item, "ability"));
-          const useBtn = costNum > 0 && !locked ? `<button class="ct-ab-use-inline${rangeLocked ? " ct-range-locked" : ""}" data-use-ability="${item.id}" title="${rangeLocked ? "Out of range" : `Use ${item.name}`}"${rangeLocked ? " disabled" : ""}><i class="fas fa-bolt"></i></button>` : "";
+          const useBtn = costNum > 0 && !locked ? `<button class="ct-ab-use-inline${rangeLocked ? " ct-range-locked" : ""}" data-use-ability="${esc(item.id)}" title="${rangeLocked ? "Out of range" : `Use ${esc(item.name)}`}" aria-label="${rangeLocked ? "Out of range" : `Use ${esc(item.name)}`}"${rangeLocked ? " disabled" : ""}><i class="fas fa-bolt"></i></button>` : "";
           const lockTag = locked ? `<span class="ct-ab-lock-tag" title="Requires an action — action pool spent"><i class="fas fa-lock"></i> ACTION</span>` : "";
-          return `<div class="ct-item-row ct-ab-action-row ct-ab-draggable${locked ? " ct-ab-locked" : ""}" draggable="true" data-ability-id="${item.id}"${locked ? ` title="Requires an action — action pool spent"` : ""}><img class="ct-item-img" src="${item.img || 'icons/svg/ability.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span>${lockTag}${cost}${useBtn}</div>`;
+          return `<div class="ct-item-row ct-ab-action-row ct-ab-draggable${locked ? " ct-ab-locked" : ""}" draggable="true" data-ability-id="${esc(item.id)}"${locked ? ` title="Requires an action — action pool spent"` : ""}><img class="ct-item-img" src="${esc(item.img || 'icons/svg/ability.svg')}" alt="" draggable="false"><span class="ct-item-name">${esc(item.name)}</span>${lockTag}${cost}${useBtn}</div>`;
         }).join("") : `<div class="ct-ab-empty-drop">Drop abilities here</div>`;
         const categoryStyle = this._getAbilityCategoryStyle(category.id);
-        const html = `<section class="ct-ab-category-section" data-ab-category-section="${category.id}"><div class="ct-ab-category-header" data-ab-category-header="${category.id}" style="${this._abilityCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-ab-category-icon-wrap">${this._abilityCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-ab-category-title">${category.name}</span></div><div class="${bodyClass}" data-ability-category="${category.id}">${rows}</div></section>`;
+        const html = `<section class="ct-ab-category-section" data-ab-category-section="${esc(category.id)}"><div class="ct-ab-category-header" data-ab-category-header="${esc(category.id)}" style="${this._abilityCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-ab-category-icon-wrap">${this._abilityCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-ab-category-title">${esc(category.name)}</span></div><div class="${bodyClass}" data-ability-category="${esc(category.id)}">${rows}</div></section>`;
         return { html, weight: Math.max(entries.length, 1) };
       });
       const sections = buildAbilitiesMasonryColumns(sectionData, this.actor?.id);
@@ -469,11 +473,11 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       }
       popup.style.transform = "none";
       popup.innerHTML = `
-        <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+        <div class="ct-popup-header"><i class="fas fa-palette"></i> ${escapeAbilityText(category.name)} Header <button class="ct-popup-close" aria-label="Close category appearance"><i class="fas fa-times"></i></button></div>
         <div class="ct-popup-body ct-popup-body-compact">
           <label class="ct-popup-wide">Icon</label>
           <div class="ct-popup-wide ct-category-icon-grid" id="ct-ab-category-header-icon-grid">${iconOptions}</div>
-          <input type="hidden" id="ct-ab-category-header-icon" value="${state.icon}">
+          <input type="hidden" id="ct-ab-category-header-icon" value="${escapeAbilityText(state.icon)}">
           <div class="ct-popup-wide ct-category-icon-preview" id="ct-ab-category-icon-preview"></div>
           <label>Icon Size <span class="ct-val-label" id="ct-ab-category-icon-size-val">${state.iconSize}px</span><input type="range" id="ct-ab-category-icon-size" min="12" max="40" step="1" value="${state.iconSize}"></label>
           <label>Header Title Size <span class="ct-val-label" id="ct-ab-category-title-size-val">${state.titleSize}%</span><input type="range" id="ct-ab-category-title-size" min="70" max="180" step="5" value="${state.titleSize}"></label>
@@ -484,7 +488,8 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       document.body.appendChild(popup);
       this._positionPopupAboveEvent(popup, event);
 
-      const previewTarget = () => this.element?.querySelector(`[data-ab-category-header="${categoryId}"]`);
+      const previewTarget = () => [...(this.element?.querySelectorAll("[data-ab-category-header]") ?? [])]
+        .find(header => header.dataset.abCategoryHeader === categoryId) ?? null;
       const syncVal = (id, fmt = v => v) => {
         const input = popup.querySelector(`#${id}`);
         const output = popup.querySelector(`#${id}-val`);
@@ -500,7 +505,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
         const icon = popup.querySelector("#ct-ab-category-header-icon").value;
         popup.querySelectorAll("[data-category-icon]").forEach(btn => btn.classList.toggle("is-selected", btn.dataset.categoryIcon === icon));
         preview.innerHTML = icon
-          ? `<span class="ct-category-icon-preview-chip"><i class="${icon}"></i></span>`
+          ? `<span class="ct-category-icon-preview-chip"><i class="${escapeAbilityText(icon)}"></i></span>`
           : `<span class="ct-category-icon-preview-empty">No icon selected</span>`;
       };
 
@@ -601,7 +606,7 @@ export function applyAbilitiesPanel(CypherTaskbar) {
         list.innerHTML = categories.length
           ? categories.map(cat => {
               const isHidden = hiddenSet.has(cat.id);
-              return `<div class="ct-skill-category-entry"><span class="${isHidden ? 'ct-ab-cat-hidden-label' : ''}">${cat.name}</span><button type="button" class="ct-ab-cat-toggle-hide" data-toggle-ab-hidden="${cat.id}" title="${isHidden ? 'Unhide' : 'Hide'} ${cat.name}"><i class="fas ${isHidden ? 'fa-eye' : 'fa-eye-slash'}"></i></button><button type="button" class="ct-skill-category-delete" data-delete-ab-category="${cat.id}" title="Delete ${cat.name}"><i class="fas fa-trash"></i></button></div>`;
+              return `<div class="ct-skill-category-entry"><span class="${isHidden ? 'ct-ab-cat-hidden-label' : ''}">${escapeAbilityText(cat.name)}</span><button type="button" class="ct-ab-cat-toggle-hide" data-toggle-ab-hidden="${escapeAbilityText(cat.id)}" title="${isHidden ? 'Unhide' : 'Hide'} ${escapeAbilityText(cat.name)}" aria-label="${isHidden ? 'Unhide' : 'Hide'} ${escapeAbilityText(cat.name)}"><i class="fas ${isHidden ? 'fa-eye' : 'fa-eye-slash'}"></i></button><button type="button" class="ct-skill-category-delete" data-delete-ab-category="${escapeAbilityText(cat.id)}" title="Delete ${escapeAbilityText(cat.name)}" aria-label="Delete ${escapeAbilityText(cat.name)}"><i class="fas fa-trash"></i></button></div>`;
             }).join("")
           : `<div class="ct-empty-msg">No custom categories yet.</div>`;
         list.querySelectorAll("[data-delete-ab-category]").forEach(btn => btn.onclick = async () => {
@@ -691,9 +696,19 @@ export function applyAbilitiesPanel(CypherTaskbar) {
       const computeSummary = (effort, additional) => {
         const eff = Math.max(0, Math.min(effortCap, Number(effort) || 0));
         const add = Math.max(0, Number(additional) || 0);
-        const effortCost = eff > 0 ? 3 + Math.max(0, eff - 1) * 2 : 0;
+        const damageState = String(actor.system?.combat?.damageTrack?.state ?? "").toLowerCase();
+        const damageTrack = actor.system?.combat?.damageTrack ?? {};
+        const impaired = (damageState === "impaired" && damageTrack.applyImpaired)
+          || (damageState === "debilitated" && damageTrack.applyDebilitated);
+        const speedArmorCost = defaultPool === "Speed"
+          ? Math.max(0, Number(actor.system?.combat?.armor?.costTotal ?? 0) || 0) : 0;
+        const effortCost = calculateEffortCost(eff, {
+          firstLevelCostsTwo: game.settings.get("cyphersystem", "FirstLOECosts2Points") === true,
+          impaired,
+          speedArmorCost
+        });
         const totalCost = Math.max(0, baseCost + effortCost + add - edge);
-        const remaining = Math.max(0, poolCurrent - totalCost);
+        const remaining = poolCurrent - totalCost;
         return { effort: eff, additional: add, effortCost, totalCost, edge, poolCurrent, remaining, canAfford: totalCost <= poolCurrent };
       };
 
@@ -729,11 +744,12 @@ export function applyAbilitiesPanel(CypherTaskbar) {
               <div class="ct-skill-roll-summary-item"><span>${foundry.utils.escapeHTML(defaultPool)} Pool</span><strong data-ab-pool-current>${poolCurrent}</strong></div>
               <div class="ct-skill-roll-summary-item"><span>After Use</span><strong data-ab-pool-remaining>${Math.max(0, poolCurrent - Math.max(0, baseCost - edge))}</strong></div>
             </div>
-            <div class="ct-skill-roll-note">Effort for effect costs 3 points for the first level and 2 points for each additional level. Edge is subtracted from the total cost (minimum 0).</div>
+            <div class="ct-skill-roll-note">Effort uses the native Cypher System cost, including impairment and Speed armor where applicable. Edge is subtracted from the total cost once (minimum 0).</div>
           </div>
         </form>`;
 
       return await new Promise(resolve => {
+        let submitting = false;
         const dialog = new Dialog({
           title,
           content,
@@ -742,6 +758,8 @@ export function applyAbilitiesPanel(CypherTaskbar) {
               icon: '<i class="fas fa-bolt"></i>',
               label: 'Use Ability',
               callback: async html => {
+                if (submitting) return;
+                submitting = true;
                 const root = html?.[0] ?? html;
                 const form = root?.querySelector('.ct-native-skill-roll-form');
                 if (!form) return resolve(false);
@@ -752,9 +770,13 @@ export function applyAbilitiesPanel(CypherTaskbar) {
                   return resolve(false);
                 }
                 if (summary.totalCost > 0) {
-                  await this._spendEffortFromPool(actor, defaultPool, summary.totalCost);
+                  const spent = await this._spendEffortFromPool(actor, defaultPool, summary.totalCost);
+                  if (spent === null) return resolve(false);
                 }
-                try { await item.use(); } catch (e) { console.warn(`${MODULE_ID} | item.use() failed`, e); }
+                if (typeof item.use === "function") {
+                  try { await item.use(); }
+                  catch (e) { console.warn(`${MODULE_ID} | item.use() failed`, e); }
+                }
 
                 const costRows = [
                   { label: 'Base Cost', value: baseCost, type: 'cost' },

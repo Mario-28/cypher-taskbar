@@ -79,10 +79,42 @@ function esc(str) {
     .replace(/'/g, "&#39;");
 }
 
+/** Validate and bound the public gallery companion socket payload. */
+export function normalizeGallerySharePayload(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.type !== "showImage") return null;
+  if (typeof data.src !== "string" || typeof data.title !== "string" || typeof data.senderId !== "string") return null;
+  const src = data.src.trim();
+  const title = data.title.trim();
+  const senderId = data.senderId.trim();
+  if (!src || src.length > 4096 || /[\u0000-\u001f\u007f]/.test(src)) return null;
+  if (title.length > 300 || senderId.length < 1 || senderId.length > 64) return null;
+  if (!Array.isArray(data.userIds) || data.userIds.length > 100) return null;
+  if (data.userIds.some(id => typeof id !== "string" || !id || id.length > 64)) return null;
+  if (!["all", "selected", "gm"].includes(data.shareMode)) return null;
+  if (data.shareMode === "selected" && data.userIds.length === 0) return null;
+  if (typeof data.sendToGM !== "boolean") return null;
+  return {
+    type: "showImage",
+    src,
+    title,
+    senderId,
+    userIds: [...new Set(data.userIds)],
+    shareMode: data.shareMode,
+    sendToGM: data.sendToGM
+  };
+}
+
 /** Check if the current user can manage the given actor */
 function canManageActor(actor) {
   if (!actor) return false;
   return actor.isOwner || game.user.isGM;
+}
+
+async function writeGalleryFlag(actor, key, value) {
+  const currentActor = game.actors.get(actor?.id);
+  if (!canManageActor(currentActor)) throw new Error("You no longer have permission to change this gallery.");
+  await currentActor.setFlag(GALLERY_MODULE_ID, key, value);
+  return currentActor;
 }
 
 /** Deep-clone an object safely */
@@ -244,7 +276,8 @@ function getTabs(actor) {
 }
 
 async function saveTabs(actor, tabs) {
-  await actor.setFlag(GALLERY_MODULE_ID, "tabs", tabs.map(normalizeTabData));
+  if (!Array.isArray(tabs)) throw new Error("Invalid gallery tabs.");
+  return writeGalleryFlag(actor, "tabs", tabs.map(normalizeTabData));
 }
 
 function getClothesImages(actor) {
@@ -253,7 +286,8 @@ function getClothesImages(actor) {
 }
 
 async function saveClothesImages(actor, images) {
-  return actor.setFlag(GALLERY_MODULE_ID, "clothesImages", images.map((img, i) => normalizeImageData(img, i)));
+  if (!Array.isArray(images)) throw new Error("Invalid wardrobe images.");
+  return writeGalleryFlag(actor, "clothesImages", images.map(normalizeImageData));
 }
 
 function getClothesLayout(actor) {
@@ -269,10 +303,10 @@ function getClothesLayout(actor) {
 }
 
 async function saveClothesLayout(actor, layout) {
-  await actor.setFlag(GALLERY_MODULE_ID, "clothesLayout", {
-    columns: Math.max(1, Math.min(5, Number(layout.columns) || 3)),
-    gap: [0, 4, 8, 12, 18].includes(Number(layout.gap)) ? Number(layout.gap) : 8,
-    fit: ["natural", "cover", "contain"].includes(layout.fit) ? layout.fit : "natural"
+  return writeGalleryFlag(actor, "clothesLayout", {
+    columns: Math.max(1, Math.min(5, Number(layout?.columns) || 3)),
+    gap: [0, 4, 8, 12, 18].includes(Number(layout?.gap)) ? Number(layout.gap) : 8,
+    fit: ["natural", "cover", "contain"].includes(layout?.fit) ? layout.fit : "natural"
   });
 }
 
@@ -285,7 +319,10 @@ function getWardrobeSubtabs(actor) {
 }
 
 async function saveWardrobeSubtabs(actor, subtabs) {
-  await actor.setFlag(GALLERY_MODULE_ID, "wardrobeSubtabs", subtabs);
+  if (!Array.isArray(subtabs)) throw new Error("Invalid wardrobe subtabs.");
+  const clean = subtabs.filter(tab => tab && typeof tab === "object" && typeof tab.id === "string" && typeof tab.name === "string")
+    .map(tab => ({ id: tab.id.slice(0, 100), name: tab.name.slice(0, 200) }));
+  return writeGalleryFlag(actor, "wardrobeSubtabs", clean);
 }
 
 function getWardrobeActiveSubtab(actor) {
@@ -293,7 +330,8 @@ function getWardrobeActiveSubtab(actor) {
 }
 
 async function saveWardrobeActiveSubtab(actor, subtabId) {
-  await actor.setFlag(GALLERY_MODULE_ID, "wardrobeActiveSubtab", subtabId);
+  if (typeof subtabId !== "string" || subtabId.length > 100) throw new Error("Invalid wardrobe subtab.");
+  return writeGalleryFlag(actor, "wardrobeActiveSubtab", subtabId);
 }
 
 function getVideoItems(actor) {
@@ -302,7 +340,8 @@ function getVideoItems(actor) {
 }
 
 async function saveVideoItems(actor, items) {
-  await actor.setFlag(GALLERY_MODULE_ID, "videoItems", items.map(normalizeImageData));
+  if (!Array.isArray(items)) throw new Error("Invalid gallery videos.");
+  return writeGalleryFlag(actor, "videoItems", items.map(normalizeImageData));
 }
 
 /* -- Tokens tab storage (mirrors cypher-gallery-tabs v1.13.0) -- */
@@ -313,7 +352,8 @@ function getTokensImages(actor) {
 }
 
 async function saveTokensImages(actor, images) {
-  await actor.setFlag(GALLERY_MODULE_ID, "tokensImages", images.map(normalizeImageData));
+  if (!Array.isArray(images)) throw new Error("Invalid token images.");
+  return writeGalleryFlag(actor, "tokensImages", images.map(normalizeImageData));
 }
 
 function getTokensLayout(actor) {
@@ -331,7 +371,7 @@ async function saveTokensLayout(actor, layout) {
     gap: [0, 4, 8, 12, 18].includes(parseInt(layout?.gap, 10)) ? parseInt(layout.gap, 10) : 8,
     fit: ["natural", "cover", "contain"].includes(layout?.fit) ? layout.fit : "natural"
   };
-  await actor.setFlag(GALLERY_MODULE_ID, "tokensLayout", clean);
+  return writeGalleryFlag(actor, "tokensLayout", clean);
 }
 
 function getTokensStyle(actor) {
@@ -349,7 +389,7 @@ async function saveTokensStyle(actor, style) {
     iconColor: /^#[0-9a-fA-F]{6}$/.test(style?.iconColor ?? "") ? style.iconColor : TOKENS_STYLE_DEFAULTS.iconColor,
     iconClass: typeof style?.iconClass === "string" && style.iconClass.startsWith("fa-") ? style.iconClass : TOKENS_STYLE_DEFAULTS.iconClass
   };
-  await actor.setFlag(GALLERY_MODULE_ID, "tokensStyle", clean);
+  return writeGalleryFlag(actor, "tokensStyle", clean);
 }
 
 function getFavoritesLayout(actor) {
@@ -362,22 +402,28 @@ function getFavoritesLayout(actor) {
 }
 
 async function saveFavoritesLayout(actor, layout) {
-  await actor.setFlag(GALLERY_MODULE_ID, "favoritesLayout", {
-    columns: Math.max(1, Math.min(5, Number(layout.columns) || 3)),
-    gap: [0, 4, 8, 12, 18].includes(Number(layout.gap)) ? Number(layout.gap) : 8,
-    fit: ["natural", "cover", "contain"].includes(layout.fit) ? layout.fit : "natural"
+  return writeGalleryFlag(actor, "favoritesLayout", {
+    columns: Math.max(1, Math.min(5, Number(layout?.columns) || 3)),
+    gap: [0, 4, 8, 12, 18].includes(Number(layout?.gap)) ? Number(layout.gap) : 8,
+    fit: ["natural", "cover", "contain"].includes(layout?.fit) ? layout.fit : "natural"
   });
 }
 
 function getTabSortOrders(actor) {
   const data = actor.getFlag(GALLERY_MODULE_ID, "tabSortOrders");
-  return data && typeof data === "object" ? data : {};
+  return data && typeof data === "object" && !Array.isArray(data)
+    ? Object.assign(Object.create(null), data)
+    : Object.create(null);
 }
 
 async function setTabSortOrder(actor, tabId, order) {
+  const allowed = new Set(["name-asc", "name-desc", "date-asc", "date-desc"]);
+  if (typeof tabId !== "string" || !tabId || tabId.length > 100 || !allowed.has(order)) {
+    throw new Error("Invalid gallery sort order.");
+  }
   const orders = getTabSortOrders(actor);
   orders[tabId] = order;
-  await actor.setFlag(GALLERY_MODULE_ID, "tabSortOrders", orders);
+  return writeGalleryFlag(actor, "tabSortOrders", orders);
 }
 
 /* ------------------------------------------------------------------ */
@@ -513,7 +559,7 @@ function _renderTabButton(tab, taskbar) {
   const imgCount = (tab.images || []).length;
   return `
     <button class="cgt-strip-btn"
-            data-cgt-tab="${tab.id}"
+            data-cgt-tab="${esc(tab.id)}"
             style="background:${esc(tab.bgColor)};"
             title="${esc(tab.title)} (${imgCount})">
       <i class="${esc(tabIcon(tab))}" style="color:${esc(tab.iconColor)};"></i>
@@ -1940,69 +1986,106 @@ class GalleryPanel {
   /* -- Wardrobe-specific actions -- */
 
   async _setActorPortraitFromImage(img) {
-    if (!this.isClothesPanel || !canManageActor(this.actor)) {
+    const actor = game.actors.get(this.actor?.id);
+    if (!this.isClothesPanel || !canManageActor(actor)) {
       ui.notifications.warn("Only the actor owner or Game Master can change portrait art from the Wardrobe tab.");
-      return;
+      return false;
     }
     const src = String(img?.url ?? "").trim();
-    if (!src) { ui.notifications.warn("This image has no valid source."); return; }
-    await this.actor.update({ img: src });
-    ui.notifications.info(`Portrait updated for ${this.actor.name}.`);
-    _refreshGallery(this.actor);
+    if (!src || src.length > 4096 || /[\u0000-\u001f\u007f]/.test(src)) {
+      ui.notifications.warn("This image has no valid source.");
+      return false;
+    }
+    try {
+      await actor.update({ img: src });
+      ui.notifications.info(`Portrait updated for ${actor.name}.`);
+      _refreshGallery(actor);
+      return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Portrait artwork update failed`, err);
+      ui.notifications.error("The portrait could not be updated.");
+      return false;
+    }
   }
 
   async _setCurrentTokenArtFromImage(img) {
-    if ((!this.isClothesPanel && !this.isTokensPanel) || !canManageActor(this.actor)) {
+    const actor = game.actors.get(this.actor?.id);
+    if ((!this.isClothesPanel && !this.isTokensPanel) || !canManageActor(actor)) {
       ui.notifications.warn("Only the actor owner or Game Master can change current token art from the Wardrobe or Tokens tab.");
-      return;
+      return false;
     }
     const src = String(img?.url ?? "").trim();
-    if (!src) { ui.notifications.warn("This image has no valid source."); return; }
+    if (!src || src.length > 4096 || /[\u0000-\u001f\u007f]/.test(src)) {
+      ui.notifications.warn("This image has no valid source.");
+      return false;
+    }
 
     const controlled = canvas?.tokens?.controlled ?? [];
-    const matching = controlled.filter(t => t.actor?.id === this.actor.id);
-
-    // Explicit selection wins: only the selected token(s) for this actor.
-    if (matching.length) {
-      for (const token of matching) { await token.document.update({ "texture.src": src }); }
-      ui.notifications.info(`Current token art updated for ${matching.length} selected token${matching.length === 1 ? "" : "s"}.`);
-      return;
+    const matching = controlled.filter(t => t.actor?.id === actor.id);
+    const selectedDocuments = matching.map(token => token.document).filter(doc => doc?.isOwner);
+    if (selectedDocuments.length !== matching.length) {
+      ui.notifications.warn("One or more selected tokens are no longer owned; token art was not changed.");
+      return false;
     }
 
-    // No selection needed: update the prototype token so every future
-    // placement uses this art, plus every token of this actor already on
-    // the canvas so the change is visible immediately.
-    await this.actor.update({ "prototypeToken.texture.src": src });
+    try {
+      if (selectedDocuments.length) {
+        for (const document of selectedDocuments) await document.update({ "texture.src": src });
+        ui.notifications.info(`Current token art updated for ${selectedDocuments.length} selected token${selectedDocuments.length === 1 ? "" : "s"}.`);
+        return true;
+      }
 
-    const activeTokens = typeof this.actor.getActiveTokens === "function"
-      ? this.actor.getActiveTokens()
-      : (canvas?.tokens?.placeables ?? []).filter(t => t.actor?.id === this.actor.id);
-
-    for (const token of activeTokens) {
-      await token.document.update({ "texture.src": src });
+      const activeTokens = typeof actor.getActiveTokens === "function"
+        ? actor.getActiveTokens()
+        : (canvas?.tokens?.placeables ?? []).filter(t => t.actor?.id === actor.id);
+      const tokenDocuments = activeTokens.map(token => token.document).filter(doc => doc?.isOwner);
+      if (tokenDocuments.length !== activeTokens.length) {
+        ui.notifications.warn("One or more active tokens are no longer owned; token art was not changed.");
+        return false;
+      }
+      await actor.update({ "prototypeToken.texture.src": src });
+      for (const document of tokenDocuments) await document.update({ "texture.src": src });
+      ui.notifications.info(
+        tokenDocuments.length
+          ? `Token art updated for ${actor.name} — prototype and ${tokenDocuments.length} placed token${tokenDocuments.length === 1 ? "" : "s"}.`
+          : `Prototype token art updated for ${actor.name}.`
+      );
+      return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Token artwork update failed`, err);
+      ui.notifications.error("Token art was not fully updated. Check the prototype and placed tokens before retrying.");
+      return false;
     }
-
-    ui.notifications.info(
-      activeTokens.length
-        ? `Token art updated for ${this.actor.name} — prototype and ${activeTokens.length} placed token${activeTokens.length === 1 ? "" : "s"}.`
-        : `Prototype token art updated for ${this.actor.name}.`
-    );
   }
 
   async _setActorHoverArtFromImage(img) {
-    if (!this.isClothesPanel || !canManageActor(this.actor)) {
+    const actor = game.actors.get(this.actor?.id);
+    if (!this.isClothesPanel || !canManageActor(actor)) {
       ui.notifications.warn("Only the actor owner or Game Master can change hover art from the Wardrobe tab.");
-      return;
+      return false;
     }
     const src = String(img?.url ?? "").trim();
-    if (!src) { ui.notifications.warn("This image has no valid source."); return; }
-    await this.actor.update({ "prototypeToken.flags.image-hover.specificArt": src });
-    const activeTokens = canvas?.tokens?.placeables?.filter(t => t.actor?.id === this.actor.id) ?? [];
-    for (const token of activeTokens) {
-      await token.document.update({ "flags.image-hover.specificArt": src });
+    if (!src || src.length > 4096 || /[\u0000-\u001f\u007f]/.test(src)) {
+      ui.notifications.warn("This image has no valid source.");
+      return false;
     }
-    ui.notifications.info(`Hover art updated for ${this.actor.name}${activeTokens.length ? ` and ${activeTokens.length} active token${activeTokens.length === 1 ? "" : "s"}` : ""}.`);
-    _refreshGallery(this.actor);
+    const activeTokens = canvas?.tokens?.placeables?.filter(t => t.actor?.id === actor.id) ?? [];
+    const tokenDocuments = activeTokens.map(token => token.document).filter(doc => doc?.isOwner);
+    if (tokenDocuments.length !== activeTokens.length) {
+      ui.notifications.warn("One or more active tokens are no longer owned; hover art was not changed.");
+      return false;
+    }
+    try {
+      await actor.update({ "prototypeToken.flags.image-hover.specificArt": src });
+      for (const document of tokenDocuments) await document.update({ "flags.image-hover.specificArt": src });
+      ui.notifications.info(`Hover art updated for ${actor.name}${tokenDocuments.length ? ` and ${tokenDocuments.length} active token${tokenDocuments.length === 1 ? "" : "s"}` : ""}.`);
+      _refreshGallery(actor);
+      return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Hover artwork update failed`, err);
+      ui.notifications.error("Hover art was not fully updated. Check the prototype and placed tokens before retrying.");
+      return false;
+    }
   }
 
   async _categorizeClothesImage(imgId, targetSubtab) {
@@ -2272,7 +2355,7 @@ function _openImageDialog({ actor, tabId, mode, imgId, onSave }) {
           <input type="hidden" name="tags" value="${esc(JSON.stringify(data.tags))}" />
         </div>
         <div class="cgt-img-preview" style="margin-top:8px;max-height:200px;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#1a1a2e;border-radius:4px;">
-          ${data.url ? `<img src="${esc(data.url)}" style="max-width:100%;max-height:200px;object-fit:contain;" onerror="this.style.display='none'" />` : ""}
+          <!-- Preview is populated with DOM APIs in the render callback. -->
         </div>
       </form>`;
 
@@ -2330,6 +2413,27 @@ function _openImageDialog({ actor, tabId, mode, imgId, onSave }) {
         const pillsContainer = form.querySelector(".cgt-tag-pills");
         const hiddenTags = form.querySelector("input[name='tags']");
         let currentTags = [...(data.tags || [])];
+        const updatePreview = (url, showFailure = false) => {
+          const preview = form.querySelector(".cgt-img-preview");
+          if (!preview) return;
+          preview.replaceChildren();
+          if (!url) return;
+          const image = document.createElement("img");
+          image.src = url;
+          image.alt = "Image preview";
+          image.style.cssText = "max-width:100%;max-height:200px;object-fit:contain;";
+          image.addEventListener("error", () => {
+            image.style.display = "none";
+            if (showFailure) {
+              const message = document.createElement("span");
+              message.style.cssText = "color:#888;padding:16px";
+              message.textContent = "Failed to load image";
+              preview.replaceChildren(message);
+            }
+          }, { once: true });
+          preview.appendChild(image);
+        };
+        updatePreview(data.url);
 
         function renderPills() {
           pillsContainer.innerHTML = currentTags.map((tag, idx) => `
@@ -2375,8 +2479,7 @@ function _openImageDialog({ actor, tabId, mode, imgId, onSave }) {
           checkBtn.addEventListener("click", () => {
             const url = form.querySelector("input[name='url']")?.value?.trim();
             if (!url) return;
-            const preview = form.querySelector(".cgt-img-preview");
-            preview.innerHTML = `<img src="${esc(url)}" style="max-width:100%;max-height:200px;object-fit:contain;" onerror="this.parentElement.innerHTML='<span style=\\'color:#888;padding:16px\\'>Failed to load image</span>'" />`;
+            updatePreview(url, true);
           });
         }
 
@@ -2386,8 +2489,7 @@ function _openImageDialog({ actor, tabId, mode, imgId, onSave }) {
           urlInput.addEventListener("change", () => {
             const url = urlInput.value.trim();
             if (!url) return;
-            const preview = form.querySelector(".cgt-img-preview");
-            preview.innerHTML = `<img src="${esc(url)}" style="max-width:100%;max-height:200px;object-fit:contain;" onerror="this.style.display='none'" />`;
+            updatePreview(url);
           });
         }
       }
@@ -2471,7 +2573,7 @@ function _openShareDialog(src, title) {
         <div class="cgt-user-list">
           ${users.map(u => `
             <label class="cgt-user-check">
-              <input type="checkbox" name="userIds" value="${u.id}" />
+              <input type="checkbox" name="userIds" value="${esc(u.id)}" />
               ${esc(u.name)}
             </label>
           `).join("")}
@@ -2531,16 +2633,19 @@ function _shareImageToPlayers(src, title, userIds, sendToGM = true) {
     return;
   }
 
-  const payload = {
+  const payload = normalizeGallerySharePayload({
     type: "showImage",
     src,
     title: title || "Shared Image",
     userIds: userIds || [],
     senderId: game.user.id,
-    senderName: game.user.name,
     shareMode: userIds?.length ? "selected" : "all",
     sendToGM: sendToGM !== false
-  };
+  });
+  if (!payload) {
+    ui.notifications.error("The image URL or share recipients are invalid.");
+    return false;
+  }
 
   game.socket.emit("module.cypher-gallery-tabs", payload);
 
@@ -2554,6 +2659,7 @@ function _shareImageToPlayers(src, title, userIds, sendToGM = true) {
   }
 
   ui.notifications.info("Image shared with selected players.");
+  return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2678,16 +2784,19 @@ function openLightboxBase(src, title, {
   const resetBtn = lb.querySelector(".cgt-lb-reset");
   const imgEl = lb.querySelector("#cgt-lb-img");
 
-  const minScale = Math.max(
-    0.05,
-    Number(game.settings?.get(GALLERY_MODULE_ID, "lightboxMaxZoomOut") ?? 50) / 100
-  );
-
-  const maxScale = Math.max(
-    1,
-    minScale,
-    Number(game.settings?.get(GALLERY_MODULE_ID, "lightboxMaxZoomIn") ?? 150) / 100
-  );
+  // These settings belong to the optional companion module. Never read an
+  // unregistered setting when that module is absent or disabled.
+  const getCompanionSetting = (key, fallback) => {
+    if (!game.modules?.get(GALLERY_MODULE_ID)?.active) return fallback;
+    try {
+      return game.settings.get(GALLERY_MODULE_ID, key) ?? fallback;
+    } catch (err) {
+      console.warn(`[cypher-taskbar] Optional gallery setting ${key} is unavailable; using its default.`, err);
+      return fallback;
+    }
+  };
+  const minScale = Math.max(0.05, Number(getCompanionSetting("lightboxMaxZoomOut", 50)) / 100);
+  const maxScale = Math.max(1, minScale, Number(getCompanionSetting("lightboxMaxZoomIn", 150)) / 100);
 
   let scale = 1;
   let offsetX = 0;
@@ -2875,24 +2984,11 @@ function _showSharedImageLightbox(src, title) {
 }
 
 function _openShowToPlayersDialogFromLightbox(src, title) {
-  // Find current image data from any open panel
-  const panel = document.querySelector(".cgt-panel");
-  if (panel) {
-    // If a panel is open, try to find the image
-    const imgEl = panel.querySelector(`[data-src="${src}"]`);
-    if (imgEl) {
-      const imgId = imgEl.closest("[data-img-id]")?.dataset.imgId;
-      if (imgId) {
-        // Get the panel instance and share
-        for (const p of openPanels.values()) {
-          if (!p._closed) { p._shareImage(imgId); return; }
-        }
-      }
-    }
+  if (typeof src !== "string" || !src) {
+    ui.notifications.warn("This image cannot be shared because its source is missing.");
+    return;
   }
-  // Fallback: basic share with just URL
-  const img = { url: src, name: title || "Image", caption: "", note: "" };
-  _showShareDialog(img, null);
+  _openShareDialog(src, title || "Shared Image");
 }
 
 

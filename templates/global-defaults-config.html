@@ -1,52 +1,48 @@
-<form class="ct-global-defaults-form" style="color: #000;">
+<form class="ct-global-defaults-form">
   <div class="form-group">
-    <label for="ct-global-active" style="color: #000;">Activate Global Defaults</label>
+    <label for="ct-global-active">{{localize "CYPHER_TASKBAR.GlobalDefaults.Activate"}}</label>
     <input type="checkbox" id="ct-global-active" name="active" {{#if active}}checked{{/if}}>
-    <p class="notes" style="color: #000;">When checked, all actors use these imported defaults unless they override a specific setting.</p>
+    <p class="notes">{{localize "CYPHER_TASKBAR.GlobalDefaults.ActivateHint"}}</p>
   </div>
 
-  <hr>
-
   <div class="form-group">
-    <label style="color: #000;">Import Settings</label>
+    <span class="ct-form-label">{{localize "CYPHER_TASKBAR.GlobalDefaults.Import"}}</span>
     <button type="button" class="ct-import-btn" id="ct-import-global-defaults">
-      <i class="fas fa-file-import"></i> Choose File…
+      <i class="fas fa-file-import" aria-hidden="true"></i> {{localize "CYPHER_TASKBAR.GlobalDefaults.ChooseFile"}}
     </button>
-    <p class="notes" style="color: #000;">Select a Cypher Taskbar settings JSON file exported from any actor.</p>
+    <p class="notes">{{localize "CYPHER_TASKBAR.GlobalDefaults.ImportHint"}}</p>
   </div>
 
   <div class="form-group">
-    <label style="color: #000;">
+    <label for="ct-apply-to-all-actors">
       <input type="checkbox" id="ct-apply-to-all-actors" name="applyToAllActors">
-      Apply to All Actors
+      {{localize "CYPHER_TASKBAR.GlobalDefaults.ApplyToAll"}}
     </label>
-    <p class="notes" style="color: #000;">When checked, imported settings will be applied to every actor's taskbar immediately.</p>
+    <p class="notes">{{localize "CYPHER_TASKBAR.GlobalDefaults.ApplyToAllHint"}}</p>
   </div>
 
   {{#if hasData}}
   <div class="form-group">
-    <label style="color: #000;">Current Defaults</label>
+    <span class="ct-form-label">{{localize "CYPHER_TASKBAR.GlobalDefaults.Current"}}</span>
     <div class="ct-defaults-preview">
-      <pre style="color: #000;">{{dataPreview}}</pre>
+      <pre>{{dataPreview}}</pre>
     </div>
   </div>
-  <div class="form-group" style="display: flex; gap: 8px;">
-    <button type="button" class="ct-save-apply-btn" id="ct-save-apply-global-defaults" style="flex: 1; background: #4a90d9; color: #fff; border: none; padding: 8px; border-radius: 4px; cursor: pointer;">
-      <i class="fas fa-save"></i> Save & Apply to All Actors
+  <div class="form-group ct-global-defaults-actions">
+    <button type="button" class="ct-save-apply-btn" id="ct-save-apply-global-defaults">
+      <i class="fas fa-save" aria-hidden="true"></i> {{localize "CYPHER_TASKBAR.GlobalDefaults.SaveApply"}}
     </button>
-    <button type="button" class="ct-clear-btn" id="ct-clear-global-defaults" style="flex: 1;">
-      <i class="fas fa-trash"></i> Clear Global Defaults
+    <button type="button" class="ct-clear-btn" id="ct-clear-global-defaults">
+      <i class="fas fa-trash" aria-hidden="true"></i> {{localize "CYPHER_TASKBAR.GlobalDefaults.Clear"}}
     </button>
   </div>
   {{else}}
   <div class="form-group">
-    <p class="notes ct-no-data" style="color: #000;"><i class="fas fa-info-circle"></i> No global defaults loaded yet.</p>
+    <p class="notes ct-no-data"><i class="fas fa-info-circle" aria-hidden="true"></i> {{localize "CYPHER_TASKBAR.GlobalDefaults.Empty"}}</p>
   </div>
   {{/if}}
 
-  <hr>
-
   <div class="form-group">
-    <p class="notes" style="color: #000;"><strong>How it works:</strong> Imported settings become the default for all actors. When a player changes a setting in their taskbar, only that changed setting is saved to their character. Everything else continues to use these global defaults.</p>
+    <p class="notes">{{localize "CYPHER_TASKBAR.GlobalDefaults.HowItWorks"}}</p>
   </div>
 </form>

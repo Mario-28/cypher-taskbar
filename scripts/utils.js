@@ -4,11 +4,42 @@
 
 export const MODULE_ID = "cypher-taskbar";
 
+/** Sanitize limited rich text without preserving scripts, event handlers, or active CSS. */
+export function sanitizeHTML(html) {
+  if (!html) return "";
+  const template = document.createElement("template");
+  template.innerHTML = String(html);
+  // Native browsers store parsed children in content. Lightweight regression
+  // DOMs may expose those children on the template itself instead.
+  const content = template.querySelectorAll("*").length ? template : template.content;
+  content.querySelectorAll(
+    "script, style, iframe, object, embed, video, audio, form, input, select, textarea, button, link, meta, base, svg, math, template"
+  ).forEach(element => element.remove());
+  content.querySelectorAll("*").forEach(element => {
+    for (const attribute of Array.from(element.attributes)) {
+      const name = attribute.name.toLowerCase();
+      const value = String(attribute.value);
+      const normalizedUrl = value.replace(/[\u0000-\u0020\u007f]/g, "").toLowerCase();
+      const unsafeUrl = /^(?:javascript|vbscript):/.test(normalizedUrl)
+        || (normalizedUrl.startsWith("data:") && !/^data:image\/(?:png|gif|jpeg|webp);base64,/.test(normalizedUrl));
+      if (name.startsWith("on") || ["style", "srcdoc", "srcset", "formaction", "target", "id", "class"].includes(name)
+        || (["href", "src", "xlink:href", "action", "poster"].includes(name) && unsafeUrl)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+    if (element.tagName === "A") element.setAttribute("rel", "noopener noreferrer");
+  });
+  return template.innerHTML;
+}
+
 export function hexToRGBA(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
+  const color = typeof hex === "string" && /^#[0-9a-f]{6}$/i.test(hex) ? hex : "#000000";
+  const opacity = Number(alpha);
+  const safeAlpha = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
+  const r = parseInt(color.slice(1, 3), 16);
+  const g = parseInt(color.slice(3, 5), 16);
+  const b = parseInt(color.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${safeAlpha})`;
 }
 
 export function readJSONSetting(key, fallback) {
@@ -24,8 +55,14 @@ export async function saveJSONSetting(key, value) {
   await game.settings.set(MODULE_ID, key, JSON.stringify(value));
 }
 
+export function normalizeColumnCount(value, fallback = 1) {
+  const parsed = Number(value);
+  const safeFallback = Number.isFinite(Number(fallback)) ? Math.trunc(Number(fallback)) : 1;
+  return Math.max(1, Math.min(3, Number.isFinite(parsed) ? Math.trunc(parsed) : safeFallback));
+}
+
 export function buildMasonryColumns(sections, columnSettingKey, defaultCols = 1, actorId = null) {
-  const count = Math.max(1, Number(getActorPref(actorId, columnSettingKey) ?? game.settings.get(MODULE_ID, columnSettingKey) ?? defaultCols));
+  const count = normalizeColumnCount(getActorPref(actorId, columnSettingKey) ?? game.settings.get(MODULE_ID, columnSettingKey), defaultCols);
   const cols = Array.from({ length: count }, () => ({ height: 0, sections: [] }));
   sections.forEach(section => {
     const targetIndex = cols.reduce((best, col, index, arr) => col.height < arr[best].height ? index : best, 0);
@@ -36,7 +73,7 @@ export function buildMasonryColumns(sections, columnSettingKey, defaultCols = 1,
 }
 
 export function buildAbilitiesMasonryColumns(sections, actorId = null) {
-  const count = Math.max(1, Number(getActorPref(actorId, "abilitiesMenuColumns") ?? game.settings.get(MODULE_ID, "abilitiesMenuColumns") ?? 1));
+  const count = normalizeColumnCount(getActorPref(actorId, "abilitiesMenuColumns") ?? game.settings.get(MODULE_ID, "abilitiesMenuColumns"));
   const cols = Array.from({ length: count }, () => ({ height: 0, sections: [] }));
   sections.forEach(section => {
     const targetIndex = cols.reduce((best, col, index, arr) => col.height < arr[best].height ? index : best, 0);
@@ -47,7 +84,7 @@ export function buildAbilitiesMasonryColumns(sections, actorId = null) {
 }
 
 export function buildSpellsMasonryColumns(sections, actorId = null) {
-  const count = Math.max(1, Number(getActorPref(actorId, "spellsMenuColumns") ?? game.settings.get(MODULE_ID, "spellsMenuColumns") ?? 1));
+  const count = normalizeColumnCount(getActorPref(actorId, "spellsMenuColumns") ?? game.settings.get(MODULE_ID, "spellsMenuColumns"));
   const cols = Array.from({ length: count }, () => ({ height: 0, sections: [] }));
   sections.forEach(section => {
     const targetIndex = cols.reduce((best, col, i, arr) => col.height < arr[best].height ? i : best, 0);
@@ -187,6 +224,7 @@ export function bgFitMap(bgFit) {
 
 const FLAG_SCOPE = MODULE_ID;
 const PREF_KEY = "taskbarPrefs";
+const BLOCKED_PREF_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export function getActorPref(actorId, key, fallback = null) {
   // 1. Check actor-specific override
@@ -213,12 +251,16 @@ export function getActorPref(actorId, key, fallback = null) {
 }
 
 export async function setActorPref(actorId, key, value) {
-  if (!actorId) return;
+  if (!actorId || typeof key !== "string" || !/^[A-Za-z0-9_-]+$/.test(key) || BLOCKED_PREF_KEYS.has(key)) return false;
   const actor = game.actors?.get(actorId);
-  if (!actor) return;
-  const prefs = actor.getFlag(FLAG_SCOPE, PREF_KEY) ?? {};
-  prefs[key] = value;
-  await actor.setFlag(FLAG_SCOPE, PREF_KEY, prefs);
+  if (!actor?.isOwner) {
+    ui.notifications?.warn?.("You do not have permission to change this character's taskbar preferences.");
+    return false;
+  }
+  // Write only the changed leaf. Replacing the whole preference object loses
+  // unrelated keys when two panels save concurrently.
+  await actor.setFlag(FLAG_SCOPE, `${PREF_KEY}.${key}`, value);
+  return true;
 }
 
 /** One-time migration: copy old client-scoped actorPreferences to actor flags */
@@ -230,15 +272,17 @@ export async function migrateActorPreferences() {
     let migrated = 0;
     for (const [actorId, actorPrefs] of Object.entries(prefs)) {
       const actor = game.actors?.get(actorId);
-      if (!actor) continue;
+      if (!actor?.isOwner) continue;
       const existing = actor.getFlag(FLAG_SCOPE, PREF_KEY) ?? {};
+      if (!actorPrefs || typeof actorPrefs !== "object" || Array.isArray(actorPrefs)) continue;
+      const safeLegacy = Object.fromEntries(Object.entries(actorPrefs).filter(([key]) => /^[A-Za-z0-9_-]+$/.test(key) && !BLOCKED_PREF_KEYS.has(key)));
       // Merge old prefs into flags (skip if already there)
-      const merged = { ...actorPrefs, ...existing };
+      const merged = { ...safeLegacy, ...existing };
       await actor.setFlag(FLAG_SCOPE, PREF_KEY, merged);
       migrated++;
     }
     if (migrated > 0) {
-      console.log(`${MODULE_ID} | Migrated preferences for ${migrated} actor(s) to actor flags.`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Migrated preferences for ${migrated} actor(s) to actor flags.`);
       // Clear old setting so we don't migrate again
       await game.settings.set(MODULE_ID, "actorPreferences", "{}");
     }

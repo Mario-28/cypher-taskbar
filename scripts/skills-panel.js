@@ -1,9 +1,12 @@
-import { MODULE_ID, buildMasonryColumns, skillCategoryIconChoices, hexToRGBA, bgFitMap } from "./utils.js";
+import { MODULE_ID, buildMasonryColumns, normalizeColumnCount, skillCategoryIconChoices, hexToRGBA, bgFitMap } from "./utils.js";
+
+const escapeSkillText = value => foundry.utils.escapeHTML(String(value ?? ""));
 
 export function applySkillsPanel(CypherTaskbar) {
   Object.assign(CypherTaskbar.prototype, {
 
     _buildSkillsPanel(actor) {
+      const esc = foundry.utils.escapeHTML;
       const skills = actor.items.filter(item => item.type === "skill").sort((a, b) => a.name.localeCompare(b.name));
       const customCategories = this._getSkillCategories();
       const allCategories = [{ id: "uncategorized", name: "Uncategorized", system: true }, ...customCategories];
@@ -25,11 +28,11 @@ export function applySkillsPanel(CypherTaskbar) {
         const entries = (grouped.get(category.id) ?? []).sort((a, b) => a.order - b.order || a.item.name.localeCompare(b.item.name));
         const rows = entries.length ? entries.map(({ item }) => {
           const r = item.system.basic?.rating ?? "Practiced";
-          return `<div class="ct-item-row ct-skill-action-row ct-skill-draggable" draggable="true" data-skill-id="${item.id}"><img class="ct-item-img" src="${item.img || 'icons/svg/book.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span><span class="ct-skill-rating ${this._skillRatingClass(r)}">${r}</span><button class="ct-skill-roll-inline" data-roll-skill="${item.id}" title="Roll ${item.name}"><i class="fas fa-dice-d20"></i></button></div>`;
+          return `<div class="ct-item-row ct-skill-action-row ct-skill-draggable" draggable="true" data-skill-id="${esc(item.id)}"><img class="ct-item-img" src="${esc(item.img || 'icons/svg/book.svg')}" alt="" draggable="false"><span class="ct-item-name">${esc(item.name)}</span><span class="ct-skill-rating ${this._skillRatingClass(r)}">${esc(r)}</span><button class="ct-skill-roll-inline" data-roll-skill="${esc(item.id)}" title="Roll ${esc(item.name)}" aria-label="Roll ${esc(item.name)}"><i class="fas fa-dice-d20"></i></button></div>`;
         }).join("") : `<div class="ct-skill-empty-drop">Drop skills here</div>`;
         const bodyClass = entries.length ? "ct-skill-category-body" : "ct-skill-category-body ct-skill-category-body-empty";
         const categoryStyle = this._getSkillCategoryStyle(category.id);
-        const html = `<section class="ct-skill-category-section" data-category-section="${category.id}"><div class="ct-skill-category-header" data-category-header="${category.id}" style="${this._skillCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-skill-category-icon-wrap">${this._skillCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-skill-category-title">${category.name}</span><button class="ct-cat-header-edit-btn" data-edit-cat="${category.id}" title="Edit ${category.name}"><i class="fas fa-pen"></i></button></div><div class="${bodyClass}" data-skill-category="${category.id}">${rows}</div></section>`;
+        const html = `<section class="ct-skill-category-section" data-category-section="${esc(category.id)}"><div class="ct-skill-category-header" data-category-header="${esc(category.id)}" style="${this._skillCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-skill-category-icon-wrap">${this._skillCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-skill-category-title">${esc(category.name)}</span><button class="ct-cat-header-edit-btn" data-edit-cat="${esc(category.id)}" title="Edit ${esc(category.name)}" aria-label="Edit ${esc(category.name)}"><i class="fas fa-pen"></i></button></div><div class="${bodyClass}" data-skill-category="${esc(category.id)}">${rows}</div></section>`;
         return { html, weight: Math.max(entries.length, 1) };
       });
       const sections = this._buildSkillsMasonryColumns(sectionData);
@@ -214,7 +217,7 @@ export function applySkillsPanel(CypherTaskbar) {
     },
 
     _buildSkillsMasonryColumns(sections) {
-      const count = Math.max(1, Number(this._gs("skillsMenuColumns") ?? 1));
+      const count = normalizeColumnCount(this._gs("skillsMenuColumns"));
       const cols = Array.from({ length: count }, () => ({ height: 0, sections: [] }));
       sections.forEach(section => {
         const targetIndex = cols.reduce((best, col, index, arr) => col.height < arr[best].height ? index : best, 0);
@@ -259,7 +262,7 @@ export function applySkillsPanel(CypherTaskbar) {
     },
 
     _skillCategoryHeaderIconHtml(style) {
-      return style?.icon ? `<i class="ct-skill-category-icon ${style.icon}"></i>` : "";
+      return style?.icon ? `<i class="ct-skill-category-icon ${escapeSkillText(style.icon)}"></i>` : "";
     },
 
     _skillCategoryIconChoices() {
@@ -558,7 +561,7 @@ export function applySkillsPanel(CypherTaskbar) {
       const renderCategories = () => {
         const list = popup.querySelector("#ct-skill-category-list");
         const categories = this._getSkillCategories();
-        list.innerHTML = categories.length ? categories.map(cat => `<div class="ct-skill-category-entry"><span>${cat.name}</span><button type="button" class="ct-skill-category-delete" data-delete-category="${cat.id}" title="Delete ${cat.name}"><i class="fas fa-trash"></i></button></div>`).join("") : `<div class="ct-empty-msg">No custom categories yet.</div>`;
+        list.innerHTML = categories.length ? categories.map(cat => `<div class="ct-skill-category-entry"><span>${escapeSkillText(cat.name)}</span><button type="button" class="ct-skill-category-delete" data-delete-category="${escapeSkillText(cat.id)}" title="Delete ${escapeSkillText(cat.name)}" aria-label="Delete ${escapeSkillText(cat.name)}"><i class="fas fa-trash"></i></button></div>`).join("") : `<div class="ct-empty-msg">No custom categories yet.</div>`;
         list.querySelectorAll("[data-delete-category]").forEach(btn => btn.onclick = async () => {
           const deleteId = btn.dataset.deleteCategory;
           const nextCategories = this._getSkillCategories().filter(cat => cat.id !== deleteId);
@@ -633,11 +636,11 @@ export function applySkillsPanel(CypherTaskbar) {
       popup.classList.add("ct-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
-      <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+      <div class="ct-popup-header"><i class="fas fa-palette"></i> ${escapeSkillText(category.name)} Header <button class="ct-popup-close" aria-label="Close category appearance"><i class="fas fa-times"></i></button></div>
       <div class="ct-popup-body ct-popup-body-compact">
         <label class="ct-popup-wide">Icon</label>
         <div class="ct-popup-wide ct-category-icon-grid" id="ct-category-header-icon-grid">${iconOptions}</div>
-        <input type="hidden" id="ct-category-header-icon" value="${state.icon}">
+        <input type="hidden" id="ct-category-header-icon" value="${escapeSkillText(state.icon)}">
         <div class="ct-popup-wide ct-category-icon-preview" id="ct-category-icon-preview"></div>
         <label>Icon Size <span class="ct-val-label" id="ct-category-icon-size-val">${state.iconSize}px</span><input type="range" id="ct-category-icon-size" min="12" max="40" step="1" value="${state.iconSize}"></label>
         <label>Header Title Size <span class="ct-val-label" id="ct-category-title-size-val">${state.titleSize}%</span><input type="range" id="ct-category-title-size" min="70" max="180" step="5" value="${state.titleSize}"></label>
@@ -648,7 +651,8 @@ export function applySkillsPanel(CypherTaskbar) {
       document.body.appendChild(popup);
       this._positionPopupAboveEvent(popup, event);
 
-      const previewTarget = () => this.element?.querySelector(`[data-category-header="${categoryId}"]`);
+      const previewTarget = () => [...(this.element?.querySelectorAll("[data-category-header]") ?? [])]
+        .find(header => header.dataset.categoryHeader === categoryId) ?? null;
       const syncVal = (id, fmt = v => v) => {
         const input = popup.querySelector(`#${id}`);
         const output = popup.querySelector(`#${id}-val`);
@@ -666,7 +670,7 @@ export function applySkillsPanel(CypherTaskbar) {
         const icon = popup.querySelector("#ct-category-header-icon").value;
         popup.querySelectorAll("[data-category-icon]").forEach(btn => btn.classList.toggle("is-selected", btn.dataset.categoryIcon === icon));
         preview.innerHTML = icon
-          ? `<span class="ct-category-icon-preview-chip"><i class="${icon}"></i></span>`
+          ? `<span class="ct-category-icon-preview-chip"><i class="${escapeSkillText(icon)}"></i></span>`
           : `<span class="ct-category-icon-preview-empty">No icon selected</span>`;
       };
 

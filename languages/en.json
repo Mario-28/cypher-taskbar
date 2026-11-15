@@ -138,6 +138,57 @@
     "TaskbarSettings": {
       "Title": "Taskbar Settings"
     },
+    "GlobalDefaults": {
+      "Activate": "Activate Global Defaults",
+      "ActivateHint": "When checked, all actors use these imported defaults unless they override a specific setting.",
+      "Import": "Import Settings",
+      "ChooseFile": "Choose File…",
+      "ImportHint": "Select a Cypher Taskbar settings JSON file exported from any actor. Files are limited to 1 MB.",
+      "ApplyToAll": "Apply to All Actors",
+      "ApplyToAllHint": "When checked, imported settings will be applied to every actor's taskbar after confirmation.",
+      "Current": "Current Defaults",
+      "SaveApply": "Save & Apply to All Actors",
+      "Clear": "Clear Global Defaults",
+      "Empty": "No global defaults loaded yet.",
+      "HowItWorks": "Imported settings become the default for all actors. Actor-specific changes override only the changed setting."
+    },
+    "Review": {
+      "ApprovePurchase": "Approve Purchase",
+      "RemoveEquipment": "Remove Equipment",
+      "ExpendEquipment": "Expend Equipment",
+      "ExpendValuable": "Expend Valuable",
+      "DesignatedReviewer": "Another active GM was designated to review this request.",
+      "FallbackReviewer": "The designated GM is unavailable; the lowest-ID active GM should review this request.",
+      "Stale": "This request is stale. No changes were made.",
+      "UncertainFailure": "The request did not finish cleanly. Check the actor state before retrying; this card remains locked to prevent a duplicate mutation."
+    },
+    "Cash": {
+      "NoGM": "No GM is currently online to approve this purchase.",
+      "RequestSent": "Purchase sent to the GM for review. No cash has been deducted yet.",
+      "RequestFailed": "The purchase request could not be created. No cash was deducted.",
+      "InsufficientFunds": "The character no longer has enough cash for this purchase."
+    },
+    "Tasks": {
+      "Delete": "Delete Task",
+      "DeleteGM": "Delete GM Task",
+      "DeleteConfirm": "Delete \"{name}\"?",
+      "Changed": "This task has already been removed or changed. Refresh the task list.",
+      "SaveFailed": "The task could not be saved. Your changes are still in the editor.",
+      "DeleteFailed": "The task could not be deleted. Refresh the list and try again."
+    },
+    "Mini": {
+      "Empty": "Empty — drag items here",
+      "Full": "This container is full (100 entries). Remove an entry before adding another.",
+      "Duplicate": "Already in this container.",
+      "ActorChanged": "The selected character changed; the dropped entry was not saved.",
+      "SaveFailed": "The container could not be saved. Your previous entries were preserved.",
+      "OverrideFailed": "The display override could not be saved."
+    },
+    "Errors": {
+      "Permission": "You do not have permission to change this character.",
+      "StaleDocument": "The character or item changed before the action completed. Refresh and try again.",
+      "SaveFailed": "The change could not be saved. Refresh the character and try again."
+    },
     "General": {
       "Save": "Save",
       "Cancel": "Cancel",

@@ -1,7 +1,8 @@
 import { MODULE_ID } from "./utils.js";
+import { getCombatBarPreset, normalizeCombatBarPreset } from "./combat-bar-appearance.js";
 
 /**
- * Combat Bar — per-turn PC automation strip (v4.1.224)
+ * Combat Bar — per-turn PC automation strip (v5.1.1)
  *
  * Separated from cypher-taskbar.js on purpose: all combat-bar logic lives here
  * so future bar changes never touch the main file beyond the thin wiring
@@ -41,70 +42,96 @@ const _CB_ROLL_MOVES = {
 };
 
 /* ── Canvas coordinate helpers ─────────────────────────────────────────
- * ONE choke point for every client ↔ world conversion in this file.
- * v4.1.224: self-calibrating against Foundry's own canvas.mousePosition
- * (guaranteed to live in the same space as token.bounds). Prior revisions
- * trusted renderer.resolution and Foundry's converter return space — both
- * wrong on some V14 setups (hidpi, browser zoom), so targeting and move
- * silently missed every token. The first live pointer event solves the
- * CSS↔scene scale from ground truth; every conversion after that uses the
- * measured value. Foundry's mousePosition is used as the PRIMARY hit-test
- * source wherever possible, since it is definitionally consistent with
- * token.bounds (both are world space). */
-
-let _cbScenePerCssPx = 0; // measured scene units per CSS px; 0 = not calibrated yet
+ * Use Foundry's public V14 converters for the actual pointer event. Reading
+ * canvas.mousePosition here is unsafe: MOVE captures pointerdown before PIXI
+ * and disables stage interaction, so that tracker can describe an earlier
+ * pointer position. The manual fallback handles renderer/CSS scaling and the
+ * complete 2D stage transform without retaining calibration between scenes. */
 
 function _cbCanvasView() {
   // V14/PIXI v8 renamed Application#view → Application#canvas.
   return canvas.app?.view ?? canvas.app?.canvas ?? document.getElementById("board") ?? null;
 }
 
-function _cbScenePerCss() {
-  if (_cbScenePerCssPx > 0) return _cbScenePerCssPx;
+function _cbFinitePoint(point) {
+  return Number.isFinite(point?.x) && Number.isFinite(point?.y)
+    ? { x: point.x, y: point.y }
+    : null;
+}
+
+function _cbConversionFallback(kind, x, y) {
   const view = _cbCanvasView();
   const rect = view?.getBoundingClientRect?.();
-  if (view?.width && rect?.width) return rect.width / view.width;
-  return 1 / (canvas.app?.renderer?.resolution ?? 1);
+  const m = canvas.stage?.worldTransform;
+  const rendererWidth = canvas.app?.renderer?.width ?? view?.width;
+  const rendererHeight = canvas.app?.renderer?.height ?? view?.height;
+  if (!rect || !m || !(rect.width > 0) || !(rect.height > 0)
+      || !(rendererWidth > 0) || !(rendererHeight > 0)
+      || ![x, y, m.a, m.b, m.c, m.d, m.tx, m.ty].every(Number.isFinite)) return null;
+
+  if (kind === "toClient") {
+    const sceneX = m.a * x + m.c * y + m.tx;
+    const sceneY = m.b * x + m.d * y + m.ty;
+    return _cbFinitePoint({
+      x: rect.left + sceneX * rect.width / rendererWidth,
+      y: rect.top + sceneY * rect.height / rendererHeight
+    });
+  }
+
+  const sceneX = (x - rect.left) * rendererWidth / rect.width;
+  const sceneY = (y - rect.top) * rendererHeight / rect.height;
+  const det = m.a * m.d - m.b * m.c;
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-8) return null;
+  const dx = sceneX - m.tx;
+  const dy = sceneY - m.ty;
+  return _cbFinitePoint({
+    x: (m.d * dx - m.c * dy) / det,
+    y: (-m.b * dx + m.a * dy) / det
+  });
 }
 
-/* Solve scene-per-CSS from ground truth: Foundry reports the pointer's world
- * position (canvas.mousePosition), we project it through the stage transform
- * to scene units, and divide by the event's client offset. Runs once per
- * session; logs the measured factor so future reports come with data. */
-function _cbCalibrate(clientX, clientY) {
-  if (_cbScenePerCssPx > 0) return;
+export function _cbClientToWorld(clientX, clientY) {
+  if (![clientX, clientY].every(Number.isFinite)) return null;
   try {
-    const mp = canvas.mousePosition;
-    const view = _cbCanvasView();
-    if (!mp || !view) return;
-    const rect = view.getBoundingClientRect?.();
-    if (!rect?.width) return;
-    const m = canvas.stage.worldTransform;
-    const sx = m.a * mp.x + m.tx;
-    const sy = m.d * mp.y + m.ty;
-    const kx = Math.abs(clientX - rect.left) > 0.5 ? sx / (clientX - rect.left) : 0;
-    const ky = Math.abs(clientY - rect.top) > 0.5 ? sy / (clientY - rect.top) : 0;
-    const k = kx > 0 && ky > 0 ? (kx + ky) / 2 : Math.max(kx, ky);
-    if (k > 0.0001) {
-      _cbScenePerCssPx = k;
-      console.log(`${MODULE_ID} | calibrated scene/CSS=${k.toFixed(4)} (rect/view=${(rect.width / view.width).toFixed(4)}, renderer.res=${canvas.app?.renderer?.resolution})`);
+    const point = _cbFinitePoint(canvas.canvasCoordinatesFromClient?.(clientX, clientY));
+    if (point) return point;
+  } catch (err) {
+    if (CONFIG.debug?.cypherTaskbar) console.warn(`${MODULE_ID} | native client→canvas conversion failed; using fallback`, err);
+  }
+  return _cbConversionFallback("toWorld", clientX, clientY);
+}
+
+export function _cbWorldToClient(wx, wy) {
+  if (![wx, wy].every(Number.isFinite)) return null;
+  try {
+    const point = _cbFinitePoint(canvas.clientCoordinatesFromCanvas?.(wx, wy));
+    if (point) return point;
+  } catch (err) {
+    if (CONFIG.debug?.cypherTaskbar) console.warn(`${MODULE_ID} | native canvas→client conversion failed; using fallback`, err);
+  }
+  return _cbConversionFallback("toClient", wx, wy);
+}
+
+/** Register END TURN independently of the GM taskbar's visual lifecycle. */
+export function registerCombatBarSocket(CypherTaskbar) {
+  if (typeof game.socket?.on !== "function") return false;
+  game.socket.on(`module.${MODULE_ID}`, async payload => {
+    if (!payload || (payload.type !== "endTurn" && payload.type !== "gmEndTurnRequest") || !game.user?.isGM) return;
+    const activeGm = game.users?.activeGM;
+    const designatedGm = activeGm ?? (game.users?.filter?.(user => user.active && user.isGM) ?? [])
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+    if (designatedGm && designatedGm.id !== game.user.id) return;
+    try {
+      // A GM with Load Only For Players has no taskbar instance. Cache the
+      // headless handler so request replay history survives between messages.
+      const handler = CypherTaskbar.instance
+        ?? (CypherTaskbar._endTurnHandler ??= Object.create(CypherTaskbar.prototype));
+      await handler._processGMEndTurn(payload);
+    } catch (error) {
+      console.error(`${MODULE_ID} | automatic end-turn socket handler failed`, error);
     }
-  } catch { /* best-effort */ }
-}
-
-function _cbClientToWorld(clientX, clientY) {
-  _cbCalibrate(clientX, clientY);
-  const m = canvas.stage.worldTransform;
-  const r = _cbCanvasView()?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
-  const s = _cbScenePerCss();
-  return { x: (((clientX - r.left) * s) - m.tx) / m.a, y: (((clientY - r.top) * s) - m.ty) / m.d };
-}
-
-function _cbWorldToClient(wx, wy) {
-  const m = canvas.stage.worldTransform;
-  const r = _cbCanvasView()?.getBoundingClientRect?.() ?? { left: 0, top: 0 };
-  const s = _cbScenePerCss();
-  return { x: r.left + ((m.a * wx + m.tx) / s), y: r.top + ((m.d * wy + m.ty) / s) };
+  });
+  return true;
 }
 
 export function applyCombatBar(CypherTaskbar) {
@@ -135,7 +162,9 @@ export function applyCombatBar(CypherTaskbar) {
      *  Includes the spell-menu flag so the bar rebuilds when a spell
      *  category appears/disappears on the actor. */
     _cbKey(st) {
-      return st ? `${st.combatId}:${st.combatantId}:${st.needInitiative ? 1 : 0}:${this._hasSpellCategory?.() ? 1 : 0}` : "";
+      if (!st) return "";
+      const theme = normalizeCombatBarPreset(this._gs("combatBarPreset", "default"));
+      return `${st.combatId}:${st.combatantId}:${st.needInitiative ? 1 : 0}:${this._hasSpellCategory?.() ? 1 : 0}:${theme}`;
     },
 
     /* ── Markup ─────────────────────────────────────────────────────────── */
@@ -148,24 +177,26 @@ export function applyCombatBar(CypherTaskbar) {
       // 4 drops × 22px + 3×2px gap + 16px padding = 110px wide.
       const space = this._gs("recoverySpace") ?? 98;
       const off = space + 110 + 30;
+      const preset = getCombatBarPreset(this._gs("combatBarPreset", "default"));
+      const icons = preset.icons;
       return `
-        <div class="ct-combat-bar" data-cb-key="${this._cbKey(st)}" style="--ct-cb-off:${off}px">
-          <button class="ct-cb-btn ct-cb-target" data-cb-action="target" title="Target"><i class="fas fa-crosshairs"></i></button>
-          <button class="ct-cb-btn ct-cb-move" data-cb-action="move" title="Move"><i class="fas fa-person-running"></i></button>
+        <div class="ct-combat-bar ct-cb-theme-${preset.id}" data-cb-key="${this._cbKey(st)}" data-cb-theme="${preset.id}" style="--ct-cb-off:${off}px">
+          <button class="ct-cb-btn ct-cb-target" data-cb-action="target" title="Target"><i class="fas ${icons.target}"></i></button>
+          <button class="ct-cb-btn ct-cb-move" data-cb-action="move" title="Move"><i class="fas ${icons.move}"></i></button>
           <span class="ct-cb-spacer"></span>
-          <button class="ct-cb-btn ct-cb-attack" data-cb-action="attack" title="Attack"><i class="fas fa-sword"></i></button>
-          <button class="ct-cb-btn ct-cb-ability" data-cb-action="ability" title="Abilities"><i class="fas fa-bolt"></i></button>
-          ${this._hasSpellCategory?.() ? `<button class="ct-cb-btn ct-cb-spell" data-cb-action="spell" title="Spell"><i class="fas fa-wand-magic-sparkles"></i></button>` : ""}
-          <button class="ct-cb-btn" data-cb-action="skill" title="Skill"><i class="fas fa-brain"></i></button>
-          <button class="ct-cb-btn" data-cb-action="item" title="Item"><i class="fas fa-backpack"></i></button>
-          <button class="ct-cb-btn" data-cb-action="other" title="Other"><i class="fas fa-ellipsis"></i></button>
+          <button class="ct-cb-btn ct-cb-attack" data-cb-action="attack" title="Attack"><i class="fas ${icons.attack}"></i></button>
+          <button class="ct-cb-btn ct-cb-ability" data-cb-action="ability" title="Abilities"><i class="fas ${icons.ability}"></i></button>
+          ${this._hasSpellCategory?.() ? `<button class="ct-cb-btn ct-cb-spell" data-cb-action="spell" title="Spell"><i class="fas ${icons.spell}"></i></button>` : ""}
+          <button class="ct-cb-btn" data-cb-action="skill" title="Skill"><i class="fas ${icons.skill}"></i></button>
+          <button class="ct-cb-btn" data-cb-action="item" title="Item"><i class="fas ${icons.item}"></i></button>
+          <button class="ct-cb-btn" data-cb-action="other" title="Other"><i class="fas ${icons.other}"></i></button>
           <span class="ct-cb-sep"></span>
           <div class="ct-cb-res-row">
-            <span class="ct-cb-res" data-cb-res="move" title="Move resource"><i class="fas fa-shoe-prints"></i><span class="ct-cb-res-val">1</span></span>
-            <span class="ct-cb-res" data-cb-res="action" title="Action resource"><i class="fas fa-hand-fist"></i><span class="ct-cb-res-val">1</span></span>
-            <span class="ct-cb-res" data-cb-res="utility" title="Utility resource"><i class="fas fa-screwdriver-wrench"></i><span class="ct-cb-res-val">1</span></span>
+            <span class="ct-cb-res" data-cb-res="move" title="Move resource"><i class="fas ${icons.resourceMove}"></i><span class="ct-cb-res-val">1</span></span>
+            <span class="ct-cb-res" data-cb-res="action" title="Action resource"><i class="fas ${icons.resourceAction}"></i><span class="ct-cb-res-val">1</span></span>
+            <span class="ct-cb-res" data-cb-res="utility" title="Utility resource"><i class="fas ${icons.resourceUtility}"></i><span class="ct-cb-res-val">1</span></span>
           </div>
-          <button class="ct-cb-btn ct-cb-end" data-cb-action="end" title="End Turn"><i class="fas fa-forward-step"></i><span>END</span></button>
+          <button class="ct-cb-btn ct-cb-end" data-cb-action="end" title="End Turn"><i class="fas ${icons.end}"></i><span>END</span></button>
         </div>`;
     },
 
@@ -264,9 +295,12 @@ export function applyCombatBar(CypherTaskbar) {
           // pips it costs (MOVE/ACTION/UTILITY multi-select, or NONE). The
           // dialog lives on the GM side; resolution spends the pips here.
           try {
-            if (!game.user?.isGM) {
+            if (!game.user?.isGM && this.actor) {
+              const requestId = foundry.utils.randomID();
+              this._pendingOtherPipRequests.set(requestId, { actorId: this.actor.id, createdAt: Date.now() });
               game.socket.emit(`module.${MODULE_ID}`, {
                 type: "gmOtherPipsRequest",
+                requestId,
                 userId: game.user.id,
                 actorId: this.actor?.id ?? null,
                 actorName: this.actor?.name ?? "",
@@ -297,7 +331,7 @@ export function applyCombatBar(CypherTaskbar) {
         ui.notifications?.warn?.("Targeting: canvas not ready yet — try again in a moment.");
         return;
       }
-      console.log(`${MODULE_ID} | TARGETING mode ON`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | TARGETING mode ON`);
       const t = this._targeting = { active: true, acquired: [] };
       document.body.classList.add("ct-targeting");
 
@@ -324,7 +358,7 @@ export function applyCombatBar(CypherTaskbar) {
     },
 
     _cbTokenAtWorld(world) {
-      if (!canvas?.ready) return null;
+      if (!canvas?.ready || !_cbFinitePoint(world)) return null;
       return canvas.tokens.placeables.find(tok => tok.visible && tok.bounds.contains(world.x, world.y)) ?? null;
     },
 
@@ -339,13 +373,9 @@ export function applyCombatBar(CypherTaskbar) {
       if (!view || !view.contains(e.target)) return;          // other UI: pass through
       e.preventDefault();
       e.stopPropagation();
-      // Foundry's own mouse tracker lives in token.bounds space by definition —
-      // primary hit-test source. Manual conversion is the fallback for the edge
-      // case where mousePosition hasn't updated for this event yet.
-      _cbCalibrate(e.clientX, e.clientY);
-      const world = canvas.mousePosition ?? _cbClientToWorld(e.clientX, e.clientY);
+      // Convert this exact event; a cached PIXI pointer position can be stale.
+      const world = _cbClientToWorld(e.clientX, e.clientY);
       const token = this._cbTokenAtWorld(world);
-      try { console.log(`${MODULE_ID} | targeting @ world(${world.x.toFixed(0)},${world.y.toFixed(0)}) → ${token ? "HIT " + token.name : "miss"}`); } catch { }
       if (!token) return;
 
       if (e.button === 0) {
@@ -673,6 +703,28 @@ export function applyCombatBar(CypherTaskbar) {
       return next < cur;
     },
 
+    /** Restore one locally displayed resource pip after a denied GM review. */
+    _cbRestoreResource(kind) {
+      if (!["move", "action", "utility"].includes(kind)) return false;
+      const pip = this.element?.querySelector?.(`.ct-cb-res[data-cb-res="${kind}"]`);
+      const val = pip?.querySelector?.(".ct-cb-res-val");
+      const current = Number.parseInt(val?.textContent, 10);
+      if (!Number.isFinite(current) || current < 0) return false;
+      val.textContent = String(current + 1);
+      pip.classList.remove("ct-cb-res-empty");
+      if (kind === "move") this._cbSyncMoveBtn();
+      if (kind === "action") {
+        this._cbSyncAttackBtn();
+        this._cbSyncAbilityBtn();
+        this._cbSyncMoveBtn();
+        this._cbSyncSpellBtn();
+        this._syncSpellCastButtons?.();
+        this._syncAttackRollButtons?.();
+      }
+      if (kind === "utility") this._syncEquipmentUseButtons?.();
+      return true;
+    },
+
     /** Current value of a combat-bar resource pip (move/action/utility), read
      *  from the bar DOM. 0 when the bar is absent. */
     _cbResCount(kind) {
@@ -941,14 +993,14 @@ export function applyCombatBar(CypherTaskbar) {
           presetDifficulty: 4
         });
         if (achieved == null) {
-          console.log(`${MODULE_ID} | ${cfg.title} cancelled or failed — no move mode`);
+          if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | ${cfg.title} cancelled or failed — no move mode`);
           return; // cancelled — nothing spent, no move mode
         }
         // Achieved total vs the ORIGINAL difficulty×3 is exactly die vs the
         // eased target (the +3 per ease level lands on both sides).
         const success = Number(achieved) >= 12;
         const out = success ? cfg.success : cfg.failure;
-        console.log(`${MODULE_ID} | ${cfg.title}: achieved ${achieved} — ${success ? "SUCCESS" : "FAILURE"} — ${out.cap} m, costs ${out.cost}`);
+        if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | ${cfg.title}: achieved ${achieved} — ${success ? "SUCCESS" : "FAILURE"} — ${out.cap} m, costs ${out.cost}`);
         ui.notifications?.info?.(success ? cfg.toastSuccess : cfg.toastFailure);
         this._cbEnterMoveMode(key, out.cost, { max: out.cap, costLabel: out.label });
       })();
@@ -963,7 +1015,7 @@ export function applyCombatBar(CypherTaskbar) {
         if (this._cbMoveMode) return;
         const base = _CB_MM_TIPS[key];
         if (!base) return;
-        console.log(`${MODULE_ID} | MOVE mode entered: ${key}`);
+        if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | MOVE mode entered: ${key}`);
         const info = { ...base,
           ...(overrides.max ? { max: overrides.max, dist: `~${overrides.max} m` } : {}),
           ...(overrides.costLabel ? { cost: overrides.costLabel } : {}) };
@@ -1091,23 +1143,25 @@ export function applyCombatBar(CypherTaskbar) {
       ruler.innerHTML = `<line class="ct-mr-line"/><g class="ct-mr-ticks"></g><circle class="ct-mr-origin" r="5"/><circle class="ct-mr-dest" r="7"/><rect class="ct-mr-pill" rx="9"/><text class="ct-mr-label"></text>`;
       mode.overlay.insertBefore(ruler, mode.overlay.querySelector(".ct-move-window"));
       mode.rulerEl = ruler;
-      // Client → world: Foundry's own mousePosition is the primary source (it
-      // lives in token.bounds space by definition); the self-calibrating manual
-      // conversion is the fallback. v4.1.224.
-      const toWorld = (e) => {
-        _cbCalibrate(e.clientX, e.clientY);
-        return canvas.mousePosition ?? _cbClientToWorld(e.clientX, e.clientY);
-      };
+      // Convert the exact DOM event through Foundry's public coordinate API.
+      // Do not read canvas.mousePosition: stage interaction is disabled above,
+      // and this capture-phase pointerdown can precede PIXI's own tracker update.
+      const toWorld = (e) => _cbClientToWorld(e.clientX, e.clientY);
       // One-time self-check: round-trip the token centre through both conversions
       // so future "can't grab" reports come with data (resolution, grid, Δ).
       try {
         const cc = { x: mode.start.x + mode.tw / 2, y: mode.start.y + mode.th / 2 };
         const fwd = _cbWorldToClient(cc.x, cc.y);
-        const back = _cbClientToWorld(fwd.x, fwd.y);
-        const err = Math.hypot(back.x - cc.x, back.y - cc.y);
-        if (err > 1.5) console.warn(`${MODULE_ID} | move mode: client↔world round-trip off by ${err.toFixed(1)}px`, { resolution: canvas.app?.renderer?.resolution, view: !!view });
-        else console.log(`${MODULE_ID} | move mode armed (resolution=${canvas.app?.renderer?.resolution}, grid=${mode.gridSize}px / ${mode.gridDist}${canvas.scene?.grid?.units ?? ""}, round-trip Δ=${err.toFixed(2)}px)`);
-      } catch { /* diagnostic only */ }
+        const back = fwd ? _cbClientToWorld(fwd.x, fwd.y) : null;
+        if (!back) console.warn(`${MODULE_ID} | move mode: client↔world conversion unavailable`);
+        else {
+          const err = Math.hypot(back.x - cc.x, back.y - cc.y);
+          if (err > 1.5) console.warn(`${MODULE_ID} | move mode: client↔world round-trip off by ${err.toFixed(1)}px`, { resolution: canvas.app?.renderer?.resolution, view: !!view });
+          else if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | move mode armed (resolution=${canvas.app?.renderer?.resolution}, grid=${mode.gridSize}px / ${mode.gridDist}${canvas.scene?.grid?.units ?? ""}, round-trip Δ=${err.toFixed(2)}px)`);
+        }
+      } catch (err) {
+        if (CONFIG.debug?.cypherTaskbar) console.warn(`${MODULE_ID} | move mode coordinate diagnostic failed`, err);
+      }
       const onDown = (e) => {
         // Only canvas presses — the DOM chrome (UNDO/EXIT/FINISH, menu) keeps working.
         if (e.target !== view && !view.contains?.(e.target)) return;
@@ -1120,13 +1174,17 @@ export function applyCombatBar(CypherTaskbar) {
         e.stopImmediatePropagation();
         if (mode.dragging || !mode.token) return;
         const p = toWorld(e);
+        if (!p) {
+          ui.notifications?.warn?.("MOVE could not read the canvas pointer position. Exit move mode and try again.");
+          return;
+        }
         const c = mode.cur;
         if (p.x < c.x || p.x > c.x + mode.tw || p.y < c.y || p.y > c.y + mode.th) {
           // Diagnostic: log near-misses (pointer within a grid of the rect) so future
           // "can't grab the token" reports come with data.
           const gs = mode.gridSize || 50;
           const near = p.x > c.x - gs && p.x < c.x + mode.tw + gs && p.y > c.y - gs && p.y < c.y + mode.th + gs;
-          if (near) console.debug(`${MODULE_ID} | move grab missed`, { p, cur: c, tw: mode.tw, th: mode.th, token: mode.token.id });
+          if (near && CONFIG.debug?.cypherTaskbar) console.debug(`${MODULE_ID} | move grab missed`, { p, cur: c, tw: mode.tw, th: mode.th, token: mode.token.id });
           return;
         }
         mode.dragging = true;
@@ -1137,6 +1195,7 @@ export function applyCombatBar(CypherTaskbar) {
       const onMove = (e) => {
         if (!mode.dragging || !mode.token) return;
         const p = toWorld(e);
+        if (!p) return;
         const s = mode.start, gs = mode.gridSize;
         const tw = mode.tw, th = mode.th;
         const scx = s.x + tw / 2, scy = s.y + th / 2;
@@ -1177,6 +1236,8 @@ export function applyCombatBar(CypherTaskbar) {
       window.addEventListener("pointerdown", onDown, true);
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+      view.addEventListener("lostpointercapture", onUp);
       mode.dragHandlers = { view, onDown, onMove, onUp };
     },
 
@@ -1208,6 +1269,7 @@ export function applyCombatBar(CypherTaskbar) {
       const gs = mode.gridSize || 50;
       const o = px(s.x + mode.tw / 2, s.y + mode.th / 2);   // origin centre (screen)
       const d = px(c.x + mode.tw / 2, c.y + mode.th / 2);   // destination centre (screen)
+      if (!o || !d) return;
       const line = svg.querySelector(".ct-mr-line");
       line.setAttribute("x1", o.x); line.setAttribute("y1", o.y);
       line.setAttribute("x2", d.x); line.setAttribute("y2", d.y);
@@ -1222,6 +1284,7 @@ export function applyCombatBar(CypherTaskbar) {
         let html = "";
         for (let i = 1; i <= n; i++) {
           const p = px(s.x + mode.tw / 2 + ux * i * gs, s.y + mode.th / 2 + uy * i * gs);
+          if (!p) continue;
           html += `<line x1="${(p.x + qx * 5).toFixed(1)}" y1="${(p.y + qy * 5).toFixed(1)}" x2="${(p.x - qx * 5).toFixed(1)}" y2="${(p.y - qy * 5).toFixed(1)}"/>`;
         }
         ticks.innerHTML = html;
@@ -1265,25 +1328,38 @@ export function applyCombatBar(CypherTaskbar) {
 
     /** Commit the token's new position, spend the move cost, exit the mode. */
     async _cbFinishMove(mode) {
+      if (!mode || mode.finishing || this._cbMoveMode !== mode) return false;
+      mode.finishing = true;
+      mode.finishBtn.disabled = true;
       try {
-        if (mode.token) {
-          CypherTaskbar._cbInternalMove = true;
-          try {
-            // Commit as a document-space delta from entry — mirrors exactly what the
-            // sprite did, independent of token.position conventions.
-            await mode.token.document.update({
-              x: Math.round(mode.docStart.x + (mode.cur.x - mode.start.x)),
-              y: Math.round(mode.docStart.y + (mode.cur.y - mode.start.y))
-            });
-          } finally {
-            CypherTaskbar._cbInternalMove = false;
-          }
+        const tokenDoc = canvas.scene?.tokens?.get(mode.token?.document?.id);
+        const actor = tokenDoc?.actor;
+        const permitted = tokenDoc?.isOwner && actor?.type === "pc"
+          && (game.user?.isGM ? actor.hasPlayerOwner : actor.isOwner);
+        if (!permitted) throw new Error("The token is no longer available or owned on the active scene.");
+        if (![mode.docStart?.x, mode.docStart?.y, mode.start?.x, mode.start?.y, mode.cur?.x, mode.cur?.y, tokenDoc.x, tokenDoc.y].every(Number.isFinite)) {
+          throw new Error("The movement state is invalid.");
+        }
+        if (tokenDoc.x !== mode.docStart.x || tokenDoc.y !== mode.docStart.y) {
+          throw new Error("The token moved by another action. Exit move mode and start again.");
+        }
+        const x = Math.round(mode.docStart.x + (mode.cur.x - mode.start.x));
+        const y = Math.round(mode.docStart.y + (mode.cur.y - mode.start.y));
+        CypherTaskbar._cbInternalMove = true;
+        try {
+          await tokenDoc.update({ x, y });
+        } finally {
+          CypherTaskbar._cbInternalMove = false;
         }
         for (const kind of mode.cost.split(",")) this._cbExpendResource(kind.trim());
         this._cbExitMoveMode(false);
+        return true;
       } catch (err) {
+        mode.finishing = false;
+        if (mode.finishBtn?.isConnected) mode.finishBtn.disabled = false;
         console.error(`${MODULE_ID} | finish move failed`, err);
-        ui.notifications?.error(`Finish move failed: ${err.message}`);
+        ui.notifications.error(`Finish move failed: ${err.message}`);
+        return false;
       }
     },
 
@@ -1303,10 +1379,12 @@ export function applyCombatBar(CypherTaskbar) {
       if (!m) return;
       document.removeEventListener("keydown", m.esc, true);
       if (m.dragHandlers) {
-        const { onDown, onMove, onUp } = m.dragHandlers;
+        const { view, onDown, onMove, onUp } = m.dragHandlers;
         window.removeEventListener("pointerdown", onDown, true);
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+        view.removeEventListener("lostpointercapture", onUp);
       }
       for (const [t, em, inter] of m.prevInteractive) {
         if ("eventMode" in t) t.eventMode = em;
@@ -1326,10 +1404,44 @@ export function applyCombatBar(CypherTaskbar) {
     },
 
     async _cbEndTurn(st) {
-      const combat = game.combat;
-      if (!combat || !st) return;
-      // No GM round-trip: END advances the turn directly from this client.
-      try { await combat.nextTurn(); } catch (err) { console.error(`${MODULE_ID} | nextTurn failed`, err); }
+      const combat = game.combats?.get(st?.combatId);
+      const combatant = combat?.combatant;
+      const actor = combatant?.actor;
+      if (!combat?.started || combatant?.id !== st?.combatantId) return false;
+      if (!game.user?.isGM && (!game.user?.id || !actor?.isOwner)) {
+        ui.notifications?.warn?.("You can only end the current turn of a character you own.");
+        return false;
+      }
+      const key = `${combat.id}:${combatant.id}`;
+      const now = Date.now();
+      if (this._cbEndTurnPending?.key === key && now - this._cbEndTurnPending.at < 2000) return false;
+      this._cbEndTurnPending = { key, at: now };
+      try {
+        if (game.user?.isGM) {
+          await combat.nextTurn();
+          return true;
+        }
+        if (!game.users?.some(u => u.active && u.isGM)) {
+          ui.notifications?.warn?.("No GM is online to advance the turn.");
+          return false;
+        }
+        // Players cannot normally update the Combat document. The designated GM
+        // executes this as an automatic, validated action — no approval dialog.
+        game.socket.emit(`module.${MODULE_ID}`, {
+          type: "endTurn",
+          requestId: foundry.utils.randomID(),
+          userId: game.user.id,
+          combatId: combat.id,
+          combatantId: combatant.id
+        });
+        return true;
+      } catch (err) {
+        console.error(`${MODULE_ID} | end turn failed`, err);
+        ui.notifications?.error?.("Could not advance the turn.");
+        return false;
+      } finally {
+        if (game.user?.isGM || this._cbEndTurnPending?.at !== now) this._cbEndTurnPending = null;
+      }
     }
 
   });

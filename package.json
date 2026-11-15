@@ -1,0 +1,14 @@
+{
+  "name": "cypher-taskbar-development",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "lint": "eslint --no-eslintrc -c tests/eslintrc.json 'scripts/**/*.js'",
+    "check": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "eslint": "8.57.1",
+    "linkedom": "0.18.12"
+  }
+}

@@ -1,22 +1,25 @@
 /**
- * Cypher Taskbar v4.1.224
+ * Cypher Taskbar v5.1.1
  * Foundry VTT v14+ | Cypher System
  *
  * Main entry point — imports panel mixins and sets up hooks.
  */
 
-import { MODULE_ID, hexToRGBA, readJSONSetting, getActorPref, setActorPref, migrateActorPreferences } from "./utils.js";
+import { MODULE_ID, hexToRGBA, readJSONSetting, getActorPref, setActorPref, migrateActorPreferences, sanitizeHTML } from "./utils.js";
 import { registerSettings } from "./settings.js";
+import { normalizeGlobalDefaults } from "./global-defaults-config.js";
 import { applyPersonaPanel } from "./persona-panel.js";
 import { applySkillsPanel } from "./skills-panel.js";
-import { applyEquipmentPanel } from "./equipment-panel.js";
+import { applyEquipmentPanel, resolveEquipmentExpenditure } from "./equipment-panel.js";
 import { applyAbilitiesPanel } from "./abilities-panel.js";
 import { applySpellsPanel } from "./spells-panel.js";
 import { applyCombatPanel } from "./combat-panel.js";
-import { applyCombatBar } from "./combat-bar.js";
-import { buildGalleryStrip, bindGalleryStripEvents, initGallerySocket } from "./gallery-tabs.js";
+import { applyCombatBar, registerCombatBarSocket } from "./combat-bar.js";
+import { bindCombatBarPresetCards, normalizeCombatBarPreset, renderCombatBarPresetCards } from "./combat-bar-appearance.js";
+import { buildGalleryStrip, bindGalleryStripEvents, initGallerySocket, normalizeGallerySharePayload } from "./gallery-tabs.js";
+import { RECOVERY_RESET_UPDATE, getRecoveryGroups, getRecoverySpendUpdate, resolveRollOutcome } from "./cypher-system-adapter.js";
 
-class CypherTaskbar {
+export class CypherTaskbar {
   constructor() {
     this.element     = null;
     this.actor       = null;
@@ -44,11 +47,16 @@ class CypherTaskbar {
     this._lastRollData = null; // Store last roll parameters for reroll
     this._xpApi = null;        // Cached Cypher XP API
     this._acknowledgedTasks = new Set(); // Task IDs hovered/acknowledged by player
+    this._handledGmRequests = new Set(); // Replay protection for GM-reviewed requests
+    this._pendingRestRequests = new Map();
+    this._pendingUtilityRequests = new Map();
+    this._pendingOtherPipRequests = new Map();
+    this._pendingAttackOutcomes = new Map();
 
     // Listen for Cypher XP ready hook
     Hooks.on("cypher-xp.ready", (api) => {
       this._xpApi = api;
-      console.log(`${MODULE_ID} | Cypher XP API ready`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Cypher XP API ready`);
     });
 
     // Listen for Cypher XP changes to update portrait panel immediately
@@ -89,6 +97,21 @@ class CypherTaskbar {
     });
   }
 
+  /** Claim a GM request once. Raw socket payloads are requests, never proof of identity. */
+  _claimGmRequest(payload) {
+    if (!game.user?.isGM || !payload || typeof payload !== "object") return false;
+    const requestId = typeof payload.requestId === "string" ? payload.requestId : "";
+    if (!/^[A-Za-z0-9]{16}$/.test(requestId)) return false;
+    const key = `${payload.type}:${requestId}`;
+    this._handledGmRequests ??= new Set();
+    if (this._handledGmRequests.has(key)) return false;
+    this._handledGmRequests.add(key);
+    if (this._handledGmRequests.size > 256) {
+      this._handledGmRequests.delete(this._handledGmRequests.values().next().value);
+    }
+    return true;
+  }
+
   /** Check if Cypher XP module is active */
   _cypherXpActive() {
     return game.modules.get("cypher-xp")?.active === true;
@@ -116,7 +139,7 @@ class CypherTaskbar {
 
   /** Set setting: always writes to per-actor preference store */
   async _ss(key, value) {
-    await setActorPref(this.actor?.id, key, value);
+    return setActorPref(this.actor?.id, key, value);
   }
 
   /** Check if a portrait path is a video file (webm) */
@@ -322,11 +345,9 @@ class CypherTaskbar {
       this._adjustCanvasPadding(
         this._gs("locked") || !this._gs("autoHide")
       );
-      // Aggressive re-apply: actor flags may load async, so retry multiple times
-      requestAnimationFrame(() => { if (this.element) this.applySettings(); });
-      setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 50);
-      setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 200);
-      setTimeout(() => { if (this.element) { this._resolveActor(); this.applySettings(); } }, 500);
+      // Actor migration completes before ready; one frame is enough for layout.
+      // Avoid the old four full settings passes on every render.
+      requestAnimationFrame(() => { if (this.element?.isConnected) this.applySettings(); });
     } catch (err) {
       console.error(`${MODULE_ID} | render() failed:`, err);
     }
@@ -483,9 +504,12 @@ class CypherTaskbar {
     const animFreq = this._gs("portraitAnimFrequency") ?? 0;
     const animLoops = this._gs("portraitAnimLoops") ?? 0;
     const useTimerAnim = isVideoPortrait && animFreq > 0;
+    const esc = foundry.utils.escapeHTML;
+    const safeImg = esc(img);
+    const safeActorName = esc(actor.name);
     const portraitHTML = isVideoPortrait
-      ? `<video class="ct-portrait-video" src="${img}" style="width:${pWidth}px;${shadowCSS}" ${useTimerAnim ? '' : 'autoplay loop'} muted playsinline alt="${actor.name}" data-timer-anim="${useTimerAnim ? '1' : '0'}"></video>`
-      : `<img class="ct-portrait" src="${img}" style="width:${pWidth}px;${shadowCSS}" alt="${actor.name}" />`;
+      ? `<video class="ct-portrait-video" src="${safeImg}" style="width:${pWidth}px;${shadowCSS}" ${useTimerAnim ? '' : 'autoplay loop'} muted playsinline aria-label="${safeActorName}" data-timer-anim="${useTimerAnim ? '1' : '0'}"></video>`
+      : `<img class="ct-portrait" src="${safeImg}" style="width:${pWidth}px;${shadowCSS}" alt="${safeActorName}" />`;
 
     return `
       <div class="ct-char-float${portraitAreaCollapsed ? " ct-char-float-collapsed ct-portrait-slide-away" : ""}" id="ct-char-float">
@@ -495,9 +519,9 @@ class CypherTaskbar {
             <div class="ct-identity-wrap" style="position:relative;">
           <div class="ct-identity-panel" style="--ct-bars-scale:${upperPanelScale/100};">
               <div class="ct-identity-name-row">
-                <div class="ct-identity-name" title="${actor.name}">${actor.name}</div>
+                <div class="ct-identity-name" title="${safeActorName}">${safeActorName}</div>
               </div>
-              ${sentence ? `<div class="ct-identity-sentence" title="${sentence}">${sentence}</div>` : ``}
+              ${sentence ? `<div class="ct-identity-sentence" title="${esc(sentence)}">${esc(sentence)}</div>` : ``}
               <div class="ct-identity-meta">
                 <div class="ct-status-effects-placeholder">
                   <span class="ct-status-effects-label"><i class="fas fa-shield-virus"></i> STATUS EFFECTS</span>
@@ -701,16 +725,17 @@ class CypherTaskbar {
     const unread = mail.filter(m => !m.opened).length;
 
     const mailRow = (entry, archived = false) => {
+      const esc = foundry.utils.escapeHTML;
       const opened = !!entry.opened;
       const iconClass = opened ? "fa-envelope-open" : "fa-envelope";
       const dateStr = entry.dateLabel ? String(entry.dateLabel) : (entry.droppedAt ? this._formatMailDate(entry.droppedAt) : "");
       const journal = entry.journalId ? game.journal?.get(entry.journalId) : null;
       const title = entry.title || journal?.name || "Unknown letter";
-      return `<div class="ct-mail-row${opened ? " ct-mail-row-opened" : " ct-mail-row-unread"}${archived ? " ct-mail-row-archived" : ""}" data-mail-id="${entry.id}" data-mail-journal="${entry.journalId ?? ""}">
+      return `<div class="ct-mail-row${opened ? " ct-mail-row-opened" : " ct-mail-row-unread"}${archived ? " ct-mail-row-archived" : ""}" data-mail-id="${esc(entry.id)}" data-mail-journal="${esc(entry.journalId ?? "")}">
         <span class="ct-mail-row-envelope${opened ? " opened" : ""}"><i class="fas ${iconClass}"></i></span>
-        <span class="ct-mail-row-title">${foundry.utils.escapeHTML(title)}</span>
-        ${dateStr ? `<span class="ct-mail-row-date">${dateStr}</span>` : ``}
-        ${archived ? `<button class="ct-mail-restore" data-mail-restore="${entry.id}" title="Return to inbox (mark unread)"><i class="fas fa-envelope"></i></button>` : ``}
+        <span class="ct-mail-row-title">${esc(title)}</span>
+        ${dateStr ? `<span class="ct-mail-row-date">${esc(dateStr)}</span>` : ``}
+        ${archived ? `<button type="button" class="ct-mail-restore" data-mail-restore="${esc(entry.id)}" title="Return to inbox (mark unread)" aria-label="Restore ${esc(title)} to inbox"><i class="fas fa-envelope"></i></button>` : ``}
       </div>`;
     };
 
@@ -978,16 +1003,18 @@ class CypherTaskbar {
     const effects = actor.effects?.filter(e => !e.disabled) ?? [];
     if (effects.length === 0) return `<span class="ct-status-effects-empty">No active effects</span>`;
     return effects.map((e, i) => {
+      const esc = foundry.utils.escapeHTML;
       const color = this._effectColor(e);
       const changes = this._formatEffectChanges(e);
-      const desc = foundry.utils.escapeHTML(e.description || e.system?.description || "");
+      const desc = esc(e.description || e.system?.description || "");
+      const icon = esc(e.img || "icons/svg/aura.svg");
       return `
-      <div class="ct-status-effect-wrap" data-effect-index="${i}" style="--ct-effect-color:${color};--ct-effect-delay:${i * 0.35}s;"
-           data-effect-name="${foundry.utils.escapeHTML(e.name || 'Unknown Effect')}"
+      <div class="ct-status-effect-wrap" data-effect-index="${i}" style="--ct-effect-color:${esc(color)};--ct-effect-delay:${i * 0.35}s;"
+           data-effect-name="${esc(e.name || 'Unknown Effect')}"
            data-effect-desc="${desc}"
-           data-effect-changes="${foundry.utils.escapeHTML(changes)}"
-           data-effect-icon="${e.img || 'icons/svg/aura.svg'}">
-        <img class="ct-status-effect-icon" src="${e.img || 'icons/svg/aura.svg'}" draggable="false" alt="" />
+           data-effect-changes="${esc(changes)}"
+           data-effect-icon="${icon}">
+        <img class="ct-status-effect-icon" src="${icon}" draggable="false" alt="${esc(e.name || 'Unknown Effect')}" />
       </div>`;
     }).join('');
   }
@@ -1039,13 +1066,14 @@ class CypherTaskbar {
           document.body.appendChild(tooltip);
         }
 
+        const esc = foundry.utils.escapeHTML;
         tooltip.innerHTML = `
           <div class="ct-effect-tt-header">
-            <img src="${icon}" alt="" draggable="false">
-            <span>${name}</span>
+            <img src="${esc(icon)}" alt="" draggable="false">
+            <span>${esc(name)}</span>
           </div>
-          ${desc ? `<div class="ct-effect-tt-desc">${desc}</div>` : ''}
-          ${changes ? `<div class="ct-effect-tt-changes"><i class="fas fa-sliders-h"></i> ${changes}</div>` : ''}
+          ${desc ? `<div class="ct-effect-tt-desc">${esc(desc)}</div>` : ''}
+          ${changes ? `<div class="ct-effect-tt-changes"><i class="fas fa-sliders-h"></i> ${esc(changes)}</div>` : ''}
         `;
         tooltip.classList.add('ct-effect-tt-visible');
       });
@@ -1121,11 +1149,12 @@ class CypherTaskbar {
     };
     const statusKey = this._getActorDamageStatus(actor);
     const status = statuses[statusKey] ?? statuses.hale;
-    const portrait = actor.img ?? "icons/svg/mystery-man.svg";
+    const portrait = foundry.utils.escapeHTML(actor.img ?? "icons/svg/mystery-man.svg");
+    const actorName = foundry.utils.escapeHTML(actor.name);
     return `
       <div class="ct-bar-meta ct-bar-status-wrap">
-        <button class="ct-portrait-menu-btn" data-portrait-menu="1" title="MAIN menu">
-          <img src="${portrait}" alt="${actor.name}" draggable="false">
+        <button class="ct-portrait-menu-btn" data-portrait-menu="1" title="MAIN menu" aria-label="Open main menu for ${actorName}">
+          <img src="${portrait}" alt="${actorName}" draggable="false">
         </button>
         <div class="ct-bar-status ${status.cls}" aria-label="Character status: ${status.label}">
           <i class="${status.icon}"></i>
@@ -1155,45 +1184,27 @@ class CypherTaskbar {
   /* ── Recovery Rolls — blue drops + candle (separate from dice bar) ── */
   _buildRecoveryRolls(actor) {
     if (!actor) return "";
-    const sys = actor.system ?? {};
-    // Try all known Cypher System recovery data paths (v2.x through v3.x)
-    let rolls = null;
-    if (Array.isArray(sys.combat?.recoveries?.recoveryRolls)) rolls = sys.combat.recoveries.recoveryRolls;
-    else if (Array.isArray(sys.recoveries?.recoveryRolls)) rolls = sys.recoveries.recoveryRolls;
-    else if (Array.isArray(sys.combat?.recoveryRolls)) rolls = sys.combat.recoveryRolls;
-    else if (Array.isArray(sys.attributes?.recoveries)) rolls = sys.attributes.recoveries;
-    else if (actor.getFlag("cyphersystem", "recoveryRolls")) rolls = actor.getFlag("cyphersystem", "recoveryRolls");
-    else rolls = [true, true, true, true]; // default: all available
-    const rollArr = Array.isArray(rolls) ? rolls.slice(0, 4) : [true, true, true, true];
-    const defs = [
-      { label: "Recovery 1 — 1 Action", desc: "Spend: one action" },
-      { label: "Recovery 2 — 10 Minutes", desc: "Spend: ten minutes rest" },
-      { label: "Recovery 3 — 1 Hour", desc: "Spend: one hour rest" },
-      { label: "Recovery 4 — 10 Hours", desc: "Spend: ten hours rest" }
-    ];
+    const groups = getRecoveryGroups(actor.system);
     const dropColor = this._gs("recoveryDropColor") ?? "#3a8fd4";
     const bgColor = this._gs("recoveryBgColor") ?? "#808080";
-    const bgOpacity = this._gs("recoveryBgOpacity") ?? 0.25;
-    const space = this._gs("recoverySpace") ?? 98;
-    // Convert hex bg color to rgba
-    const hexToRgba = (hex, alpha) => {
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    };
-    const bgRgba = hexToRgba(bgColor, bgOpacity);
-    const drops = rollArr.map((available, idx) => {
-      const isAvailable = available === true || Number(available) > 0;
-      return `<button class="ct-recovery-drop${isAvailable ? '' : ' spent'}" data-recovery-index="${idx}" type="button" data-tt="${foundry.utils.escapeHTML(defs[idx].label)}" data-tt-desc="${foundry.utils.escapeHTML(defs[idx].desc)}" ${!isAvailable ? 'disabled' : ''}><i class="fas fa-tint"></i></button>`;
+    const bgOpacity = Math.max(0, Math.min(1, Number(this._gs("recoveryBgOpacity") ?? 0.25)));
+    const space = Number(this._gs("recoverySpace") ?? 98) || 0;
+    const bgRgba = hexToRGBA(bgColor, bgOpacity);
+    const drops = groups.map(group => {
+      const label = `Recovery ${group.index + 1} — ${group.label}`;
+      const count = group.enabledCount > 1 ? ` (${group.remainingCount}/${group.enabledCount} remaining)` : "";
+      return `<button class="ct-recovery-drop${group.available ? "" : " spent"}" data-recovery-index="${group.index}" type="button" data-tt="${foundry.utils.escapeHTML(label)}" data-tt-desc="${foundry.utils.escapeHTML(group.description + count)}" aria-label="${foundry.utils.escapeHTML(label + (group.available ? " available" : " used"))}" ${!group.available ? "disabled" : ""}><i class="fas fa-tint"></i></button>`;
     }).join("");
     return `<div class="ct-recovery-bar" style="--ct-rec-drop-color:${dropColor};background:${bgRgba};left:calc(50% + ${space}px);">${drops}</div>`;
   }
 
   async _spendRecoveryRoll(index) {
     const actor = this.actor;
-    if (!actor) return;
-    const labels = ["1 Action", "10 Minutes", "1 Hour", "10 Hours"];
+    if (!actor || !actor.isOwner || this._recoveryPending) return;
+    this._recoveryPending = true;
+    try {
+    const groups = getRecoveryGroups(actor.system);
+    const labels = groups.map(group => group.label);
     const poolKeys = ["might", "speed", "intellect"];
     const poolMeta = poolKeys.map(k => {
       const p = actor.system?.pools?.[k] ?? { value: 0, max: 0 };
@@ -1207,64 +1218,42 @@ class CypherTaskbar {
         content: `<div class="ct-snark"><div class="ct-snark-frame"><div class="ct-snark-icon"><i class="fas fa-heart"></i></div><div class="ct-snark-title">Well, well...</div><div class="ct-snark-line">Recovering? From what?</div><div class="ct-snark-line">You are full, <em>fool</em>.</div><div class="ct-snark-ornament">* * *</div></div></div>`,
         buttons: [{ label: "Dismiss", action: "close", className: "ct-modal-btn" }]
       });
+      this._recoveryPending = false;
       return;
     }
 
-    // ── 2. Re-fetch fresh recovery data from actor ──
-    const _getRecoveryData = () => {
-      const sys = actor.system ?? {};
-      if (Array.isArray(sys.combat?.recoveries?.recoveryRolls)) return { arr: [...sys.combat.recoveries.recoveryRolls], path: "system.combat.recoveries.recoveryRolls" };
-      if (Array.isArray(sys.recoveries?.recoveryRolls)) return { arr: [...sys.recoveries.recoveryRolls], path: "system.recoveries.recoveryRolls" };
-      if (Array.isArray(sys.combat?.recoveryRolls)) return { arr: [...sys.combat.recoveryRolls], path: "system.combat.recoveryRolls" };
-      return { arr: [true, true, true, true], path: "system.combat.recoveries.recoveryRolls" };
-    };
-    let { arr, path } = _getRecoveryData();
-    if (!arr[index] || (typeof arr[index] === "boolean" ? !arr[index] : Number(arr[index]) <= 0)) {
-      ui.notifications?.warn?.(`${labels[index]} recovery already spent.`);
-      return;
-    }
-
-    // ── 2b. Order enforcement: must spend in sequence ──
-    if (index > 0) {
-      const prevAvailable = arr.slice(0, index).some((v, i) => {
-        const available = v === true || Number(v) > 0;
-        return available;
-      });
-      if (prevAvailable) {
-        // Show fancy snark toast that auto-fades
+    // Validate the native boolean state without consuming it before allocation is confirmed.
+    const recoverySpend = getRecoverySpendUpdate(actor.system, index);
+    if (!recoverySpend.ok) {
+      if (recoverySpend.reason === "order") {
         const toast = document.createElement("div");
         toast.className = "ct-recovery-toast";
-        toast.innerHTML = `
-          <div class="ct-recovery-toast-inner">
-            <i class="fas fa-exclamation-triangle"></i>
-            <span>Seriously! Did you read the rules!</span>
-          </div>`;
+        toast.innerHTML = `<div class="ct-recovery-toast-inner"><i class="fas fa-exclamation-triangle"></i><span>Use your earlier available recovery rolls first.</span></div>`;
         document.body.appendChild(toast);
         requestAnimationFrame(() => toast.classList.add("ct-show"));
         setTimeout(() => {
           toast.classList.remove("ct-show");
           toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+          setTimeout(() => toast.remove(), 500);
         }, 3000);
-        return;
+      } else {
+        ui.notifications?.warn?.(`${labels[index] ?? "This"} recovery is already spent or unavailable.`);
       }
+      this._recoveryPending = false;
+      return;
     }
 
-    // ── 3. Spend THIS recovery via Cypher System API or direct update ──
-    const spentVal = typeof arr[index] === "boolean" ? false : 0;
-    arr[index] = spentVal;
-    let spentViaAPI = false;
-    if (typeof actor.rollRecovery === "function") {
-      try { await actor.rollRecovery(index); spentViaAPI = true; } catch (e) { console.warn(`${MODULE_ID} | rollRecovery failed, falling back to direct update`); }
-    }
-    if (!spentViaAPI) await actor.update({ [path]: arr });
-
-    // ── 4. Force re-render so recovery drops update immediately ──
-    this.render();
-
-    // ── 5. Roll recovery ──
-    const tier = actor.system?.basic?.tier ?? 1;
+    // ── 3. Roll recovery ──
+    const tier = Math.max(1, Math.min(6, Number(actor.system?.basic?.tier ?? 1) || 1));
     const roll = new Roll(`1d6 + ${tier}`);
-    await roll.evaluate();
+    try {
+      await roll.evaluate();
+    } catch (error) {
+      console.error(`${MODULE_ID} | recovery roll failed`, error);
+      ui.notifications?.error?.("Recovery roll failed; no recovery was spent.");
+      this._recoveryPending = false;
+      return;
+    }
     const total = roll.total;
 
     // ── 6. Fancy allocation dialog ──
@@ -1284,7 +1273,7 @@ class CypherTaskbar {
               <div class="ct-recdlg-pool-top"><i class="fas fa-${c.icon}"></i><span class="ct-recdlg-pool-name">${p.label}</span></div>
               <div class="ct-recdlg-pool-mid"><span class="ct-recdlg-cur" id="ct-cur-${p.key}">${p.orig}</span><span class="ct-recdlg-sep">/</span><span class="ct-recdlg-maxv">${p.max}</span></div>
               <div class="ct-recdlg-track"><div class="ct-recdlg-trackfill" id="ct-fill-${p.key}" style="width:${pct}%;background:${c.hue};"></div></div>
-              <div class="ct-recdlg-hint"><span class="ct-recdlg-minus"><i class="fas fa-chevron-left"></i></span><span class="ct-recdlg-plus"><i class="fas fa-chevron-right"></i></span></div>
+              <div class="ct-recdlg-hint"><button class="ct-recdlg-minus" type="button" data-recovery-delta="-1" data-pool="${p.key}" aria-label="Remove one ${p.label} recovery point"><i class="fas fa-minus"></i></button><button class="ct-recdlg-plus" type="button" data-recovery-delta="1" data-pool="${p.key}" aria-label="Add one ${p.label} recovery point"><i class="fas fa-plus"></i></button></div>
             </div>`; }).join("") }
         </div>
       </div>`;
@@ -1318,8 +1307,10 @@ class CypherTaskbar {
       .ct-recdlg-maxv { color:#5a5a5a; font-weight:400; font-size:0.88em; }
       .ct-recdlg-track { width:100%; height:4px; background:rgba(255,255,255,0.03); border-radius:2px; margin-bottom:8px; overflow:hidden; }
       .ct-recdlg-trackfill { height:100%; border-radius:2px; opacity:0.6; transition:width 0.25s cubic-bezier(0.16,1,0.3,1); box-shadow:0 0 6px currentColor; }
-      .ct-recdlg-hint { display:flex; justify-content:space-between; padding:0 4px; font-size:0.55em; color:#3a3a3a; letter-spacing:0.04em; }
-      .ct-recdlg-pool:hover .ct-recdlg-minus { color:#d94040; } .ct-recdlg-pool:hover .ct-recdlg-plus { color:#7ec878; }
+      .ct-recdlg-hint { display:flex; justify-content:space-between; padding:0 4px; font-size:0.8em; color:#8a8a8a; }
+      .ct-recdlg-hint button { border:0; background:transparent; color:inherit; min-width:32px; min-height:32px; cursor:pointer; border-radius:4px; }
+      .ct-recdlg-hint button:hover, .ct-recdlg-hint button:focus-visible { color:#f0d68a; outline:2px solid #c8a96e; outline-offset:1px; }
+      @media (prefers-reduced-motion: reduce) { .ct-recdlg *, .ct-recdlg *::before, .ct-recdlg *::after { animation:none !important; transition:none !important; } }
     `;
     document.head.appendChild(s);
 
@@ -1331,51 +1322,78 @@ class CypherTaskbar {
       title: `Recovery — ${labels[index]}`,
       content: dlgHTML,
       buttons: [{ label: "RECOVER", action: "apply", className: "ct-modal-btn ct-modal-btn-primary" }],
-      onRender: (container) => {
-        container.querySelectorAll(".ct-recdlg-pool").forEach(el => {
-          const key = el.dataset.pool, orig = Number(el.dataset.orig), max = Number(el.dataset.max);
-          el.addEventListener("click", (e) => {
-            e.preventDefault();
-            if (allocated[key] <= 0) return;
-            allocated[key]--; remaining++;
-            const newVal = orig + allocated[key];
-            const elCur = container.querySelector(`#ct-cur-${key}`);
-            const elFill = container.querySelector(`#ct-fill-${key}`);
-            const elNum = container.querySelector("#ct-recover-num");
-            const elGlow = container.querySelector("#ct-recover-glow");
-            if (elCur) { elCur.textContent = newVal; elCur.classList.toggle("ct-modified", allocated[key] > 0); }
-            if (elFill) elFill.style.width = `${(newVal / max) * 100}%`;
-            if (elNum) { elNum.textContent = remaining; elNum.classList.toggle("ct-zero", remaining <= 0); }
-            if (elGlow) elGlow.classList.toggle("ct-active", remaining > 0);
-          });
-          el.addEventListener("contextmenu", (e) => {
-            e.preventDefault(); e.stopPropagation();
-            if (remaining <= 0) return;
-            if (orig + allocated[key] >= max) return;
-            allocated[key]++; remaining--;
-            const newVal = orig + allocated[key];
-            const elCur = container.querySelector(`#ct-cur-${key}`);
-            const elFill = container.querySelector(`#ct-fill-${key}`);
-            const elNum = container.querySelector("#ct-recover-num");
-            const elGlow = container.querySelector("#ct-recover-glow");
-            if (elCur) { elCur.textContent = newVal; elCur.classList.toggle("ct-modified", allocated[key] > 0); }
-            if (elFill) elFill.style.width = `${(newVal / max) * 100}%`;
-            if (elNum) { elNum.textContent = remaining; elNum.classList.toggle("ct-zero", remaining <= 0); }
-            if (elGlow) elGlow.classList.toggle("ct-active", remaining > 0);
-          });
+      onRender: container => {
+        const updatePool = (key, delta) => {
+          const card = container.querySelector(`.ct-recdlg-pool[data-pool="${key}"]`);
+          const orig = Number(card?.dataset.orig);
+          const max = Number(card?.dataset.max);
+          if (!card || !Number.isFinite(orig) || !Number.isFinite(max)) return;
+          if (delta > 0 && (remaining <= 0 || orig + allocated[key] >= max)) return;
+          if (delta < 0 && allocated[key] <= 0) return;
+          allocated[key] += delta;
+          remaining -= delta;
+          const newVal = orig + allocated[key];
+          const elCur = container.querySelector(`#ct-cur-${key}`);
+          const elFill = container.querySelector(`#ct-fill-${key}`);
+          const elNum = container.querySelector("#ct-recover-num");
+          const elGlow = container.querySelector("#ct-recover-glow");
+          if (elCur) { elCur.textContent = newVal; elCur.classList.toggle("ct-modified", allocated[key] > 0); }
+          if (elFill) elFill.style.width = `${max > 0 ? (newVal / max) * 100 : 0}%`;
+          if (elNum) { elNum.textContent = remaining; elNum.classList.toggle("ct-zero", remaining <= 0); }
+          if (elGlow) elGlow.classList.toggle("ct-active", remaining > 0);
+        };
+        container.querySelectorAll("[data-recovery-delta]").forEach(button => {
+          button.addEventListener("click", () => updatePool(button.dataset.pool, Number(button.dataset.recoveryDelta)));
         });
       }
     });
     document.getElementById("ct-recdlg-style")?.remove();
-    if (result !== "apply") return;
+    if (result !== "apply") {
+      this._recoveryPending = false;
+      return;
+    }
 
-    // ── 7. Apply pool updates ──
-    const updates = {};
-    poolKeys.forEach(k => { if (allocated[k] > 0) { const p = poolMeta.find(m => m.key === k); updates[`system.pools.${k}.value`] = Math.min(p.orig + allocated[k], p.max); } });
-    if (Object.keys(updates).length > 0) await actor.update(updates);
-
-    const spent = total - remaining;
-    if (spent > 0) await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor }), flavor: `Recovery (${labels[index]}) — ${spent} points restored` });
+    // Revalidate both recovery and pools, then consume and heal in one document update.
+    const currentActor = game.actors?.get(actor.id);
+    const currentSpend = currentActor ? getRecoverySpendUpdate(currentActor.system, index) : { ok: false };
+    if (!currentActor?.isOwner || !currentSpend.ok || currentSpend.key !== recoverySpend.key) {
+      ui.notifications?.warn?.("Recovery state changed before confirmation. No recovery was spent.");
+      this._recoveryPending = false;
+      this.render();
+      return;
+    }
+    const updates = { ...currentSpend.update };
+    for (const key of poolKeys) {
+      const current = Number(currentActor.system?.pools?.[key]?.value ?? 0);
+      const original = Number(poolMeta.find(meta => meta.key === key)?.orig ?? 0);
+      if (current !== original) {
+        ui.notifications?.warn?.("A pool changed while allocating recovery. No recovery was spent; please try again.");
+        this._recoveryPending = false;
+        this.render();
+        return;
+      }
+      if (allocated[key] > 0) {
+        const max = Number(currentActor.system.pools[key].max ?? 0);
+        updates[`system.pools.${key}.value`] = Math.min(max, current + allocated[key]);
+      }
+    }
+    try {
+      await currentActor.update(updates);
+      const spent = total - remaining;
+      if (spent > 0) await roll.toMessage({ speaker: ChatMessage.getSpeaker({ actor: currentActor }), flavor: `Recovery (${labels[index]}) — ${spent} points restored` });
+    } catch (error) {
+      console.error(`${MODULE_ID} | recovery update failed`, error);
+      ui.notifications?.error?.("Recovery could not be applied.");
+    } finally {
+      this._recoveryPending = false;
+      this.render();
+    }
+    } catch (error) {
+      console.error(`${MODULE_ID} | Recovery dialog failed`, error);
+      ui.notifications?.error?.("Recovery could not be completed; no recovery was spent.");
+    } finally {
+      this._recoveryPending = false;
+    }
   }
 
   async _resetAllRecoveryRolls() {
@@ -1394,8 +1412,11 @@ class CypherTaskbar {
       ui.notifications?.warn?.("No GM online to approve rest.");
       return;
     }
+    const requestId = foundry.utils.randomID();
+    this._pendingRestRequests.set(requestId, { actorId: actor.id, createdAt: Date.now() });
     game.socket.emit(`module.${MODULE_ID}`, {
       type: "gmRestRequest",
+      requestId,
       actorId: actor.id,
       actorName: actor.name,
       userId: game.user.id,
@@ -1405,43 +1426,32 @@ class CypherTaskbar {
   }
 
   async _doRest(actor) {
-    // Perform actual rest — restore all recovery rolls
+    const currentActor = game.actors?.get(actor?.id);
+    if (!currentActor?.isOwner || currentActor.type !== "pc") {
+      ui.notifications?.warn?.("You do not have permission to reset this character's recoveries.");
+      return false;
+    }
     try {
-      // Try Cypher System native rest() API
-      if (typeof actor.rest === "function") {
-        await actor.rest();
-        this.render();
-        ui.notifications?.info?.("All recovery rolls restored.");
-        return;
-      }
-      // Fallback: direct update matching the data type
-      const sys = actor.system ?? {};
-      let currentArr, updatePath;
-      if (Array.isArray(sys.combat?.recoveries?.recoveryRolls)) {
-        currentArr = sys.combat.recoveries.recoveryRolls;
-        updatePath = "system.combat.recoveries.recoveryRolls";
-      } else if (Array.isArray(sys.recoveries?.recoveryRolls)) {
-        currentArr = sys.recoveries.recoveryRolls;
-        updatePath = "system.recoveries.recoveryRolls";
-      } else {
-        currentArr = [true, true, true, true];
-        updatePath = "system.combat.recoveries.recoveryRolls";
-      }
-      const isBool = typeof currentArr[0] === "boolean";
-      await actor.update({ [updatePath]: currentArr.map(() => isBool ? true : 1) });
+      // Cypher System 3.5.2 uses booleans: false means available, true means used.
+      await currentActor.update({ ...RECOVERY_RESET_UPDATE });
       this.render();
       ui.notifications?.info?.("All recovery rolls restored.");
+      return true;
     } catch (err) {
       console.error(`${MODULE_ID} | Rest failed:`, err);
-      ui.notifications?.error?.("Rest failed.");
+      ui.notifications?.error?.("Rest failed; recovery state was not restored.");
+      return false;
     }
   }
 
   async _openGMRestRequest(payload) {
-    // GM receives rest approval request from player
-    if (!game.user?.isGM) return;
+    // Raw socket data supplies a request only; the local GM decision authorizes the mutation.
+    if (!this._claimGmRequest(payload)) return;
     const actor = game.actors?.get(payload.actorId);
-    if (!actor) return;
+    const requester = game.users?.get(payload.userId);
+    if (!actor || actor.type !== "pc" || !requester || !actor.testUserPermission(requester, "OWNER")) return;
+    const userName = requester.name;
+    const actorName = actor.name;
     const result = await this._showCustomModal({
       width: 360,
       title: "Rest Request",
@@ -1449,8 +1459,8 @@ class CypherTaskbar {
         <div class="ct-snark" style="padding:12px 4px 4px;">
           <div class="ct-snark-frame" style="animation:none; padding:20px 16px 16px;">
             <div class="ct-snark-icon" style="font-size:2em; animation:none;"><i class="fas fa-bed"></i></div>
-            <div class="ct-snark-title" style="font-size:1.2em;">${foundry.utils.escapeHTML(payload.userName)} requests rest</div>
-            <div class="ct-snark-line">Character: <strong style="color:#c8a96e;">${foundry.utils.escapeHTML(payload.actorName)}</strong></div>
+            <div class="ct-snark-title" style="font-size:1.2em;">${foundry.utils.escapeHTML(userName)} requests rest</div>
+            <div class="ct-snark-line">Character: <strong style="color:#c8a96e;">${foundry.utils.escapeHTML(actorName)}</strong></div>
             <div class="ct-snark-line" style="font-size:0.85em; color:#7a7a7a; margin-top:8px;">Approve to restore all recovery rolls.</div>
           </div>
         </div>`,
@@ -1459,19 +1469,28 @@ class CypherTaskbar {
         { label: "Deny", action: "deny", className: "ct-modal-btn ct-modal-btn-ghost" }
       ]
     });
-    if (result === "approve") {
-      await this._doRest(actor);
-      // Notify player
-      game.socket.emit(`module.${MODULE_ID}`, {
-        type: "restApproved",
-        targetUserId: payload.userId,
-        actorName: payload.actorName
-      });
+    if (result !== "approve") return;
+    const currentActor = game.actors?.get(payload.actorId);
+    if (!currentActor || !currentActor.testUserPermission(requester, "OWNER")) {
+      ui.notifications?.warn?.("The rest request is stale; no recovery state was changed.");
+      return;
     }
+    const restored = await this._doRest(currentActor);
+    if (!restored) return;
+    game.socket.emit(`module.${MODULE_ID}`, {
+      type: "restApproved",
+      requestId: payload.requestId,
+      targetUserId: payload.userId,
+      actorId: currentActor.id,
+      actorName: currentActor.name
+    });
   }
 
   _onRestApproved(payload) {
     if (game.user.id !== payload.targetUserId) return;
+    const pending = this._pendingRestRequests?.get(payload.requestId);
+    if (!pending || pending.actorId !== payload.actorId || Date.now() - pending.createdAt > 600000) return;
+    this._pendingRestRequests.delete(payload.requestId);
     ui.notifications?.info?.(`GM approved rest for ${payload.actorName}. Recovery rolls restored!`);
     this.render();
   }
@@ -2193,10 +2212,14 @@ class CypherTaskbar {
         const card = document.createElement("div");
         card.className = "ct-log-shelf-card";
         const cover = entry.getFlag?.("cypher-log", "cypher-log") || entry.getFlag?.("cypher-log", "cover");
-        const coverHtml = cover
-          ? `<div class="ct-log-card-cover" style="background-image:url('${cover}')"></div>`
-          : `<div class="ct-log-card-cover ct-log-card-no-cover"><i class="fas fa-book"></i></div>`;
-        card.innerHTML = `${coverHtml}<span class="ct-log-card-title">${entry.name}</span>`;
+        const coverEl = document.createElement("div");
+        coverEl.className = `ct-log-card-cover${cover ? "" : " ct-log-card-no-cover"}`;
+        if (cover) coverEl.style.backgroundImage = `url("${String(cover).replace(/["\\\n\r]/g, char => `\\${char}`)}")`;
+        else coverEl.innerHTML = `<i class="fas fa-book"></i>`;
+        const titleEl = document.createElement("span");
+        titleEl.className = "ct-log-card-title";
+        titleEl.textContent = entry.name;
+        card.replaceChildren(coverEl, titleEl);
         card.addEventListener("click", () => {
           // Open the journal entry
           entry.sheet?.render(true);
@@ -2617,6 +2640,11 @@ class CypherTaskbar {
       this._suppressRender = true;
       try {
         await this._writeSheetMoney(actor, money);
+        return true;
+      } catch (error) {
+        console.error(`${MODULE_ID} | Cash update failed`, error);
+        ui.notifications.error("The cash update failed. Reopen the panel to refresh the displayed amounts.");
+        return false;
       } finally {
         this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
         if (this._cashOpPending <= 0) {
@@ -2717,32 +2745,43 @@ class CypherTaskbar {
 
         if (!item) { ui.notifications.warn("Item not found."); return; }
 
-        // If item is from sidebar, add to actor first
-        let actorItem = actor.items.find(i => i.name === item.name && i.type === item.type);
-        if (!actorItem && item.uuid && !item.actor) {
-          // Item from sidebar - add to actor
+        let currentActor = game.actors.get(actor.id);
+        if (!currentActor?.isOwner) {
+          ui.notifications.warn("You no longer have permission to change this character's valuables.");
+          return;
+        }
+        let actorItem = currentActor.items.find(i => i.name === item.name && i.type === item.type);
+        if (!actorItem && item.actor?.id !== currentActor.id) {
           try {
             const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
             delete itemData._id;
-            const created = await actor.createEmbeddedDocuments("Item", [itemData]);
-            if (created && created.length) actorItem = created[0];
+            const created = await currentActor.createEmbeddedDocuments("Item", [itemData]);
+            if (created?.length) actorItem = created[0];
           } catch (err) {
+            console.error(`${MODULE_ID} | Failed to add a valuable item`, err);
             ui.notifications.error("Failed to add item to actor.");
             return;
           }
         }
-        if (!actorItem) actorItem = item;
+        currentActor = game.actors.get(actor.id);
+        if (!currentActor?.isOwner || !actorItem || !currentActor.items.has(actorItem.id)) {
+          ui.notifications.warn("The actor or item changed before it could be added to valuables.");
+          return;
+        }
 
-        // Add to valuables list
-        const valuables = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
+        const storedValuables = currentActor.getFlag(MODULE_ID, "cashValuables");
+        const valuables = Array.isArray(storedValuables) ? storedValuables.filter(id => typeof id === "string") : [];
         if (valuables.includes(actorItem.id)) {
           ui.notifications.info(`"${actorItem.name}" is already in valuables.`);
           return;
         }
-        valuables.push(actorItem.id);
         this._suppressRender = true;
         try {
-          await actor.setFlag(MODULE_ID, "cashValuables", valuables);
+          await currentActor.setFlag(MODULE_ID, "cashValuables", [...valuables, actorItem.id]);
+        } catch (err) {
+          console.error(`${MODULE_ID} | Failed to save valuables`, err);
+          ui.notifications.error("The valuables list could not be saved.");
+          return;
         } finally {
           this._suppressRender = false;
         }
@@ -2832,7 +2871,7 @@ class CypherTaskbar {
         } else if (action === "expend") {
           await this._expendCashValuable(item);
         } else if (action === "delete") {
-          await this._deleteCashValuable(item);
+          await this._useCashValuable(item);
         }
       };
     });
@@ -2848,87 +2887,108 @@ class CypherTaskbar {
   }
 
   async _useCashValuable(item) {
-    const actor = this.actor;
-    if (!actor) return;
-    const gmUsers = game.users.filter(u => u.isGM && u.active);
+    const actor = game.actors?.get(item?.actor?.id ?? this.actor?.id);
+    const currentItem = actor?.items.get(item?.id);
+    if (!actor?.isOwner || !currentItem) {
+      ui.notifications.warn("Select the character who owns this item first.");
+      return false;
+    }
+    item = currentItem;
+    this._cashUsePending ??= new Set();
+    if (this._cashUsePending.has(item.id)) return false;
+    this._cashUsePending.add(item.id);
+    try {
+    const gmUsers = game.users.filter(u => u.isGM && u.active).sort((a, b) => a.id.localeCompare(b.id));
     if (!gmUsers.length) {
       ui.notifications.warn("No GM is currently online.");
-      return;
+      return false;
     }
-    const whisperTargets = gmUsers.map(u => u.id);
+    const whisperTargets = [...new Set([...gmUsers.map(u => u.id), game.user.id])];
     const content = `
       <div class="ct-cash-use-card">
         <p><strong>${foundry.utils.escapeHTML(actor.name)}</strong> is using <strong>${foundry.utils.escapeHTML(item.name)}</strong></p>
         <div class="ct-cash-use-actions">
-          <button class="ct-cash-use-btn expend" data-cash-action="expend" data-actor-id="${actor.id}" data-item-id="${item.id}"><i class="fas fa-fire"></i> EXPEND</button>
-          <button class="ct-cash-use-btn keep" data-cash-action="keep" data-actor-id="${actor.id}" data-item-id="${item.id}"><i class="fas fa-check"></i> OK</button>
+          <button type="button" class="ct-cash-use-btn expend" data-cash-action="expend" data-actor-id="${foundry.utils.escapeHTML(actor.id)}" data-item-id="${foundry.utils.escapeHTML(item.id)}"><i class="fas fa-fire"></i> EXPEND</button>
+          <button type="button" class="ct-cash-use-btn keep" data-cash-action="keep" data-actor-id="${foundry.utils.escapeHTML(actor.id)}" data-item-id="${foundry.utils.escapeHTML(item.id)}"><i class="fas fa-check"></i> OK</button>
         </div>
       </div>`;
     await ChatMessage.create({
+      user: game.user.id,
       content,
       whisper: whisperTargets,
-      speaker: ChatMessage.getSpeaker({ actor })
+      speaker: ChatMessage.getSpeaker({ actor }),
+      flags: {
+        [MODULE_ID]: {
+          cashValuableExpend: {
+            actorId: actor.id,
+            itemId: item.id,
+            requesterId: game.user.id,
+            reviewerId: gmUsers[0].id
+          }
+        }
+      }
     });
+    return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Valuable-use request failed`, err);
+      ui.notifications.error("The GM request could not be created.");
+      return false;
+    } finally {
+      this._cashUsePending.delete(item.id);
+    }
   }
 
   async _expendCashValuable(item) {
-    const actor = this.actor;
-    if (!actor) return;
-    await this._deleteCashValuable(item);
-    const gmUsers = game.users.filter(u => u.isGM && u.active);
-    if (gmUsers.length) {
-      await ChatMessage.create({
-        content: `<p><strong>${foundry.utils.escapeHTML(actor.name)}</strong> has expended <strong>${foundry.utils.escapeHTML(item.name)}</strong>.</p>`,
-        whisper: gmUsers.map(u => u.id),
-        speaker: ChatMessage.getSpeaker({ actor })
-      });
-    }
+    // Expenditure is destructive: use the same GM-reviewed card as USE rather
+    // than deleting an item immediately on the player client.
+    await this._useCashValuable(item);
   }
 
   async _deleteCashValuable(item) {
-    const actor = this.actor;
-    if (!actor) return;
-    // Remove from cashValuables flag
-    const valuables = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
-    const filtered = valuables.filter(id => id !== item.id);
+    // Retain the old internal entry point, but route destructive deletion
+    // through GM approval like expenditure.
+    await this._useCashValuable(item);
+  }
 
-    if (this._cashSuppressTimer) {
-      clearTimeout(this._cashSuppressTimer);
-      this._cashSuppressTimer = null;
+  async _requestCashSpend(actor, { costCp, description }) {
+    const currentActor = actor?.id ? game.actors?.get(actor.id) : null;
+    if (!currentActor?.isOwner || !Number.isSafeInteger(costCp) || costCp <= 0) {
+      ui.notifications.warn("The cash request is no longer valid. Reopen the panel and try again.");
+      return false;
     }
-    this._cashOpPending = (this._cashOpPending || 0) + 1;
-    this._suppressRender = true;
-
+    if (this._cashSpendPending) return false;
+    this._cashSpendPending = true;
     try {
-      await actor.setFlag(MODULE_ID, "cashValuables", filtered);
-      // Delete item from actor
-      await actor.deleteEmbeddedDocuments("Item", [item.id]);
-    } catch (err) {
-      console.error("CypherTaskbar | deleteCashValuable error:", err);
+      const gmUsers = game.users.filter(user => user.isGM && user.active).sort((a, b) => a.id.localeCompare(b.id));
+      if (!gmUsers.length) {
+        ui.notifications.warn("No GM is currently online to approve this purchase.");
+        return false;
+      }
+      const actorId = foundry.utils.escapeHTML(currentActor.id);
+      await ChatMessage.create({
+        user: game.user.id,
+        speaker: ChatMessage.getSpeaker({ actor: currentActor }),
+        whisper: [...new Set([...gmUsers.map(user => user.id), game.user.id])],
+        flags: {
+          [MODULE_ID]: {
+            cashSpend: {
+              costCp,
+              actorId: currentActor.id,
+              requesterId: game.user.id,
+              reviewerId: gmUsers[0].id
+            }
+          }
+        },
+        content: `<div class="ct-cash-use-card"><p><strong>${foundry.utils.escapeHTML(currentActor.name)}</strong> requests to spend <strong>${foundry.utils.escapeHTML(description)}</strong>.</p><div class="ct-cash-use-actions"><button type="button" class="ct-cash-use-btn spend" data-cash-action="spend" data-actor-id="${actorId}"><i class="fas fa-coins"></i> REVIEW</button><button type="button" class="ct-cash-use-btn keep" data-cash-action="keep" data-actor-id="${actorId}"><i class="fas fa-times"></i> DENY</button></div></div>`
+      });
+      ui.notifications.info("Purchase sent to the GM for review. No cash has been deducted yet.");
+      return true;
+    } catch (error) {
+      console.error(`${MODULE_ID} | Cash spend request failed`, error);
+      ui.notifications.error("The purchase request could not be created. No cash was deducted.");
+      return false;
     } finally {
-      this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
-      if (this._cashOpPending <= 0) {
-        this._cashOpPending = 0;
-        this._cashSuppressTimer = setTimeout(() => {
-          this._suppressRender = false;
-          this._cashSuppressTimer = null;
-        }, 600);
-      }
-    }
-
-    ui.notifications.info(`"${item.name}" deleted.`);
-
-    // Remove item from DOM to keep panel open without full rebuild flicker
-    if (this.activePanel === "cash") {
-      const itemEl = this.element?.querySelector(`[data-cash-valuable="${item.id}"]`);
-      if (itemEl) {
-        itemEl.remove();
-        // If grid is now empty, show empty message
-        const grid = this.element?.querySelector("[data-cash-dropzone]");
-        if (grid && !grid.querySelector("[data-cash-valuable]")) {
-          grid.innerHTML = `<div class="ct-cash-valuables-empty"><i class="fas fa-hand-holding"></i><span>Drop valuable items here</span></div>`;
-        }
-      }
+      this._cashSpendPending = false;
     }
   }
 
@@ -3020,6 +3080,8 @@ class CypherTaskbar {
 
     // Spend
     dialog.querySelector("#ct-spend-btn").onclick = async () => {
+      const spendButton = dialog.querySelector("#ct-spend-btn");
+      if (spendButton.disabled) return;
       if (total <= 0) { dialog.remove(); return; }
       const denom = dialog.querySelector('input[name="ct-spend-denom"]:checked')?.value || "sp";
       const money = this._readSheetMoney(actor);
@@ -3051,32 +3113,19 @@ class CypherTaskbar {
         spendDesc += ` (${actualDeducted.join(', ')} deducted)`;
       }
 
-      // Save
-      if (this._cashSuppressTimer) {
-        clearTimeout(this._cashSuppressTimer);
-        this._cashSuppressTimer = null;
-      }
-      this._cashOpPending = (this._cashOpPending || 0) + 1;
-      this._suppressRender = true;
+      // Submit only the requested cost. The GM recomputes the deduction from
+      // current actor data after approval; "after" is never trusted from a client.
+      spendButton.disabled = true;
+      spendButton.setAttribute("aria-busy", "true");
       try {
-        await this._writeSheetMoney(actor, after);
+        const requested = await this._requestCashSpend(actor, { costCp, description: spendDesc });
+        if (requested) dialog.remove();
       } finally {
-        this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
-        if (this._cashOpPending <= 0) {
-          this._cashOpPending = 0;
-          this._cashSuppressTimer = setTimeout(() => {
-            this._suppressRender = false;
-            this._cashSuppressTimer = null;
-          }, 600);
+        if (spendButton.isConnected) {
+          spendButton.disabled = false;
+          spendButton.removeAttribute("aria-busy");
         }
       }
-      // Update all inputs in the cash panel
-      for (const d of _CASH_DENOMS) {
-        const input = this.element?.querySelector(`#ct-cash-${d}`);
-        if (input) input.value = after[d] ?? 0;
-      }
-      dialog.remove();
-      ui.notifications.info(`Spent ${spendDesc}.`);
     };
 
     // Close on outside click
@@ -3103,7 +3152,15 @@ class CypherTaskbar {
       this._cashOpPending = (this._cashOpPending || 0) + 1;
       this._suppressRender = true;
       try {
-        await actor.setFlag(MODULE_ID, "assetsItems", assetIds);
+        const currentActor = game.actors.get(actor.id);
+        if (!currentActor?.isOwner || !Array.isArray(assetIds)) throw new Error("Asset permission or data changed.");
+        const validIds = [...new Set(assetIds.filter(id => typeof id === "string" && currentActor.items.has(id)))];
+        await currentActor.setFlag(MODULE_ID, "assetsItems", validIds);
+        return true;
+      } catch (err) {
+        console.error(`${MODULE_ID} | Failed to save assets`, err);
+        ui.notifications.error("The assets list could not be saved.");
+        return false;
       } finally {
         this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
         if (this._cashOpPending <= 0) {
@@ -3148,27 +3205,37 @@ class CypherTaskbar {
 
         if (!item) { ui.notifications.warn("Item not found."); return; }
 
-        let actorItem = actor.items.find(i => i.name === item.name && i.type === item.type);
-        if (!actorItem && item.uuid && !item.actor) {
+        let currentActor = game.actors.get(actor.id);
+        if (!game.user.isGM || !currentActor?.isOwner) {
+          ui.notifications.warn("You no longer have permission to change this character's assets.");
+          return;
+        }
+        let actorItem = currentActor.items.find(i => i.name === item.name && i.type === item.type);
+        if (!actorItem && item.actor?.id !== currentActor.id) {
           try {
             const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
             delete itemData._id;
-            const created = await actor.createEmbeddedDocuments("Item", [itemData]);
-            if (created && created.length) actorItem = created[0];
+            const created = await currentActor.createEmbeddedDocuments("Item", [itemData]);
+            if (created?.length) actorItem = created[0];
           } catch (err) {
+            console.error(`${MODULE_ID} | Failed to add an asset item`, err);
             ui.notifications.error("Failed to add item to actor.");
             return;
           }
         }
-        if (!actorItem) actorItem = item;
+        currentActor = game.actors.get(actor.id);
+        if (!currentActor?.isOwner || !actorItem || !currentActor.items.has(actorItem.id)) {
+          ui.notifications.warn("The actor or item changed before it could be added to assets.");
+          return;
+        }
 
-        const assets = actor.getFlag(MODULE_ID, "assetsItems") ?? [];
+        const storedAssets = currentActor.getFlag(MODULE_ID, "assetsItems");
+        const assets = Array.isArray(storedAssets) ? storedAssets.filter(id => typeof id === "string") : [];
         if (assets.includes(actorItem.id)) {
           ui.notifications.info(`"${actorItem.name}" is already in assets.`);
           return;
         }
-        assets.push(actorItem.id);
-        await _saveAssets(assets);
+        if (!await _saveAssets([...assets, actorItem.id])) return;
         ui.notifications.info(`"${actorItem.name}" added to assets.`);
 
         // Append to DOM to keep panel open
@@ -3182,7 +3249,7 @@ class CypherTaskbar {
             card.dataset.assetsItem = actorItem.id;
             card.dataset.tt = foundry.utils.escapeHTML(actorItem.name);
             card.dataset.ttDesc = foundry.utils.escapeHTML(actorItem.system?.description || "");
-            card.innerHTML = `<img src="${actorItem.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">`;
+            card.innerHTML = `<img src="${foundry.utils.escapeHTML(actorItem.img || 'icons/svg/item-bag.svg')}" alt="${foundry.utils.escapeHTML(actorItem.name)}" draggable="false">`;
             grid.append(card);
             // Re-bind events on new element
             this._bindAssetsCardEvents(card);
@@ -3280,9 +3347,10 @@ class CypherTaskbar {
   }
 
   async _removeAsset(item) {
-    const actor = this.actor;
-    if (!actor) return;
-    const assets = actor.getFlag(MODULE_ID, "assetsItems") ?? [];
+    const actor = game.actors.get(this.actor?.id);
+    if (!actor?.isOwner || !item?.id) return false;
+    const storedAssets = actor.getFlag(MODULE_ID, "assetsItems");
+    const assets = Array.isArray(storedAssets) ? storedAssets : [];
     const filtered = assets.filter(id => id !== item.id);
 
     if (this._cashSuppressTimer) {
@@ -3295,7 +3363,9 @@ class CypherTaskbar {
     try {
       await actor.setFlag(MODULE_ID, "assetsItems", filtered);
     } catch (err) {
-      console.error("CypherTaskbar | removeAsset error:", err);
+      console.error(`${MODULE_ID} | removeAsset error`, err);
+      ui.notifications.error("The asset could not be removed. Refresh the panel and try again.");
+      return false;
     } finally {
       this._cashOpPending = Math.max(0, (this._cashOpPending || 0) - 1);
       if (this._cashOpPending <= 0) {
@@ -3320,6 +3390,7 @@ class CypherTaskbar {
         }
       }
     }
+    return true;
   }
 
   _buildPanel(key) {
@@ -3358,19 +3429,21 @@ class CypherTaskbar {
               const stats = statParts.join(' | ');
               const rangeLocked = inCombat && !!(this._ctRangeLocked?.(i, "attack"));
               const noAmmo = inCombat && !!(this._weaponAmmoMissing?.(i));
-              return `<div class="ct-item-row ct-combat-attack-row${noAmmo ? " ct-no-ammo" : ""}" data-item-id="${i.id}"><img class="ct-item-img" src="${i.img || 'icons/svg/combat.svg'}" alt="" draggable="false"><span class="ct-item-name">${foundry.utils.escapeHTML(i.name)}</span><span class="ct-combat-attack-stats">${stats}</span>${inCombat ? `<button class="ct-combat-attack-retarget" data-attack-retarget="${i.id}" title="Retarget"><i class="fas fa-crosshairs"></i></button><button class="ct-combat-attack-burst${rangeLocked ? " ct-range-locked" : ""}${noAmmo ? " ct-noammo-locked" : ""}" data-attack-burst="${i.id}" title="${noAmmo ? "No ammo — reload" : rangeLocked ? "Out of range" : "Roll attack"}"${rangeLocked || noAmmo ? " disabled" : ""}><i class="fas fa-burst"></i></button>` : ''}${noAmmo ? `<div class="ct-reload-ribbon" aria-hidden="true"><span>Reload</span></div>` : ""}</div>`;
+              const esc = foundry.utils.escapeHTML;
+              return `<div class="ct-item-row ct-combat-attack-row${noAmmo ? " ct-no-ammo" : ""}" data-item-id="${esc(i.id)}"><img class="ct-item-img" src="${esc(i.img || 'icons/svg/combat.svg')}" alt="" draggable="false"><span class="ct-item-name">${esc(i.name)}</span><span class="ct-combat-attack-stats">${esc(stats)}</span>${inCombat ? `<button type="button" class="ct-combat-attack-retarget" data-attack-retarget="${esc(i.id)}" title="Retarget" aria-label="Retarget ${esc(i.name)}"><i class="fas fa-crosshairs"></i></button><button type="button" class="ct-combat-attack-burst${rangeLocked ? " ct-range-locked" : ""}${noAmmo ? " ct-noammo-locked" : ""}" data-attack-burst="${esc(i.id)}" title="${noAmmo ? "No ammo — reload" : rangeLocked ? "Out of range" : "Roll attack"}" aria-label="${noAmmo ? "Reload ammunition for" : rangeLocked ? "Out of range:" : "Roll"} ${esc(i.name)}"${rangeLocked || noAmmo ? " disabled" : ""}><i class="fas fa-burst"></i></button>` : ''}${noAmmo ? `<div class="ct-reload-ribbon" aria-hidden="true"><span>Reload</span></div>` : ""}</div>`;
             }).join("")
           : `<div class="ct-empty-msg">No attacks</div>`;
         h += `<div class="ct-panel-group-title">Armor</div>`;
         h += armor.length
-          ? armor.map(i => `<div class="ct-item-row" data-item-id="${i.id}"><img class="ct-item-img" src="${i.img || 'icons/svg/shield.svg'}" alt="" draggable="false"><span class="ct-item-name">${i.name}</span><span class="ct-item-meta">Armor: ${i.system.basic?.armor ?? 0}</span></div>`).join("")
+          ? armor.map(i => { const esc = foundry.utils.escapeHTML; return `<div class="ct-item-row" data-item-id="${esc(i.id)}"><img class="ct-item-img" src="${esc(i.img || 'icons/svg/shield.svg')}" alt="" draggable="false"><span class="ct-item-name">${esc(i.name)}</span><span class="ct-item-meta">Armor: ${esc(i.system.basic?.armor ?? 0)}</span></div>`; }).join("")
           : `<div class="ct-empty-msg">No armor</div>`;
         h += `<div class="ct-panel-group-separator"></div>`;
         h += `<div class="ct-panel-group-title">Ammo</div>`;
         h += ammo.length
           ? ammo.map(i => {
               const qty = i.system.basic?.quantity ?? i.system.basic?.amount ?? '—';
-              return `<div class="ct-item-row" data-item-id="${i.id}"><img class="ct-item-img" src="${i.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false"><span class="ct-item-name">${i.name}</span><span class="ct-item-meta">Qty: ${qty}</span></div>`;
+              const esc = foundry.utils.escapeHTML;
+              return `<div class="ct-item-row" data-item-id="${esc(i.id)}"><img class="ct-item-img" src="${esc(i.img || 'icons/svg/item-bag.svg')}" alt="" draggable="false"><span class="ct-item-name">${esc(i.name)}</span><span class="ct-item-meta">Qty: ${esc(qty)}</span></div>`;
             }).join("")
           : `<div class="ct-empty-msg">No ammo</div>`;
         h += `<div class="ct-panel-group-title">Cyphers</div>`;
@@ -3378,7 +3451,8 @@ class CypherTaskbar {
           ? cyphers.map(i => {
               const qty = i.system.basic?.quantity ?? i.system.basic?.amount ?? '';
               const meta = [qty !== '' ? `Qty: ${qty}` : null, i.system.basic?.identified === false ? 'Unidentified' : null].filter(Boolean).join(' | ');
-              return `<div class="ct-item-row" data-item-id="${i.id}"><img class="ct-item-img" src="${i.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false"><span class="ct-item-name">${i.name}</span><span class="ct-item-meta">${meta || 'Cypher'}</span></div>`;
+              const esc = foundry.utils.escapeHTML;
+              return `<div class="ct-item-row" data-item-id="${esc(i.id)}"><img class="ct-item-img" src="${esc(i.img || 'icons/svg/item-bag.svg')}" alt="" draggable="false"><span class="ct-item-name">${esc(i.name)}</span><span class="ct-item-meta">${esc(meta || 'Cypher')}</span></div>`;
             }).join("")
           : `<div class="ct-empty-msg">No cyphers</div>`;
 
@@ -3438,15 +3512,32 @@ class CypherTaskbar {
     const systemEmpty = !["cp", "sp", "gp", "pp"].some(k => fromSystem[k] > 0);
     if (legacyHasValue && systemEmpty) {
       const migrated = { cp: Number(legacy.cp) || 0, sp: Number(legacy.sp) || 0, gp: Number(legacy.gp) || 0, pp: Number(legacy.pp) || 0 };
-      try { this._writeSheetMoney(actor, migrated); } catch (err) { console.error(`${MODULE_ID} | cash migration failed:`, err); }
+      this._cashMigrationPending ??= new Map();
+      if (!this._cashMigrationPending.has(actor.id)) {
+        const pending = this._writeSheetMoney(actor, migrated)
+          .catch(err => {
+            console.error(`${MODULE_ID} | Cash migration failed for ${actor.id}:`, err);
+            ui.notifications.warn("Legacy cash could not be migrated to the character sheet. It has not been discarded.");
+          })
+          .finally(() => this._cashMigrationPending.delete(actor.id));
+        this._cashMigrationPending.set(actor.id, pending);
+      }
       return migrated;
     }
     return fromSystem;
   }
 
   async _writeSheetMoney(actor, money) {
-    await actor.setFlag(MODULE_ID, "cashMoney", money); // legacy flag kept in sync as backup
-    const existing = actor.system?.settings?.equipment?.currency ?? actor.system?.equipment?.currency ?? {};
+    const currentActor = actor?.id ? game.actors?.get(actor.id) : null;
+    if (!currentActor?.isOwner) throw new Error("You do not have permission to change this character's cash.");
+    const normalized = {};
+    for (const key of ["cp", "sp", "gp", "pp"]) {
+      const value = Number(money?.[key] ?? 0);
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid ${key.toUpperCase()} amount.`);
+      normalized[key] = value;
+    }
+    await currentActor.setFlag(MODULE_ID, "cashMoney", normalized); // legacy flag kept in sync as backup
+    const existing = currentActor.system?.settings?.equipment?.currency ?? currentActor.system?.equipment?.currency ?? {};
     const currency = foundry.utils.duplicate(existing);
     currency.active = true;
     currency.numberCategories = 4;
@@ -3455,11 +3546,33 @@ class CypherTaskbar {
     currency.labelCategory2 = "SP";
     currency.labelCategory3 = "GP";
     currency.labelCategory4 = "PP";
-    currency.quantity1 = money.cp ?? 0;
-    currency.quantity2 = money.sp ?? 0;
-    currency.quantity3 = money.gp ?? 0;
-    currency.quantity4 = money.pp ?? 0;
-    await actor.update({ "system.settings.equipment.currency": currency });
+    currency.quantity1 = normalized.cp;
+    currency.quantity2 = normalized.sp;
+    currency.quantity3 = normalized.gp;
+    currency.quantity4 = normalized.pp;
+    await currentActor.update({ "system.settings.equipment.currency": currency });
+  }
+
+  _scheduleActorItemListCleanup(actor, key) {
+    if (!actor?.id || !["cashValuables", "assetsItems"].includes(key)) return;
+    this._itemListCleanupPending ??= new Set();
+    const pendingKey = `${actor.id}.${key}`;
+    if (this._itemListCleanupPending.has(pendingKey)) return;
+    this._itemListCleanupPending.add(pendingKey);
+    queueMicrotask(async () => {
+      try {
+        const currentActor = game.actors?.get(actor.id);
+        if (!currentActor?.isOwner) return;
+        const current = currentActor.getFlag(MODULE_ID, key) ?? [];
+        if (!Array.isArray(current)) return;
+        const valid = current.filter(id => typeof id === "string" && currentActor.items.has(id));
+        if (valid.length !== current.length) await currentActor.setFlag(MODULE_ID, key, valid);
+      } catch (error) {
+        console.warn(`${MODULE_ID} | Could not clean stale ${key} entries`, error);
+      } finally {
+        this._itemListCleanupPending.delete(pendingKey);
+      }
+    });
   }
 
   _buildCashPanel(actor) {
@@ -3473,11 +3586,9 @@ class CypherTaskbar {
       .filter(Boolean)
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    // Clean up missing items from the list
-    if (valuables.length !== valuableIds.length) {
-      const validIds = valuables.map(i => i.id);
-      actor.setFlag(MODULE_ID, "cashValuables", validIds);
-    }
+    // Clean up missing items outside rendering, with rejection handling and a
+    // fresh read so a concurrently added item is not accidentally removed.
+    if (valuables.length !== valuableIds.length) this._scheduleActorItemListCleanup(actor, "cashValuables");
 
     const moneyRow = `
       <div class="ct-cash-money-section">
@@ -3521,8 +3632,8 @@ class CypherTaskbar {
 
     const valuablesGrid = valuables.length
       ? valuables.map(i => `
-        <div class="ct-cash-valuable-item" data-cash-valuable="${i.id}" data-tt="${foundry.utils.escapeHTML(i.name)}" data-tt-desc="${foundry.utils.escapeHTML(i.system?.description || '')}">
-          <img src="${i.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
+        <div class="ct-cash-valuable-item" data-cash-valuable="${foundry.utils.escapeHTML(i.id)}" data-tt="${foundry.utils.escapeHTML(i.name)}" data-tt-desc="${foundry.utils.escapeHTML(i.system?.description || '')}">
+          <img src="${foundry.utils.escapeHTML(i.img || 'icons/svg/item-bag.svg')}" alt="${foundry.utils.escapeHTML(i.name)}" draggable="false">
         </div>`).join("")
       : `<div class="ct-cash-valuables-empty"><i class="fas fa-hand-holding"></i><span>Drop valuable items here</span></div>`;
 
@@ -3555,11 +3666,8 @@ class CypherTaskbar {
       .filter(Boolean)
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    // Clean up missing items
-    if (assets.length !== assetIds.length) {
-      const validIds = assets.map(i => i.id);
-      actor.setFlag(MODULE_ID, "assetsItems", validIds);
-    }
+    // Clean up missing items outside rendering, with rejection handling.
+    if (assets.length !== assetIds.length) this._scheduleActorItemListCleanup(actor, "assetsItems");
 
     const emptyMsg = game.user?.isGM
       ? `<div class="ct-assets-empty"><i class="fas fa-landmark"></i><span>Drop assets here</span></div>`
@@ -3567,8 +3675,8 @@ class CypherTaskbar {
 
     const assetsGrid = assets.length
       ? assets.map(i => `
-        <div class="ct-assets-card" data-assets-item="${i.id}" data-tt="${foundry.utils.escapeHTML(i.name)}" data-tt-desc="${foundry.utils.escapeHTML(i.system?.description || '')}">
-          <img src="${i.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
+        <div class="ct-assets-card" data-assets-item="${foundry.utils.escapeHTML(i.id)}" data-tt="${foundry.utils.escapeHTML(i.name)}" data-tt-desc="${foundry.utils.escapeHTML(i.system?.description || '')}">
+          <img src="${foundry.utils.escapeHTML(i.img || 'icons/svg/item-bag.svg')}" alt="${foundry.utils.escapeHTML(i.name)}" draggable="false">
         </div>`).join("")
       : emptyMsg;
 
@@ -3665,13 +3773,10 @@ class CypherTaskbar {
     }
 
     // V2 apps
+    const trackedApps = new Set(this._trayApps.values());
     if (foundry?.applications?.instances) {
-      for (const [id, app] of foundry.applications.instances) {
-        if (!app) continue;
-        // Skip if already tracked
-        let already = false;
-        for (const existing of this._trayApps.values()) { if (existing === app) { already = true; break; } }
-        if (already) continue;
+      for (const app of foundry.applications.instances.values()) {
+        if (!app || trackedApps.has(app)) continue;
         if (!this._isGameContentWindow(app)) continue;
         const tid = `t${idx++}`;
         this._trayApps.set(tid, app);
@@ -3679,22 +3784,28 @@ class CypherTaskbar {
       }
     }
 
+    const signature = JSON.stringify(tracked.map(w => [w.tid, w.title, w.minimized]));
+    if (signature === this._traySignature && this._trayElement === tray) return;
+    this._traySignature = signature;
+    this._trayElement = tray;
+
     if (tracked.length === 0) {
       tray.innerHTML = `<span class="ct-tray-empty">—</span>`;
       return;
     }
 
+    const esc = foundry.utils.escapeHTML;
     tray.innerHTML = tracked.map(w => {
       const icon = w.minimized ? "fa-window-restore" : "fa-window-minimize";
       const tip  = w.minimized ? `Restore ${w.title}` : `Minimize ${w.title}`;
       const cls  = w.minimized ? " ct-tray-window-minimized" : "";
       const label = w.title.substring(0,18) + (w.title.length > 18 ? "…" : "");
-      return `<div class="ct-tray-window-btn${cls}" data-tid="${w.tid}" title="${tip}"><i class="fas ${icon}"></i><span class="ct-tray-window-label">${label}</span><button class="ct-tray-window-close" data-tid="${w.tid}" title="Close"><i class="fas fa-times"></i></button></div>`;
+      const tid = esc(String(w.tid ?? ""));
+      return `<div class="ct-tray-window-btn${cls}" data-tid="${tid}"><button type="button" class="ct-tray-window-toggle" data-tid="${tid}" title="${esc(tip)}" aria-label="${esc(tip)}"><i class="fas ${icon}"></i><span class="ct-tray-window-label">${esc(label)}</span></button><button type="button" class="ct-tray-window-close" data-tid="${tid}" title="Close ${esc(w.title)}" aria-label="Close ${esc(w.title)}"><i class="fas fa-times"></i></button></div>`;
     }).join("");
 
-    tray.querySelectorAll(".ct-tray-window-btn").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        if (e.target.closest(".ct-tray-window-close")) return;
+    tray.querySelectorAll(".ct-tray-window-toggle").forEach(btn => {
+      btn.addEventListener("click", () => {
         const app = this._trayApps?.get(btn.dataset.tid);
         if (!app) return;
         if (this._isWindowMinimized(app)) this._restoreAppElement(app);
@@ -3797,6 +3908,25 @@ class CypherTaskbar {
     const popup = document.createElement("div");
     popup.id = "ct-portrait-settings-popup";
     popup.classList.add("ct-popup");
+    const updatePortraitPreview = (preview, path) => {
+      if (!preview) return;
+      preview.replaceChildren();
+      preview.classList.toggle("ct-hidden", !path);
+      if (!path) return;
+      const isVideo = this._isPortraitVideo(path);
+      const media = document.createElement(isVideo ? "video" : "img");
+      media.src = path;
+      media.style.cssText = "max-width:100%;max-height:120px;border-radius:4px;";
+      if (isVideo) {
+        media.autoplay = true;
+        media.loop = true;
+        media.muted = true;
+        media.playsInline = true;
+        media.setAttribute("aria-label", "Portrait preview");
+      } else media.alt = "Portrait preview";
+      media.addEventListener("error", () => preview.classList.add("ct-hidden"), { once: true });
+      preview.appendChild(media);
+    };
     // Position: use saved position if available, else next to portrait
     const savedPos = this._gjson("portraitSettingsPos");
     if (savedPos && typeof savedPos.left === "number" && typeof savedPos.top === "number") {
@@ -3880,12 +4010,7 @@ class CypherTaskbar {
                 </div>
               </label>
               <div class="ct-file-types-hint">Supported: png, gif, webp, webm · Uploads to: worlds/<world>/cypher-taskbar-portraits/</div>
-              <div class="ct-portrait-preview${customPortraitImage?"":" ct-hidden"}" id="ps-custom-portrait-preview">
-                ${this._isPortraitVideo(customPortraitImage)
-                  ? `<video src="${foundry.utils.escapeHTML(customPortraitImage)}" autoplay loop muted playsinline style="max-width:100%;max-height:120px;border-radius:4px;" onerror="this.parentElement.classList.add('ct-hidden')"></video>`
-                  : `<img src="${foundry.utils.escapeHTML(customPortraitImage)}" alt="Preview" onerror="this.parentElement.classList.add('ct-hidden')">`
-                }
-              </div>
+              <div class="ct-portrait-preview${customPortraitImage?"":" ct-hidden"}" id="ps-custom-portrait-preview"></div>
               <!-- Animation settings -->
               <div class="ct-portrait-anim-section">
                 <div class="ct-settings-section-title"><i class="fas fa-film"></i> Animation (webm only)</div>
@@ -4058,6 +4183,7 @@ class CypherTaskbar {
         </div>
       </div>`;
     document.body.appendChild(popup);
+    updatePortraitPreview(popup.querySelector("#ps-custom-portrait-preview"), customPortraitImage);
     if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait settings popup appended`, {popupInDOM: !!document.querySelector("#ct-portrait-settings-popup")});
     requestAnimationFrame(() => {
       const rect = popup.getBoundingClientRect();
@@ -4235,7 +4361,7 @@ class CypherTaskbar {
     popup.querySelector("[data-portrait-picker]")?.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      console.log(`[CT] Portrait picker clicked`);
+      if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Portrait picker clicked`);
       
       // Check if Actor File Container is enabled
       const useFileContainer = popup.querySelector("#ps-portrait-files-en")?.checked;
@@ -4244,13 +4370,7 @@ class CypherTaskbar {
           const pathInput = popup.querySelector("#ps-custom-portrait-path");
           if (pathInput) pathInput.value = path;
           const preview = popup.querySelector("#ps-custom-portrait-preview");
-          if (preview) {
-            preview.classList.remove("ct-hidden");
-            const isVideo = this._isPortraitVideo(path);
-            preview.innerHTML = isVideo
-              ? `<video src="${foundry.utils.escapeHTML(path)}" autoplay loop muted playsinline style="max-width:100%;max-height:120px;border-radius:4px;" onerror="this.parentElement.classList.add('ct-hidden')"></video>`
-              : `<img src="${foundry.utils.escapeHTML(path)}" alt="Preview" onerror="this.parentElement.classList.add('ct-hidden')">`;
-          }
+          updatePortraitPreview(preview, path);
           apply();
         });
         return;
@@ -4272,16 +4392,10 @@ class CypherTaskbar {
           type: "image",
           current: current,
           callback: (path) => {
-            console.log(`[CT] FilePicker selected:`, path);
+            if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | FilePicker selected:`, path);
             if (pathInput) pathInput.value = path;
             const preview = popup.querySelector("#ps-custom-portrait-preview");
-            if (preview) {
-              preview.classList.remove("ct-hidden");
-              const isVideo = this._isPortraitVideo(path);
-              preview.innerHTML = isVideo
-                ? `<video src="${foundry.utils.escapeHTML(path)}" autoplay loop muted playsinline style="max-width:100%;max-height:120px;border-radius:4px;" onerror="this.parentElement.classList.add('ct-hidden')"></video>`
-                : `<img src="${foundry.utils.escapeHTML(path)}" alt="Preview" onerror="this.parentElement.classList.add('ct-hidden')">`;
-            }
+            updatePortraitPreview(preview, path);
             apply();
           }
         });
@@ -4316,11 +4430,7 @@ class CypherTaskbar {
     };
 
     // Save files to actor flags
-    const saveFiles = async (files) => {
-      const prefs = actor.getFlag(MODULE_ID, "taskbarPrefs") ?? {};
-      prefs.portraitFiles = files;
-      await actor.setFlag(MODULE_ID, "taskbarPrefs", prefs);
-    };
+    const saveFiles = async files => setActorPref(actor.id, "portraitFiles", files);
 
     // Remove existing container
     const existing = document.getElementById("ct-portrait-file-container");
@@ -4340,7 +4450,7 @@ class CypherTaskbar {
       }
       return `<div class="ct-portrait-files-grid">${files.map((f, i) => `
         <div class="ct-portrait-file-card${f === currentPortrait ? ' is-active' : ''}" data-file-index="${i}" data-file-path="${foundry.utils.escapeHTML(f)}">
-          <div class="ct-portrait-file-thumb"><img src="${foundry.utils.escapeHTML(f)}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-image\\'></i>'"></div>
+          <div class="ct-portrait-file-thumb"><img src="${foundry.utils.escapeHTML(f)}" alt="" loading="lazy" data-portrait-file-image></div>
           <div class="ct-portrait-file-name" title="${foundry.utils.escapeHTML(f)}">${foundry.utils.escapeHTML(f.split('/').pop() || f)}</div>
           <button class="ct-portrait-file-delete" data-delete="${i}" title="Remove"><i class="fas fa-trash"></i></button>
         </div>
@@ -4393,6 +4503,14 @@ class CypherTaskbar {
     };
 
     const bindCardClicks = () => {
+      container.querySelectorAll("[data-portrait-file-image]").forEach(image => {
+        image.addEventListener("error", () => {
+          const icon = document.createElement("i");
+          icon.className = "fas fa-image";
+          icon.setAttribute("aria-hidden", "true");
+          image.parentElement?.replaceChildren(icon);
+        }, { once: true });
+      });
       // File card click = select portrait
       container.querySelectorAll(".ct-portrait-file-card").forEach(card => {
         card.addEventListener("click", (e) => {
@@ -4559,6 +4677,7 @@ class CypherTaskbar {
     const mfFamily = this._gs("menuFontFamily") ?? "inherit";
     const gtEnabled = this._gs("galleryTabsEnabled") ?? true;
     const gtOffset = this._gs("galleryTabsOffsetX") ?? 0;
+    const combatBarPreset = normalizeCombatBarPreset(this._gs("combatBarPreset", "default"));
     const ownedPCs = this._getOwnedPCs();
     const selectedActorId = game.settings.get(MODULE_ID, "selectedActorId") ?? "";
     const barRect = this.element.getBoundingClientRect();
@@ -4578,7 +4697,7 @@ class CypherTaskbar {
       popup.style.left = "auto";
     }
     const lastTab = this._gs("lastSettingsTab") || "general";
-    const tabs = ["general","sections","fonts","gallery","minimenu","icons","cash"];
+    const tabs = ["general","sections","fonts","gallery","minimenu","icons","combatbar","cash"];
     const activeTab = tabs.includes(lastTab) ? lastTab : "general";
     popup.innerHTML = `
       <div class="ct-popup-header"><i class="fas fa-cog"></i> Taskbar Settings <span class="ct-popup-header-actions"><button class="ct-popup-action-btn" id="ts-export" title="Export Settings"><i class="fas fa-file-export"></i></button><button class="ct-popup-action-btn" id="ts-import" title="Import Settings"><i class="fas fa-file-import"></i></button></span><button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
@@ -4589,6 +4708,7 @@ class CypherTaskbar {
         <button class="ct-popup-tab${activeTab==="gallery"?" is-active":""}" data-tab="gallery"><i class="fas fa-images"></i> Gallery Tabs</button>
         <button class="ct-popup-tab${activeTab==="minimenu"?" is-active":""}" data-tab="minimenu"><i class="fas fa-th"></i> Mini Menu</button>
         <button class="ct-popup-tab${activeTab==="icons"?" is-active":""}" data-tab="icons"><i class="fas fa-icons"></i> Icons</button>
+        <button class="ct-popup-tab${activeTab==="combatbar"?" is-active":""}" data-tab="combatbar"><i class="fas fa-person-running"></i> Combat Bar</button>
         <button class="ct-popup-tab${activeTab==="cash"?" is-active":""}" data-tab="cash"><i class="fas fa-coins"></i> Cash & Values</button>
       </div>
       <div class="ct-popup-body">
@@ -4645,6 +4765,14 @@ class CypherTaskbar {
           <label>Label Color <input type="color" id="ts-label-color" value="${this._gs("menuLabelColor")??"#e8e8e8"}"></label>
           <label>Background <input type="color" id="ts-icon-bg" value="${this._gs("menuIconBgColor")??"#1a1525"}"></label>
         </div>
+        <div class="ct-popup-pane ct-cb-appearance-pane${activeTab==="combatbar"?" is-active":""}" data-pane="combatbar">
+          <div class="ct-popup-subhead">Combat Bar Appearance</div>
+          <p class="ct-gallery-settings-hint"><i class="fas fa-info-circle"></i> Choose a complete visual preset. It changes the action icons, icon colors, tile backgrounds, borders, and resource pips without changing combat behavior.</p>
+          <input type="hidden" id="ts-combat-bar-preset" value="${combatBarPreset}">
+          <div class="ct-cb-preset-grid" role="group" aria-label="Combat bar appearance presets">
+            ${renderCombatBarPresetCards(combatBarPreset)}
+          </div>
+        </div>
         <div class="ct-popup-pane${activeTab==="cash"?" is-active":""}" data-pane="cash">
           <div class="ct-popup-subhead">Cash & Values Panel Background</div>
           <label>Image <input type="text" id="ts-cash-bg-image" value="${this._getMenuBackgroundValue("cash", "image")}" placeholder="URL or path..."></label>
@@ -4684,6 +4812,15 @@ class CypherTaskbar {
         popup.querySelectorAll(".ct-popup-pane").forEach(pane => pane.classList.toggle("is-active", pane.dataset.pane === tab));
         await this._ss("lastSettingsTab", tab);
       });
+    });
+
+    bindCombatBarPresetCards(popup, {
+      save: value => this._ss("combatBarPreset", value),
+      refresh: () => this._updateCombatBar(),
+      onError: error => {
+        console.error(`${MODULE_ID} | combat bar appearance save failed`, error);
+        ui.notifications.error("Could not change the combat bar appearance. Your previous preset was restored.");
+      }
     });
 
     const apply = async () => {
@@ -4743,6 +4880,7 @@ class CypherTaskbar {
       await this._ss("cashStackSpaceRight", parseInt(popup.querySelector("#ts-cash-sr")?.value ?? 0));
       this._resolveActor();
       this.reposition(); this.applySettings();
+      this._updateCombatBar();
       if (newActorId !== (this.actor?.id ?? "")) this.render();
     };
     popup.querySelector("#ts-h").addEventListener("input",e=>{popup.querySelector("#ts-h-val").textContent=e.target.value+"px";apply();});
@@ -4789,8 +4927,8 @@ class CypherTaskbar {
         // Gallery tabs
         "galleryTabsEnabled","galleryTabsOffsetX",
         "galleryTabsFontSize","galleryTabsFontColor","galleryTabsIconColor","galleryTabsBackground",
-        // Sections
-        "sectionsExpanded",
+        // Sections and combat bar
+        "sectionsExpanded","combatBarPreset",
         // Last tabs
         "lastSettingsTab","lastPortraitSettingsTab"
       ];
@@ -4895,45 +5033,36 @@ class CypherTaskbar {
       input.type = "file";
       input.accept = ".json";
       input.style.display = "none";
-      input.addEventListener("change", async (ev) => {
-        const file = ev.target.files?.[0];
-        if (!file) return;
+      input.addEventListener("change", async ev => {
         try {
-          const text = await file.text();
-          const data = JSON.parse(text);
-
-          const imported = {};
-          if (data.taskbarSettings && typeof data.taskbarSettings === "object") {
-            Object.assign(imported, data.taskbarSettings);
-          }
-          if (data.portraitSettings && typeof data.portraitSettings === "object") {
-            Object.assign(imported, data.portraitSettings);
-          }
-          if (data.otherSettings && typeof data.otherSettings === "object") {
-            Object.assign(imported, data.otherSettings);
-          }
-          if (Object.keys(imported).length === 0 && data.settings && typeof data.settings === "object") {
-            Object.assign(imported, data.settings);
-          }
-          if (Object.keys(imported).length === 0) {
+          const file = ev.target.files?.[0];
+          if (!file) return;
+          if (file.size > 1024 * 1024) throw new Error("The settings file exceeds the 1 MB limit.");
+          const imported = normalizeGlobalDefaults(JSON.parse(await file.text()));
+          if (!Object.keys(imported).length) {
             ui.notifications.error("Invalid settings file: no recognizable settings section.");
             return;
           }
 
-          const actor = this.actor;
-          if (!actor) { ui.notifications.warn("No character assigned."); return; }
-          const current = actor.getFlag("cypher-taskbar", "taskbarPrefs") ?? {};
-          const merged = { ...current, ...imported };
-          await actor.setFlag("cypher-taskbar", "taskbarPrefs", merged);
+          const actor = game.actors?.get(this.actor?.id);
+          if (!actor?.isOwner) {
+            ui.notifications.warn("You no longer have permission to change this character's taskbar preferences.");
+            return;
+          }
+          const updates = Object.fromEntries(Object.entries(imported).map(([key, value]) =>
+            [`flags.${MODULE_ID}.taskbarPrefs.${key}`, value]
+          ));
+          await actor.update(updates);
           this.applySettings();
           this.refresh();
           ui.notifications.info(`Settings imported successfully. (${Object.keys(imported).length} settings)`);
         } catch (err) {
           console.error(`${MODULE_ID} | Import failed:`, err);
-          ui.notifications.error("Failed to import settings. Check file format.");
+          ui.notifications.error("Failed to import settings. Check file format and size.");
+        } finally {
+          input.remove();
         }
-        input.remove();
-      });
+      }, { once: true });
       document.body.appendChild(input);
       input.click();
     });
@@ -5110,7 +5239,7 @@ class CypherTaskbar {
           </div>
         </div>
         <div class="ct-stuff-tabs">
-          ${tabs.map((t, i) => `<button class="ct-stuff-tab${i === activeTab ? ' is-active' : ''}" data-stuff-tab="${i}" style="color:${i===activeTab?t.fontColor:'var(--ct-text-dim)'};font-size:${(t.fontSize||100)*0.0068}em;text-transform:${t.caps?'uppercase':'none'};"><i class="${t.icon}" style="color:${t.iconColor};font-size:${(t.iconSize||100)*0.009}em;"></i>${foundry.utils.escapeHTML(t.name)}</button>`).join('')}
+          ${tabs.map((t, i) => `<button type="button" class="ct-stuff-tab${i === activeTab ? ' is-active' : ''}" data-stuff-tab="${i}" style="color:${foundry.utils.escapeHTML(i===activeTab?t.fontColor:'var(--ct-text-dim)')};font-size:${(t.fontSize||100)*0.0068}em;text-transform:${t.caps?'uppercase':'none'};"><i class="${foundry.utils.escapeHTML(t.icon)}" style="color:${foundry.utils.escapeHTML(t.iconColor)};font-size:${(t.iconSize||100)*0.009}em;"></i>${foundry.utils.escapeHTML(t.name)}</button>`).join('')}
           ${canAddMoreTabs ? `<button class="ct-stuff-add-tab" id="ct-stuff-new-tab" title="New Tab"><i class="fas fa-plus"></i></button>` : ''}
         </div>
         <div class="ct-stuff-body" style="--ct-stuff-item-size:${itemSizePx}px;--ct-stuff-font-scale:${fontScale};">
@@ -5118,10 +5247,11 @@ class CypherTaskbar {
             ? `<div class="ct-stuff-empty"><i class="fas fa-box-open"></i><span>${activeTab === 0 ? 'No items yet' : 'Tab is empty'}</span></div>`
             : `<div class="ct-stuff-grid">${items.map((item, idx) => {
               const uuid = displayUuids[idx];
-              return `<div class="ct-stuff-item" data-stuff-uuid="${uuid}" data-stuff-idx="${idx}" title="${foundry.utils.escapeHTML(item.name)}">
-                <img src="${item.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
-                <span class="ct-item-hand ct-stuff-hand" data-stuff-drag="${uuid}" data-doc-info="${JSON.stringify({ uuid, name: item?.name || "", img: item?.img || "" }).replace(/"/g, '&quot;')}" title="Drag: ${foundry.utils.escapeHTML(item.name)}"><i class="fas fa-hand-paper"></i></span>
-                <button class="ct-stuff-remove" data-stuff-remove="${uuid}" title="Remove"><i class="fas fa-times"></i></button>
+              const esc = foundry.utils.escapeHTML;
+              return `<div class="ct-stuff-item" data-stuff-uuid="${esc(uuid)}" data-stuff-idx="${idx}" title="${esc(item.name)}">
+                <img src="${esc(item.img || 'icons/svg/item-bag.svg')}" alt="${esc(item.name)}" draggable="false">
+                <span class="ct-item-hand ct-stuff-hand" data-stuff-drag="${esc(uuid)}" data-doc-info="${esc(JSON.stringify({ uuid, name: item?.name || "", img: item?.img || "" }))}" title="Open ${esc(item.name)}; drag with a mouse to share" draggable="true" role="button" tabindex="0" aria-label="Open ${esc(item.name)}"><i class="fas fa-hand-paper"></i></span>
+                <button type="button" class="ct-stuff-remove" data-stuff-remove="${esc(uuid)}" title="Remove" aria-label="Remove ${esc(item.name)}"><i class="fas fa-times"></i></button>
               </div>`;
             }).join('')}</div>`}
         </div>`;
@@ -5131,43 +5261,11 @@ class CypherTaskbar {
     document.body.appendChild(popup);
 
     const bindEvents = () => {
-      popup.querySelectorAll(".ct-stuff-tab").forEach(tab => {
-        tab.addEventListener("click", () => {
-          activeTab = parseInt(tab.dataset.stuffTab);
-          popup.querySelector(".ct-stuff-tabs").innerHTML = extractTabs(renderContent());
-          popup.querySelector(".ct-stuff-body").innerHTML = extractBody(renderContent());
-          bindTabEvents();
-          bindItemEvents();
-        });
-        tab.addEventListener("contextmenu", (e) => {
-          e.preventDefault(); e.stopPropagation();
-          const tabIdx = parseInt(tab.dataset.stuffTab);
-          if (tabIdx === 0) return;
-          this._openStuffTabConfig(tabIdx, () => {
-            const updatedTabs = this._gjson("stuffTabs", []);
-            tabs.splice(0, tabs.length, ...updatedTabs);
-            popup.querySelector(".ct-stuff-tabs").innerHTML = extractTabs(renderContent());
-            bindTabEvents();
-          });
-        });
-      });
-
-      popup.querySelector("#ct-stuff-new-tab")?.addEventListener("click", async () => {
-        if (tabs.length >= 5) return;
-        const newTab = { name: `Tab ${tabs.length}`, icon: "fas fa-folder", fontColor: "#f0d68a", caps: false, fontSize: 100, iconSize: 100, iconColor: "#c8a96e" };
-        tabs.push(newTab);
-        await this._ss("stuffTabs", JSON.stringify(tabs));
-        activeTab = tabs.length - 1;
-        popup.querySelector(".ct-stuff-tabs").innerHTML = extractTabs(renderContent());
-        popup.querySelector(".ct-stuff-body").innerHTML = extractBody(renderContent());
-        bindTabEvents();
-        bindItemEvents();
-      });
-
+      // Tab and item handlers are rebound by their dedicated functions after
+      // each partial render. Binding them here as well would fire every action twice.
       popup.querySelector("#ct-stuff-add")?.addEventListener("click", () => this._openStuffAddDialog());
       popup.querySelector("#ct-stuff-settings-gear")?.addEventListener("click", () => this._openStuffSettings(popup));
       popup.querySelector("#ct-stuff-close")?.addEventListener("click", () => popup.remove());
-
       bindTabEvents();
       bindItemEvents();
     };
@@ -5224,9 +5322,17 @@ class CypherTaskbar {
         });
       });
       popup.querySelectorAll("[data-stuff-uuid]").forEach(el => {
-        el.addEventListener("click", () => {
+        el.addEventListener("click", async () => {
           const uuid = el.dataset.stuffUuid;
-          if (uuid) fromUuid(uuid).then(doc => doc?.sheet?.render(true));
+          if (!uuid) return;
+          try {
+            const doc = await fromUuid(uuid);
+            if (!doc?.sheet) throw new Error("The linked document is unavailable.");
+            doc.sheet.render(true);
+          } catch (error) {
+            console.warn(`${MODULE_ID} | Unable to open STUFF document ${uuid}`, error);
+            ui.notifications.warn("That document is unavailable or you do not have permission to view it.");
+          }
         });
         el.addEventListener("contextmenu", (e) => {
           e.preventDefault(); e.stopPropagation();
@@ -5243,11 +5349,16 @@ class CypherTaskbar {
           e.stopPropagation();
           const uuid = hand.dataset.stuffDrag;
           if (!uuid) return;
-          const item = items.find(it => (tabUuids[activeTab] || []).includes(uuid));
-          e.dataTransfer.setData("text/plain", JSON.stringify({ uuid, name: item?.name || "", img: item?.img || "" }));
+          const docInfo = hand.dataset.docInfo;
+          e.dataTransfer.setData("text/plain", docInfo || JSON.stringify({ uuid }));
           e.dataTransfer.effectAllowed = "copy";
         });
         hand.addEventListener("mousedown", (e) => e.stopPropagation());
+        hand.addEventListener("keydown", e => {
+          if (!["Enter", " "].includes(e.key)) return;
+          e.preventDefault();
+          hand.click(); // Keyboard equivalent opens the document; dragging remains mouse-specific.
+        });
       });
     };
 
@@ -5292,11 +5403,12 @@ class CypherTaskbar {
 
     const _isFaIcon = (icon) => typeof icon === "string" && /^(fa[srlbd]?\s|fa-solid\s|fa-regular\s|fa-brands\s|fa-light\s|fa-thin\s|fa-duotone\s|fa-sharp\s)/.test(icon);
     const _renderBookIcon = (icon, fit, color) => {
+      const esc = foundry.utils.escapeHTML;
       if (_isFaIcon(icon)) {
-        const colorStyle = color ? ` style="color:${color}"` : "";
-        return `<i class="${icon} ct-book-fa-icon ct-book-icon-${fit || 'automatic'}"${colorStyle}></i>`;
+        const colorStyle = color ? ` style="color:${esc(color)}"` : "";
+        return `<i class="${esc(icon)} ct-book-fa-icon ct-book-icon-${esc(fit || 'automatic')}"${colorStyle}></i>`;
       }
-      return `<img src="${icon || 'icons/svg/book.svg'}" alt="" draggable="false" class="ct-book-icon-${fit || 'automatic'}">`;
+      return `<img src="${esc(icon || 'icons/svg/book.svg')}" alt="" draggable="false" class="ct-book-icon-${esc(fit || 'automatic')}">`;
     };
 
     const renderLinks = (sort) => {
@@ -6068,11 +6180,12 @@ class CypherTaskbar {
 
         // Helper: render icon as it appears in the book panel
         const _renderPreviewIcon = (icon, fit, color) => {
+          const esc = foundry.utils.escapeHTML;
           const isFa = typeof icon === "string" && /^(fa[srlbd]?\s|fa-solid\s|fa-regular\s|fa-brands\s)/.test(icon);
           if (isFa) {
-            return `<i class="${icon} ct-je-preview-fa-icon" style="color:${color || 'var(--ct-accent)'}"></i>`;
+            return `<i class="${esc(icon)} ct-je-preview-fa-icon" style="color:${esc(color || 'var(--ct-accent)')}"></i>`;
           }
-          return `<img src="${icon || 'icons/svg/book.svg'}" alt="" style="object-fit:${fit === 'automatic' ? 'contain' : fit};" onerror="this.style.opacity='0.3'">`;
+          return `<img src="${esc(icon || 'icons/svg/book.svg')}" alt="" style="object-fit:${fit === 'automatic' ? 'contain' : esc(fit)};">`;
         };
 
         // Live preview updater — called on every change
@@ -6155,7 +6268,12 @@ class CypherTaskbar {
             const p = root.querySelector(".ct-je-preview");
             if (p) {
               const fit = root.querySelector("#bje-icon-fit")?.value || "automatic";
-              p.innerHTML = `<img src="${val}" style="object-fit:${fit === 'automatic' ? 'contain' : fit};" onerror="this.style.display='none'">`;
+              const image = document.createElement("img");
+              image.src = val;
+              image.alt = "Journal icon preview";
+              image.style.objectFit = fit === "automatic" ? "contain" : fit;
+              image.addEventListener("error", () => { image.style.display = "none"; }, { once: true });
+              p.replaceChildren(image);
               p.style.display = "block";
             }
           } else {
@@ -6197,6 +6315,113 @@ class CypherTaskbar {
      onto it to store. Stored per-actor via _gjson / _ss.
      ================================================================ */
 
+  _normalizeMiniItems(value) {
+    if (!Array.isArray(value)) return [];
+    const text = (input, fallback, maxLength) => typeof input === "string"
+      ? input.slice(0, maxLength)
+      : fallback;
+    return value
+      .filter(item => item && typeof item === "object" && !Array.isArray(item))
+      .map(item => ({
+        uuid: text(item.uuid, null, 2048),
+        name: text(item.name, "Unknown", 200),
+        img: text(item.img, "icons/svg/book.svg", 2048),
+        icon: text(item.icon, null, 200),
+        color: text(item.color, "#c8a96e", 50),
+        type: text(item.type, "", 100)
+      }));
+  }
+
+  _normalizeMiniOverrides(value) {
+    const normalized = Object.create(null);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return normalized;
+    for (const [key, override] of Object.entries(value).slice(0, 1000)) {
+      if (!override || typeof override !== "object" || Array.isArray(override)) continue;
+      const clean = {};
+      if (typeof override.name === "string") clean.name = override.name.slice(0, 200);
+      if (typeof override.description === "string") clean.description = override.description.slice(0, 800);
+      normalized[key.slice(0, 2048)] = clean;
+    }
+    return normalized;
+  }
+
+  async _saveMiniItems(key, items) {
+    const settingKey = `mini${key.charAt(0).toUpperCase() + key.slice(1)}`;
+    try {
+      const saved = await this._ss(settingKey, JSON.stringify(items));
+      if (!saved) throw new Error("The character preference update was rejected.");
+      return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Failed to save mini container ${key}`, err);
+      ui.notifications.error("The container could not be saved. Your previous entries were preserved.");
+      return false;
+    }
+  }
+
+  async _addMiniItem(key, data, color) {
+    const normalizedKey = typeof key === "string" ? key.toLowerCase() : "";
+    const pendingKey = `${this.actor?.id ?? ""}:${normalizedKey}`;
+    this._miniAddPending ??= new Set();
+    if (this._miniAddPending.has(pendingKey)) return false;
+    this._miniAddPending.add(pendingKey);
+    try {
+      return await this._addMiniItemInternal(normalizedKey, data, color);
+    } finally {
+      this._miniAddPending.delete(pendingKey);
+    }
+  }
+
+  async _addMiniItemInternal(key, data, color) {
+    const normalizedKey = typeof key === "string" ? key.toLowerCase() : "";
+    const actorId = this.actor?.id;
+    if (!normalizedKey || !actorId || !data || typeof data !== "object" || Array.isArray(data)) return false;
+    const stored = this._normalizeMiniItems(this._gjson(`mini${normalizedKey.charAt(0).toUpperCase() + normalizedKey.slice(1)}`));
+    if (stored.length >= 100) {
+      ui.notifications.warn("This container is full (100 entries). Remove an entry before adding another.");
+      return false;
+    }
+
+    let uuid = typeof data.uuid === "string" ? data.uuid.slice(0, 2048) : null;
+    if (!uuid && typeof data.type === "string" && typeof data.id === "string") {
+      const typeMap = { Actor: "Actor", Item: "Item", JournalEntry: "JournalEntry", Scene: "Scene", Macro: "Macro", RollTable: "RollTable" };
+      if (typeMap[data.type]) uuid = `${typeMap[data.type]}.${data.id}`.slice(0, 2048);
+    }
+    const rawImg = typeof data.img === "string" ? data.img.slice(0, 2048) : "";
+    if (!uuid && !rawImg) return false;
+    if ((uuid && stored.some(entry => entry.uuid === uuid)) || (!uuid && stored.some(entry => entry.img === rawImg))) {
+      ui.notifications.info("Already in this container.");
+      return false;
+    }
+
+    let name = typeof data.name === "string" && data.name.trim() ? data.name.trim().slice(0, 200) : "Unknown";
+    let img = rawImg || "icons/svg/book.svg";
+    let itemIcon = null;
+    if (uuid) {
+      try {
+        const doc = await fromUuid(uuid);
+        if (doc) {
+          name = typeof doc.name === "string" && doc.name ? doc.name.slice(0, 200) : name;
+          img = await this._resolveMiniItemImage(doc);
+        }
+      } catch (err) {
+        console.warn(`${MODULE_ID} | Could not resolve dropped mini entry ${uuid}`, err);
+      }
+      if (!img || img === "icons/svg/book.svg") {
+        const typeIcons = { Actor: "fas fa-user", JournalEntry: "fas fa-book", Scene: "fas fa-map", Item: "fas fa-box", Macro: "fas fa-play-circle", RollTable: "fas fa-dice-d20" };
+        itemIcon = typeIcons[uuid.split(".")[0]] || "fas fa-tag";
+      }
+    }
+    if (this.actor?.id !== actorId) {
+      ui.notifications.warn("The selected character changed; the dropped entry was not saved.");
+      return false;
+    }
+    stored.push({ uuid, name, img, icon: itemIcon, color, type: uuid?.split(".")[0] ?? "Item" });
+    if (!await this._saveMiniItems(normalizedKey, stored)) return false;
+    document.querySelector("#ct-mini-popup")?.dispatchEvent(new CustomEvent("ct-mini-refresh"));
+    ui.notifications.info(`"${name}" added to ${normalizedKey.toUpperCase()}.`);
+    return true;
+  }
+
   _openMiniContainer(key, title, iconClass, color, sourceBtn) {
     const existing = document.querySelector("#ct-mini-popup");
     // If another mini menu is open, close it and continue opening this one
@@ -6204,7 +6429,9 @@ class CypherTaskbar {
     const actor = this.actor;
     if (!actor) { ui.notifications.warn("No character assigned."); return; }
     const esc = foundry.utils.escapeHTML;
-    const stored = this._gjson(`mini${key.charAt(0).toUpperCase() + key.slice(1)}`) || [];
+    const stored = this._normalizeMiniItems(
+      this._gjson(`mini${key.charAt(0).toUpperCase() + key.slice(1)}`)
+    );
 
     // Read settings — per-menu sizes
     const displayMode = this._gs("miniMenuDisplayMode") || "list";
@@ -6266,12 +6493,14 @@ class CypherTaskbar {
     const _onDocClick = (e) => {
       if (!popup.contains(e.target) && !sourceBtn?.contains(e.target)) {
         popup.remove();
+        _hideTooltip();
         document.removeEventListener("click", _onDocClick);
       }
     };
     requestAnimationFrame(() => document.addEventListener("click", _onDocClick));
     popup.querySelector("#ct-mini-close")?.addEventListener("click", () => {
       popup.remove();
+      _hideTooltip();
       document.removeEventListener("click", _onDocClick);
     });
 
@@ -6292,17 +6521,24 @@ class CypherTaskbar {
           popup.style.width = `${newW}px`;
           popup.style.height = `${newH}px`;
         };
-        const onUp = () => {
+        const onUp = async () => {
           document.removeEventListener("mousemove", onMove);
           document.removeEventListener("mouseup", onUp);
-          // Recalculate icon sizes after resize
           _calcIconSize();
-          // Save per-menu size
           const w = Math.round(popup.offsetWidth);
           const h = Math.round(popup.offsetHeight);
-          const sizes = this._gjson("miniMenuSizes") || {};
+          const currentSizes = this._gjson("miniMenuSizes");
+          const sizes = currentSizes && typeof currentSizes === "object" && !Array.isArray(currentSizes)
+            ? { ...currentSizes }
+            : {};
           sizes[key] = { w, h };
-          this._ss("miniMenuSizes", JSON.stringify(sizes));
+          try {
+            const saved = await this._ss("miniMenuSizes", JSON.stringify(sizes));
+            if (!saved) throw new Error("The size preference update was rejected.");
+          } catch (err) {
+            console.error(`${MODULE_ID} | Failed to save mini container size`, err);
+            ui.notifications.error("The container size could not be saved.");
+          }
         };
         document.addEventListener("mousemove", onMove);
         document.addEventListener("mouseup", onUp);
@@ -6311,15 +6547,26 @@ class CypherTaskbar {
 
     const bodyEl = popup.querySelector("#ct-mini-body");
     const itemsEl = popup.querySelector("#ct-mini-items");
-    const emptyEl = popup.querySelector(".ct-mini-empty-state");
+    let emptyEl = popup.querySelector(".ct-mini-empty-state");
+    let storagePending = false;
+    const commitStored = async previous => {
+      if (storagePending) return false;
+      storagePending = true;
+      const saved = await this._saveMiniItems(key, stored);
+      if (!saved) stored.splice(0, stored.length, ...previous);
+      storagePending = false;
+      renderStored();
+      return saved;
+    };
 
     // —— Fancy tooltip system (conditional on settings) ——
-    const itemOverrides = this._gjson("miniItemOverrides") || {};
+    const itemOverrides = this._normalizeMiniOverrides(this._gjson("miniItemOverrides"));
     let tooltipEl = null;
     const _showTooltip = async (targetEl, it) => {
       if (!showTitle && !showDesc) return; // both off = no tooltip
       if (tooltipEl) tooltipEl.remove();
       tooltipEl = document.createElement("div");
+      const currentTooltip = tooltipEl;
       let cssClass = "ct-mini-tooltip";
       if (!showTitle) cssClass += " no-title";
       if (!showDesc) cssClass += " no-desc";
@@ -6343,11 +6590,12 @@ class CypherTaskbar {
           } catch { /* ignore */ }
         }
       }
+      if (tooltipEl !== currentTooltip || !targetEl.isConnected) return;
       let innerHtml = "";
       if (showTitle) {
         const iconHtml = it.icon
-          ? `<i class="${it.icon} ct-book-fa-icon" style="color:${it.color || color}"></i>`
-          : `<img src="${it.img || 'icons/svg/book.svg'}" alt="" style="width:22px;height:22px;border-radius:4px;object-fit:cover;">`;
+          ? `<i class="${esc(it.icon)} ct-book-fa-icon" style="color:${esc(it.color || color)}"></i>`
+          : `<img src="${esc(it.img || 'icons/svg/book.svg')}" alt="" style="width:22px;height:22px;border-radius:4px;object-fit:cover;">`;
         innerHtml += `<div class="ct-mini-tooltip-header">${iconHtml}<span class="ct-mini-tooltip-name">${esc(displayName)}</span></div>`;
       }
       if (showDesc && desc) {
@@ -6369,24 +6617,31 @@ class CypherTaskbar {
 
     // —— Render stored items ——
     const renderStored = () => {
+      if (!itemsEl.isConnected) return;
+      if (!emptyEl) {
+        emptyEl = document.createElement("div");
+        emptyEl.className = "ct-mini-empty-state";
+        emptyEl.textContent = "Empty — drag items here";
+        bodyEl.insertBefore(emptyEl, itemsEl);
+      }
       if (!stored.length) {
         itemsEl.innerHTML = "";
-        if (emptyEl) emptyEl.style.display = "";
+        emptyEl.style.display = "";
         return;
       }
-      if (emptyEl) emptyEl.style.display = "none";
+      emptyEl.style.display = "none";
       const titleAttr = showTitle ? '' : ' style="display:none;"';
       itemsEl.innerHTML = stored.map((it, idx) => {
         const hasImg = it.img && it.img !== "icons/svg/book.svg";
         const iconHtml = hasImg
-          ? `<img src="${it.img}" alt="" draggable="false" onerror="this.src='icons/svg/book.svg'">`
+          ? `<img src="${esc(it.img)}" alt="${esc(it.name || "Stored item")}" draggable="false">`
           : it.icon
-            ? `<i class="${it.icon} ct-book-fa-icon" style="color:${it.color || color}"></i>`
+            ? `<i class="${esc(it.icon)} ct-book-fa-icon" style="color:${esc(it.color || color)}"></i>`
             : `<img src="icons/svg/book.svg" alt="" draggable="false">`;
         const itemKey = it.uuid || it.img || it.name;
         const ov = itemOverrides[itemKey] || {};
         const displayName = ov.name || it.name || "Unknown";
-        return `<div class="ct-mini-item" data-mini-idx="${idx}" draggable="true">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(displayName)}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${JSON.stringify({ uuid: it.uuid || null, name: displayName, img: it.img || "" }).replace(/"/g, '&quot;')}" title="Drag: ${esc(displayName)}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
+        return `<div class="ct-mini-item" data-mini-idx="${idx}" draggable="true">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(displayName)}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${esc(JSON.stringify({ uuid: it.uuid || null, name: displayName, img: it.img || "" }))}" title="Open ${esc(displayName)}; drag with a mouse to share" draggable="true" role="button" tabindex="0" aria-label="Open ${esc(displayName)}"><i class="fas fa-hand-paper"></i></span><button type="button" class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
       }).join('');
 
       // Click to open — scenes navigate, everything else opens sheet
@@ -6424,12 +6679,7 @@ class CypherTaskbar {
           const idx = parseInt(el.dataset.miniIdx);
           const it = stored[idx];
           if (!it) return;
-          this._openMiniItemEdit(it, key, () => {
-            popup.querySelector(".ct-popup-body").innerHTML = `
-              ${stored.length === 0 ? `<div class="ct-mini-empty-state">Empty \u2014 drag items here</div>` : ""}
-              <div class="ct-mini-items" id="ct-mini-items"></div>`;
-            renderStored();
-          });
+          this._openMiniItemEdit(it, key, renderStored);
         });
       });
 
@@ -6447,13 +6697,15 @@ class CypherTaskbar {
 
       // Remove button
       itemsEl.querySelectorAll("[data-mini-rm]").forEach(btn => {
-        btn.addEventListener("click", (e) => {
+        btn.addEventListener("click", async e => {
           e.stopPropagation();
-          const idx = parseInt(btn.dataset.miniRm);
+          if (storagePending) return;
+          const idx = Number.parseInt(btn.dataset.miniRm, 10);
+          if (!Number.isInteger(idx) || idx < 0 || idx >= stored.length) return;
+          const previous = stored.slice();
           stored.splice(idx, 1);
-          this._ss(`mini${key.charAt(0).toUpperCase() + key.slice(1)}`, JSON.stringify(stored));
           _hideTooltip();
-          renderStored();
+          await commitStored(previous);
         });
       });
 
@@ -6487,17 +6739,17 @@ class CypherTaskbar {
         el.addEventListener("dragleave", () => {
           el.classList.remove("ct-drop-target");
         });
-        el.addEventListener("drop", (e) => {
+        el.addEventListener("drop", async e => {
           e.preventDefault();
           e.stopPropagation();
-          const dropIdx = parseInt(el.dataset.miniIdx);
+          const dropIdx = Number.parseInt(el.dataset.miniIdx, 10);
           el.classList.remove("ct-drop-target");
-          if (dragSrcIdx === null || dragSrcIdx === dropIdx) return;
-          // Reorder: remove from old position, insert at new position
+          if (storagePending || dragSrcIdx === null || dragSrcIdx === dropIdx) return;
+          if (!Number.isInteger(dropIdx) || dragSrcIdx < 0 || dragSrcIdx >= stored.length || dropIdx >= stored.length) return;
+          const previous = stored.slice();
           const [moved] = stored.splice(dragSrcIdx, 1);
           stored.splice(dropIdx, 0, moved);
-          this._ss(`mini${key.charAt(0).toUpperCase() + key.slice(1)}`, JSON.stringify(stored));
-          renderStored();
+          await commitStored(previous);
         });
       });
 
@@ -6513,49 +6765,33 @@ class CypherTaskbar {
           e.dataTransfer.effectAllowed = "copy";
         });
         hand.addEventListener("mousedown", (e) => e.stopPropagation());
+        hand.addEventListener("keydown", e => {
+          if (!["Enter", " "].includes(e.key)) return;
+          e.preventDefault();
+          hand.closest("[data-mini-idx]")?.click();
+        });
       });
     };
+    popup.addEventListener("ct-mini-refresh", () => {
+      if (storagePending) return;
+      const latest = this._normalizeMiniItems(
+        this._gjson(`mini${key.charAt(0).toUpperCase() + key.slice(1)}`)
+      );
+      stored.splice(0, stored.length, ...latest);
+      renderStored();
+    });
     renderStored();
 
     // —— Drag-and-drop on the body ——
     const _onDragOver = (e) => { e.preventDefault(); e.stopPropagation(); bodyEl.classList.add("is-dragover"); };
     const _onDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); bodyEl.classList.remove("is-dragover"); };
-    const _onDrop = async (e) => {
+    const _onDrop = async e => {
       e.preventDefault(); e.stopPropagation();
       bodyEl.classList.remove("is-dragover");
+      if (storagePending) return;
       let data;
       try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch { data = {}; }
-      const hasUuid = !!data.uuid;
-      const hasImg = !!data.img;
-      if (!hasUuid && !hasImg && !data.type) return;
-      let uuid = data.uuid || null;
-      if (!uuid && data.type && data.id) {
-        const typeMap = { Actor: "Actor", Item: "Item", JournalEntry: "JournalEntry", Scene: "Scene", Macro: "Macro", RollTable: "RollTable" };
-        if (typeMap[data.type]) uuid = `${typeMap[data.type]}.${data.id}`;
-      }
-      if (uuid && stored.some(s => s.uuid === uuid)) { ui.notifications.info("Already in this container."); return; }
-      if (!uuid && data.img && stored.some(s => s.img === data.img)) { ui.notifications.info("Already in this container."); return; }
-      let name = data.name || "Unknown";
-      let img = data.img || "icons/svg/book.svg";
-      let itemIcon = null;
-      if (uuid) {
-        try {
-          const doc = await fromUuid(uuid);
-          if (doc) {
-            name = doc.name || name;
-            img = await this._resolveMiniItemImage(doc);
-          }
-        } catch { /* ignore */ }
-        // Only use FA icon as fallback when no image was resolved
-        if (!img || img === "icons/svg/book.svg") {
-          const typeIcons = { Actor: "fas fa-user", JournalEntry: "fas fa-book", Scene: "fas fa-map", Item: "fas fa-box", Macro: "fas fa-play-circle", RollTable: "fas fa-dice-d20" };
-          itemIcon = typeIcons[uuid.split(".")[0]] || "fas fa-tag";
-        }
-      }
-      stored.push({ uuid, name, img, icon: itemIcon, color });
-      this._ss(`mini${key.charAt(0).toUpperCase() + key.slice(1)}`, JSON.stringify(stored));
-      renderStored();
-      ui.notifications?.info?.(`"${name}" added to ${title}.`);
+      await this._addMiniItem(key, data, color);
     };
     bodyEl.addEventListener("dragover", _onDragOver);
     bodyEl.addEventListener("dragleave", _onDragLeave);
@@ -6623,11 +6859,12 @@ class CypherTaskbar {
    * Overrides are stored per-actor in miniItemOverrides.
    */
   async _openMiniItemEdit(item, key, refreshFn) {
-    const actor = this.actor;
-    if (!actor) return;
-    const overrides = this._gjson("miniItemOverrides") || {};
-    const itemKey = item.uuid || item.img || item.name;
-    const ov = overrides[itemKey] || {};
+    const actorId = this.actor?.id;
+    if (!actorId || !item || typeof item !== "object") return;
+    const overrides = this._normalizeMiniOverrides(this._gjson("miniItemOverrides"));
+    const itemKey = [item.uuid, item.img, item.name].find(value => typeof value === "string" && value)?.slice(0, 2048);
+    if (!itemKey) return;
+    const ov = Object.prototype.hasOwnProperty.call(overrides, itemKey) ? overrides[itemKey] : {};
     const esc = foundry.utils.escapeHTML;
     const editState = {
       name: ov.name || item.name || "",
@@ -6638,7 +6875,7 @@ class CypherTaskbar {
       <div class="ct-journal-edit">
         <div class="ct-je-section">
           <label class="ct-je-label">Display Name</label>
-          <input type="text" id="mie-name" class="ct-je-input" value="${esc(editState.name)}" placeholder="Item name">
+          <input type="text" id="mie-name" class="ct-je-input" value="${esc(editState.name)}" placeholder="Item name" maxlength="200">
         </div>
         <div class="ct-je-section">
           <label class="ct-je-label">Short Description <span id="mie-char-count" style="color:rgba(232,232,232,0.4);font-size:0.75em;">(${editState.description.length}/800)</span></label>
@@ -6650,6 +6887,7 @@ class CypherTaskbar {
         </div>
       </div>`;
 
+    let saving = false;
     new Dialog({
       title: `Edit: ${item.name || "Item"}`,
       content,
@@ -6658,23 +6896,27 @@ class CypherTaskbar {
           icon: '<i class="fas fa-check"></i>',
           label: "Save",
           callback: async html => {
-            const root = html?.[0] ?? html;
-            const nameVal = root.querySelector("#mie-name")?.value?.trim() || item.name;
-            const descVal = root.querySelector("#mie-desc")?.value?.trim() || "";
-            const newOv = {};
-            if (nameVal && nameVal !== item.name) newOv.name = nameVal;
-            if (descVal) newOv.description = descVal;
-            // Build clean override
-            const cleanOv = {};
-            if (newOv.name !== undefined) cleanOv.name = newOv.name;
-            if (newOv.description !== undefined) cleanOv.description = newOv.description;
-            if (Object.keys(cleanOv).length > 0) {
-              overrides[itemKey] = cleanOv;
-            } else {
-              delete overrides[itemKey];
+            if (saving) return;
+            saving = true;
+            try {
+              const root = html?.[0] ?? html;
+              if (this.actor?.id !== actorId) throw new Error("The selected character changed before saving.");
+              const nameVal = (root.querySelector("#mie-name")?.value?.trim() || item.name || "Unknown").slice(0, 200);
+              const descVal = (root.querySelector("#mie-desc")?.value?.trim() || "").slice(0, 800);
+              const cleanOv = {};
+              if (nameVal !== item.name) cleanOv.name = nameVal;
+              if (descVal) cleanOv.description = descVal;
+              const latest = this._normalizeMiniOverrides(this._gjson("miniItemOverrides"));
+              if (Object.keys(cleanOv).length) latest[itemKey] = cleanOv;
+              else delete latest[itemKey];
+              const saved = await this._ss("miniItemOverrides", JSON.stringify(latest));
+              if (!saved) throw new Error("The override preference update was rejected.");
+              refreshFn();
+            } catch (err) {
+              saving = false;
+              console.error(`${MODULE_ID} | Failed to save mini item override`, err);
+              ui.notifications.error("The display override could not be saved.");
             }
-            this._ss("miniItemOverrides", JSON.stringify(overrides));
-            refreshFn();
           }
         },
         cancel: {
@@ -6862,61 +7104,16 @@ class CypherTaskbar {
   _makeMiniButtonDropTarget(btn, key) {
     if (!key || btn._ctDropBound) return;
     btn._ctDropBound = true;
-    const title = key.toUpperCase();
     const color = { People: "#8fbc8f", Places: "#c4a86b", Documents: "#4a90d9", Secrets: "#9b59b6", Scenes: "#e74c3c", Notes: "#f39c12" }[key] || "#c8a96e";
     const _onDragOver = (e) => { e.preventDefault(); e.stopPropagation(); btn.classList.add("is-dragover"); };
     const _onDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); btn.classList.remove("is-dragover"); };
-    const _onDrop = async (e) => {
+    const _onDrop = async e => {
       e.preventDefault(); e.stopPropagation();
       btn.classList.remove("is-dragover");
       let data;
       try { data = JSON.parse(e.dataTransfer.getData("text/plain") || "{}"); } catch { data = {}; }
-      if (!data.uuid && !data.img) return;
-      const actor = this.actor;
-      if (!actor) { ui.notifications.warn("No character assigned."); return; }
-      const stored = this._gjson(`mini${key}`) || [];
-      // Deduplicate
-      if (data.uuid && stored.some(s => s.uuid === data.uuid)) { ui.notifications.info("Already in this container."); return; }
-      if (!data.uuid && data.img && stored.some(s => s.img === data.img)) { ui.notifications.info("Already in this container."); return; }
-      let name = data.name || "Unknown";
-      let img = data.img || "icons/svg/book.svg";
-      let itemIcon = null;
-      if (data.uuid) {
-        try {
-          const doc = await fromUuid(data.uuid);
-          if (doc) {
-            name = doc.name || name;
-            img = await this._resolveMiniItemImage(doc);
-          }
-        } catch { /* ignore */ }
-        // Only use FA icon as fallback when no image was resolved
-        if (!img || img === "icons/svg/book.svg") {
-          const typeIcons = { Actor: "fas fa-user", JournalEntry: "fas fa-book", Scene: "fas fa-map", Item: "fas fa-box", Macro: "fas fa-play-circle", RollTable: "fas fa-dice-d20" };
-          itemIcon = typeIcons[data.uuid.split(".")[0]] || "fas fa-tag";
-        }
-      }
-      stored.push({ uuid: data.uuid || null, name, img, icon: itemIcon, color });
-      this._ss(`mini${key}`, JSON.stringify(stored));
-      ui.notifications?.info?.(`"${name}" added to ${title}.`);
-      // If popup is open for this container, refresh it
-      const popup = document.querySelector("#ct-mini-popup");
-      if (popup) {
-        const itemsEl = popup.querySelector("#ct-mini-items");
-        if (itemsEl) {
-          const esc = foundry.utils.escapeHTML;
-          const showT = this._gs("miniMenuShowTitle") !== false;
-          const titleAttr = showT ? '' : ' style="display:none;"';
-          itemsEl.innerHTML = stored.map((it, idx) => {
-            const hasImg = it.img && it.img !== "icons/svg/book.svg";
-            const iconHtml = hasImg
-              ? `<img src="${it.img}" alt="" draggable="false" onerror="this.src='icons/svg/book.svg'">`
-              : it.icon
-                ? `<i class="${it.icon} ct-book-fa-icon" style="color:${it.color || color}"></i>`
-                : `<img src="icons/svg/book.svg" alt="" draggable="false">`;
-            return `<div class="ct-mini-item" data-mini-idx="${idx}">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(it.name || 'Unknown')}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${JSON.stringify({ uuid: it.uuid || null, name: it.name || 'Unknown', img: it.img || '' }).replace(/"/g, '&quot;')}" title="Drag: ${esc(it.name || 'Unknown')}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
-          }).join('');
-        }
-      }
+      if (!this.actor) { ui.notifications.warn("No character assigned."); return; }
+      await this._addMiniItem(key, data, color);
     };
     btn.addEventListener("dragover", _onDragOver);
     btn.addEventListener("dragleave", _onDragLeave);
@@ -6971,18 +7168,21 @@ class CypherTaskbar {
         return;
       }
 
-      // Check if already owned
-      const existing = actor.items.find(i => i.name === item.name && (i.type || "").toLowerCase() === itemType);
+      const currentActor = game.actors.get(actor.id);
+      if (!currentActor?.isOwner) {
+        ui.notifications.warn("You no longer have permission to add items to this character.");
+        return;
+      }
+      const existing = currentActor.items.find(i => i.name === item.name && (i.type || "").toLowerCase() === itemType);
       if (existing) {
         ui.notifications.info(`"${item.name}" is already on this character.`);
         return;
       }
 
-      // Create item on actor
       try {
         const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
         delete itemData._id;
-        await actor.createEmbeddedDocuments("Item", [itemData]);
+        await currentActor.createEmbeddedDocuments("Item", [itemData]);
         ui.notifications.info(`"${item.name}" added to ${panelLabel}.`);
 
         // Refresh panel if open
@@ -7816,43 +8016,27 @@ class CypherTaskbar {
     return "Might";
   }
 
-  _withCharSync(actor, fn) {
-    const originalId = game.user._source?.character ?? game.user.character?.id;
-    // Synchronously update internal source so getter immediately returns new value
-    game.user.updateSource({ character: actor.id });
-    try {
-      return fn();
-    } finally {
-      // Restore original character reference
-      try { game.user.updateSource({ character: originalId }); } catch (e) { /* ignore */ }
-    }
-  }
-
   async _rollItem(item) {
     const actor = this.actor;
-    if (!actor || !item) return;
-    await this._withCharSync(actor, async () => {
-      // Try 1: Foundry native item.use() (v12+ standard)
-      if (typeof item.use === "function") {
-        try { return await item.use(); } catch (err) { console.warn("[CT] item.use() failed:", err?.message || err); }
+    if (!actor?.isOwner || !item || item.actor?.id !== actor.id || actor.type !== "pc") {
+      ui.notifications?.warn?.("Select the character who owns this item first.");
+      return false;
+    }
+    const api = game.cyphersystem;
+    if (typeof api?.itemRollMacro === "function") {
+      try {
+        // Cypher System 3.5.2 reads all item defaults when only actor and item ID are supplied.
+        await api.itemRollMacro(actor, item.id);
+        return true;
+      } catch (err) {
+        console.error(`${MODULE_ID} | native item roll failed for ${item.name}`, err);
+        ui.notifications?.error?.("The native item roll could not be opened.");
+        return false;
       }
-      // Try 2: Foundry native item.roll()
-      if (typeof item.roll === "function") {
-        try { return await item.roll(); } catch (err) { console.warn("[CT] item.roll() failed:", err?.message || err); }
-      }
-      // Try 3: Cypher System V2 dialog with item
-      const api = game.cyphersystem;
-      if (api?.allInOneRollDialogV2) {
-        try { return await api.allInOneRollDialogV2(actor, item); } catch (err) { console.warn("[CT] V2 dialog failed:", err?.message || err); }
-      }
-      // Try 4: Cypher System V1 dialog with item
-      if (api?.allInOneRollDialog) {
-        try { return await api.allInOneRollDialog(actor, item); } catch (err) { console.warn("[CT] V1 dialog failed:", err?.message || err); }
-      }
-      // Fallback: open item sheet
-      console.warn(`[CT] All roll methods failed for "${item.name}". Opening item sheet.`);
-      item.sheet?.render?.(true);
-    });
+    }
+    ui.notifications?.warn?.("This Cypher System version does not expose item rolls. Opening the item sheet instead.");
+    item.sheet?.render?.(true);
+    return false;
   }
 
   _skillStepFromRating(item) {
@@ -8020,18 +8204,22 @@ class CypherTaskbar {
   }
 
   async _spendEffortFromPool(actor, poolName, amount) {
-    const cost = Math.max(0, Number(amount ?? 0) || 0);
-    if (!actor || cost <= 0) return 0;
-    const key = String(poolName ?? 'might').trim().toLowerCase();
-    const pool = actor?.system?.pools?.[key] ?? {};
-    const current = Number(pool?.value ?? pool?.current ?? 0) || 0;
-    const next = Math.max(0, current - cost);
-    const update = {};
-    if (pool && Object.prototype.hasOwnProperty.call(pool, 'value')) update[`system.pools.${key}.value`] = next;
-    if (pool && Object.prototype.hasOwnProperty.call(pool, 'current')) update[`system.pools.${key}.current`] = next;
-    if (!Object.keys(update).length) update[`system.pools.${key}.value`] = next;
-    await actor.update(update);
-    return current - next;
+    const numericCost = Number(amount ?? 0);
+    const cost = Number.isFinite(numericCost) ? Math.max(0, Math.floor(numericCost)) : 0;
+    const key = String(poolName ?? "").trim().toLowerCase();
+    const currentActor = actor?.id ? game.actors?.get(actor.id) ?? actor : actor;
+    if (!currentActor?.isOwner || !["might", "speed", "intellect"].includes(key)) {
+      ui.notifications?.warn?.("You cannot spend points from that pool.");
+      return null;
+    }
+    if (cost <= 0) return 0;
+    const current = Number(currentActor.system?.pools?.[key]?.value);
+    if (!Number.isFinite(current) || current < cost) {
+      ui.notifications?.warn?.(`Not enough ${poolName} points. Need ${cost}, have ${Number.isFinite(current) ? current : 0}. The roll was cancelled.`);
+      return null;
+    }
+    await currentActor.update({ [`system.pools.${key}.value`]: current - cost });
+    return cost;
   }
 
   _skillRollSelectOptions(min, max, selected, labels = null) {
@@ -8161,19 +8349,33 @@ class CypherTaskbar {
     const skillStep = this._skillStepFromRating(item);
     const edge = this._edgeForPool(actor, pool);
     const poolValue = this._poolValueForName(actor, pool);
-    const finalDifficulty = Math.max(0, Math.min(15, baseDifficulty - skillStep - assets - effort - easedBy + hinderedBy));
+    const stress = actor.system?.settings?.combat?.stress?.active
+      ? Math.max(0, Number(actor.system?.combat?.stress?.levels ?? 0) || 0) : 0;
+    const finalDifficulty = Math.max(0, Math.min(15, baseDifficulty - skillStep - assets - effort - easedBy + hinderedBy + stress));
     const target = finalDifficulty * 3;
     const totalEffort = Math.max(0, effort + effortDamage + effortOther - freeEffort);
     const firstLOECosts2 = game.settings.get("cyphersystem", "FirstLOECosts2Points") ? 0 : 1;
     const effortBaseCost = totalEffort > 0 ? totalEffort * 2 + firstLOECosts2 : 0;
-    const effortCost = Math.max(0, effortBaseCost + additionalCost - edge);
-    const remainingPool = Math.max(0, poolValue - effortCost);
-    return { pool, bonus, baseDifficulty, assets, effort, effortDamage, effortOther, additionalCost, easedBy, hinderedBy, freeEffort, skillStep, edge, poolValue, finalDifficulty, target, effortCost, remainingPool };
+    const damageState = String(actor.system?.combat?.damageTrack?.state ?? "").toLowerCase();
+    const damageTrack = actor.system?.combat?.damageTrack ?? {};
+    const impaired = (damageState === "impaired" && damageTrack.applyImpaired)
+      || (damageState === "debilitated" && damageTrack.applyDebilitated);
+    const impairmentCost = impaired ? totalEffort : 0;
+    const armorCost = pool === "Speed"
+      ? totalEffort * Math.max(0, Number(actor.system?.combat?.armor?.costTotal ?? 0) || 0) : 0;
+    const effortCost = Math.max(0, effortBaseCost + additionalCost + impairmentCost + armorCost - edge);
+    const remainingPool = poolValue - effortCost;
+    const effortApplied = effort + effortDamage + effortOther;
+    const effortCap = Math.max(0, Number(actor.system?.basic?.effort ?? 0) || 0);
+    const tooMuchEffort = !game.settings.get("cyphersystem", "ruleBreakingRolls") && effortApplied > effortCap;
+    const canAfford = remainingPool >= 0 && !tooMuchEffort;
+    return { pool, bonus, baseDifficulty, assets, effort, effortDamage, effortOther, additionalCost, easedBy, hinderedBy, freeEffort, skillStep, edge, poolValue, finalDifficulty, target, effortCost, remainingPool, totalEffort, impairmentCost, armorCost, stress, effortApplied, effortCap, tooMuchEffort, canAfford, impaired };
   }
 
   async _performNativeSkillRoll(actor, item, options = {}) {
     // Store roll data for potential reroll
     this._lastRollData = {
+      rollType: "skill",
       skillItemId: item?.id,
       skillName: item?.name,
       pool: options?.pool || item?.system?.settings?.rollButton?.pool || item?.system?.pool || "Might",
@@ -8190,13 +8392,23 @@ class CypherTaskbar {
       timestamp: Date.now()
     };
     const summary = this._skillRollSummary(actor, item, options);
+    if (!actor?.isOwner || summary.tooMuchEffort || (!options.reroll && !summary.canAfford)) {
+      ui.notifications?.warn?.(summary.tooMuchEffort
+        ? `Too much Effort: ${summary.effortApplied} levels applied, maximum ${summary.effortCap}.`
+        : `Not enough ${summary.pool} points for this roll.`);
+      return null;
+    }
     const roll = await (new Roll('1d20')).evaluate();
     const total = Number(roll.total ?? 0);
     const ratingLabel = this._skillRatingLabel(item);
     const specialEvent = this._skillRollSpecialEvent(total);
-    const achievedDifficulty = Math.max(0, Math.floor((total + summary.bonus + (summary.skillStep + summary.assets + summary.effort + summary.easedBy - summary.hinderedBy) * 3) / 3));
+    const outcome = resolveRollOutcome({ natural: total, bonus: summary.bonus, finalDifficulty: summary.finalDifficulty });
+    const achievedDifficulty = outcome.achievedDifficulty;
     let spent = 0;
-    if (summary.effortCost > 0) spent = await this._spendEffortFromPool(actor, summary.pool, summary.effortCost);
+    if (!options.reroll && summary.effortCost > 0) {
+      spent = await this._spendEffortFromPool(actor, summary.pool, summary.effortCost);
+      if (spent === null) return null;
+    }
     const flavor = `
       <div class="ct-native-skill-roll-flavor">
         <div class="ct-native-skill-roll-flavor-head">
@@ -8223,8 +8435,11 @@ class CypherTaskbar {
     // resolution comes back as gmSkillUtilityResolved and spends the pip here.
     try {
       if (!game.user?.isGM && this._cbState?.()) {
+        const requestId = foundry.utils.randomID();
+        this._pendingUtilityRequests.set(requestId, { actorId: actor.id, skillName: item?.name ?? "Skill", createdAt: Date.now() });
         game.socket.emit(`module.${MODULE_ID}`, {
           type: "gmSkillUtilityRequest",
+          requestId,
           userId: game.user.id,
           actorId: actor?.id ?? null,
           actorName: actor?.name ?? "",
@@ -8238,6 +8453,7 @@ class CypherTaskbar {
     } catch (err) {
       console.warn(`${MODULE_ID} | gmSkillUtilityRequest emit failed`, err);
     }
+    return outcome;
   }
 
   _closeSkillsMenuPanel() {
@@ -8357,6 +8573,7 @@ class CypherTaskbar {
       </form>`;
 
     return await new Promise(resolve => {
+      let submitting = false;
       const dialog = new Dialog({
         title,
         content,
@@ -8365,14 +8582,16 @@ class CypherTaskbar {
             icon: '<i class="fas fa-dice-d20"></i>',
             label: 'Roll Attack',
             callback: async html => {
+              if (submitting) return;
+              submitting = true;
               const root = html?.[0] ?? html;
               const form = root?.querySelector('.ct-native-attack-roll-form');
               if (!form) return resolve(false);
               const data = Object.fromEntries(new FormData(form).entries());
               data.baseDamage = baseDamage;
               data.damagePerLOE = dmgPerLOE;
-              await this._performNativeAttackRoll(actor, item, data);
-              resolve(true);
+              const result = await this._performNativeAttackRoll(actor, item, data);
+              resolve(result !== null);
             }
           },
           cancel: {
@@ -8424,6 +8643,7 @@ class CypherTaskbar {
   async _performNativeAttackRoll(actor, item, options = {}) {
     // Store roll data for potential reroll
     this._lastRollData = {
+      rollType: "attack",
       skillItemId: item?.id,
       skillName: item?.name,
       pool: options?.pool || item?.system?.settings?.rollButton?.pool || "Might",
@@ -8437,9 +8657,18 @@ class CypherTaskbar {
       hinderedBy: Number(options.hinderedBy ?? 0),
       bonus: Number(options.bonus ?? 0),
       freeEffort: Number(options.freeEffort ?? 0),
+      baseDamage: Number(options.baseDamage ?? item?.system?.basic?.damage ?? item?.system?.damage ?? 0),
+      bonusDamage: Number(options.bonusDamage ?? 0),
+      damagePerLOE: Number(options.damagePerLOE ?? 3),
       timestamp: Date.now()
     };
     const summary = this._skillRollSummary(actor, item, options);
+    if (!actor?.isOwner || summary.tooMuchEffort || (!options.reroll && !summary.canAfford)) {
+      ui.notifications?.warn?.(summary.tooMuchEffort
+        ? `Too much Effort: ${summary.effortApplied} levels applied, maximum ${summary.effortCap}.`
+        : `Not enough ${summary.pool} points for this attack.`);
+      return null;
+    }
     const baseDamage = Number(options.baseDamage ?? item?.system?.basic?.damage ?? item?.system?.damage ?? 0) || 0;
     const dmgPerLOE = Math.max(1, Number(options.damagePerLOE ?? 3) || 3);
     const effortDmg = Math.max(0, Number(options.effortDamage ?? 0));
@@ -8448,26 +8677,30 @@ class CypherTaskbar {
     const bonusMod = Math.max(-99, Math.min(99, Number(options.bonus ?? 0) || 0));
     const atkInfo = this._attackItemRollStats(item);
 
-    // A weapon with linked ammo expends 1 shot per attack roll (hit or miss)
-    await this._expendAttackAmmo(item);
+    // A new attack expends ammunition; an XP reroll does not fire another shot.
+    if (!options.reroll) {
+      const ammoReady = await this._expendAttackAmmo(item);
+      if (ammoReady === false) return null;
+    }
 
     const roll = await (new Roll('1d20')).evaluate();
     const total = Number(roll.total ?? 0);
     const ratingLabel = this._skillRatingLabel(item);
     const specialEvent = this._skillRollSpecialEvent(total);
 
-    // Natural roll bonus damage from special events (17=+1, 18=+2, 19=+3, 20=+4)
-    const naturalDmgBonus = total >= 17 ? (total - 16) : 0;
-
-    const achievedDifficulty = Math.max(0, Math.floor((total + bonusMod + (summary.skillStep + summary.assets + summary.effort + summary.easedBy - summary.hinderedBy) * 3) / 3));
+    // Impaired characters receive only +1 damage from a special roll, matching native rules.
+    const naturalDmgBonus = total >= 17 ? (summary.impaired ? 1 : total - 16) : 0;
+    const outcome = resolveRollOutcome({ natural: total, bonus: bonusMod, finalDifficulty: summary.finalDifficulty });
+    const achievedDifficulty = outcome.achievedDifficulty;
 
     let spent = 0;
-    if (summary.effortCost > 0) spent = await this._spendEffortFromPool(actor, summary.pool, summary.effortCost);
-
-    // All effort costs (attack + damage + other) and additionalCost are in summary.effortCost
+    if (!options.reroll && summary.effortCost > 0) {
+      spent = await this._spendEffortFromPool(actor, summary.pool, summary.effortCost);
+      if (spent === null) return null;
+    }
 
     const totalDamage = baseDamage + effortDmgBonus + bonusDmg + naturalDmgBonus;
-    const hit = achievedDifficulty >= summary.finalDifficulty;
+    const hit = outcome.success;
 
     const flavor = `
       <div class="ct-native-skill-roll-flavor">
@@ -8505,14 +8738,21 @@ class CypherTaskbar {
     // ── Post-roll outcome: floater + target damage/effects + action pip ──
     try {
       const targetDoc = this._getFirstTargetTokenDoc();
-      if (hit && targetDoc?.actor) await this._applyAttackToTarget(targetDoc, totalDamage, item);
-      // Action pip is expended after every attack roll, hit or miss
-      this._cbExpendResource?.("action");
+      // A reroll replaces the earlier result. Automatically applying its damage
+      // could stack with damage already applied for the original attack.
+      if (hit && targetDoc?.actor && !options.reroll) {
+        await this._applyAttackToTarget(targetDoc, totalDamage, item);
+      } else if (hit && targetDoc?.actor && options.reroll) {
+        ui.notifications?.info?.("Reroll complete. Review the new result with the GM before applying replacement damage.");
+      }
+      // XP rerolls replace the roll; they do not consume another action pip.
+      if (!options.reroll) this._cbExpendResource?.("action");
       const ownToken = actor.getActiveTokens?.()[0]?.document ?? null;
       this._showAttackOutcomeFloater(targetDoc ?? ownToken, hit);
     } catch (err) {
       console.error(`${MODULE_ID} | post-attack outcome failed`, err);
     }
+    return outcome;
   }
 
   async _openNativeSkillRollDialog(actor, item, presetDifficulty = null) {
@@ -8594,6 +8834,7 @@ class CypherTaskbar {
       </form>`;
 
     return await new Promise(resolve => {
+      let submitting = false;
       const dialog = new Dialog({
         title,
         content,
@@ -8602,12 +8843,14 @@ class CypherTaskbar {
             icon: '<i class="fas fa-dice-d20"></i>',
             label: 'Roll',
             callback: async html => {
+              if (submitting) return;
+              submitting = true;
               const root = html?.[0] ?? html;
               const form = root?.querySelector('.ct-native-skill-roll-form');
               if (!form) return resolve(false);
               const data = Object.fromEntries(new FormData(form).entries());
-              await this._performNativeSkillRoll(actor, item, data);
-              resolve(true);
+              const result = await this._performNativeSkillRoll(actor, item, data);
+              resolve(result !== null);
             }
           },
           cancel: {
@@ -8702,7 +8945,7 @@ class CypherTaskbar {
     tip.className = "ct-attack-tooltip";
     tip.innerHTML = `
       <div class="ct-attack-tooltip-header">
-        <img src="${item.img || 'icons/svg/combat.svg'}" alt="">
+        <img src="${foundry.utils.escapeHTML(item.img || 'icons/svg/combat.svg')}" alt="${foundry.utils.escapeHTML(item.name || "Attack")}">
         <span>${foundry.utils.escapeHTML(item.name || "Attack")}</span>
       </div>
       ${rows.length ? `<div class="ct-attack-tooltip-stats">${rows.map(([k, v]) => `<div class="ct-attack-tooltip-stat"><span class="ct-attack-tooltip-stat-key">${k}</span><span class="ct-attack-tooltip-stat-val">${foundry.utils.escapeHTML(String(v))}</span></div>`).join("")}</div>` : ""}
@@ -8725,31 +8968,40 @@ class CypherTaskbar {
     document.querySelectorAll(".ct-attack-tooltip").forEach(t => t.remove());
   }
 
-  /* Expend 1 ammo from the weapon's linked ammo item (cool-items attackAmmoItem flag). */
+  /* Expend 1 ammo from the weapon's linked item. false cancels the attack. */
   async _expendAttackAmmo(weapon) {
+    const actor = game.actors.get(weapon?.actor?.id ?? this.actor?.id);
+    const currentWeapon = actor?.items.get(weapon?.id);
+    if (!actor?.isOwner || !currentWeapon) return false;
+    const cci = currentWeapon.getFlag?.("cypher-cool-items", "data") ?? {};
+    if (cci.ammoEnabled === false || cci.attackAmmo === false) return true;
+    const link = cci.ammoItem ?? cci.attackAmmoItem ?? null;
+    const usesAmmo = cci.ammoEnabled === true || cci.attackAmmo === true || Boolean(link?.id);
+    if (!usesAmmo) return true;
+    if (typeof link?.id !== "string" || !link.id) {
+      ui.notifications.warn(`${currentWeapon.name} uses ammo but has none linked — drag ammo onto it in Equipment → Weapons & Ammo.`);
+      return false;
+    }
+    const ammo = actor.items.get(link.id);
+    if (!ammo) {
+      ui.notifications.warn(`${currentWeapon.name}: the linked ammo is no longer on ${actor.name}.`);
+      return false;
+    }
+    const basic = ammo.system?.basic ?? {};
+    const key = basic.quantity !== undefined ? "system.basic.quantity"
+      : basic.amount !== undefined ? "system.basic.amount" : null;
+    const qty = Number(key ? basic[key.replace("system.basic.", "")] : 0);
+    if (!key || !Number.isSafeInteger(qty) || qty < 1) {
+      ui.notifications.warn(`${ammo.name} is out of ammo or has no valid quantity.`);
+      return false;
+    }
     try {
-      const actor = this.actor;
-      const cci = weapon?.getFlag?.("cypher-cool-items", "data") ?? {};
-      const link = cci.ammoItem ?? cci.attackAmmoItem ?? null;
-      if (!link?.id) {
-        ui.notifications?.warn?.(`${weapon?.name ?? "Weapon"} uses ammo but has none linked — drag ammo onto it in Equipment → Weapons & Ammo.`);
-        return;
-      }
-      const ammo = actor?.items?.get(link.id);
-      if (!ammo) {
-        ui.notifications?.warn?.(`${weapon.name}: linked ammo (${link.name}) is not on ${actor?.name ?? "the actor"}.`);
-        return;
-      }
-      const basic = ammo.system?.basic ?? {};
-      const qty = Number(basic.quantity ?? basic.amount ?? 0) || 0;
-      if (qty <= 0) {
-        ui.notifications?.warn?.(`${ammo.name} is out of ammo!`);
-        return;
-      }
-      const key = basic.quantity !== undefined ? "system.basic.quantity" : "system.basic.amount";
       await ammo.update({ [key]: qty - 1 });
+      return true;
     } catch (err) {
       console.error(`${MODULE_ID} | ammo expend failed`, err);
+      ui.notifications.error("Ammo could not be expended; the attack was cancelled.");
+      return false;
     }
   }
 
@@ -8770,11 +9022,21 @@ class CypherTaskbar {
   }
 
   async _adjustXP(delta) {
-    const actor = this.actor;
-    if (!actor || actor.type !== "pc") return;
+    const actor = game.actors.get(this.actor?.id);
+    const amount = Number(delta);
+    if (!actor?.isOwner || actor.type !== "pc" || !Number.isSafeInteger(amount) || Math.abs(amount) > 10) return false;
     const current = Number(actor.system?.basic?.xp ?? 0);
-    const next = Math.max(0, Math.min(10, current + delta));
-    await actor.update({"system.basic.xp": next});
+    if (!Number.isSafeInteger(current) || current < 0) return false;
+    const next = Math.max(0, Math.min(10, current + amount));
+    if (next === current) return true;
+    try {
+      await actor.update({ "system.basic.xp": next });
+      return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | XP adjustment failed for ${actor.id}`, err);
+      ui.notifications.error("XP could not be updated. Refresh the character and try again.");
+      return false;
+    }
   }
 
   /* ─── GM Taskbar Difficulty Integration ─── */
@@ -8907,17 +9169,32 @@ class CypherTaskbar {
     if (!game.user?.isGM) {
       const uuid = tokenDoc.uuid ?? tokenDoc.document?.uuid;
       if (uuid) {
-        // Emit unconditionally — presence detection varies across builds, and
-        // without a GM the request simply goes nowhere.
-        game.socket.emit(`module.${MODULE_ID}`, {
-          type: "gmAttackOutcomeRequest",
-          userId: game.user.id,
+        const requestId = foundry.utils.randomID();
+        const gmUsers = game.users?.filter(u => u.active && u.isGM) ?? [];
+        if (!gmUsers.length) {
+          ui.notifications?.warn?.("No GM online — damage was not applied to the NPC.");
+          return { applied: 0, armor, deferred: false };
+        }
+        this._pendingAttackOutcomes.set(requestId, {
           tokenUuid: uuid,
           itemUuid: item?.uuid ?? null,
-          totalDamage: Math.round(Number(totalDamage) || 0)
+          createdAt: Date.now()
         });
-        const gmUsers = game.users?.filter(u => u.active && u.isGM) ?? [];
-        if (!gmUsers.length) ui.notifications?.warn?.("No GM online — damage was not applied to the NPC.");
+        try {
+          game.socket.emit(`module.${MODULE_ID}`, {
+            type: "gmAttackOutcomeRequest",
+            requestId,
+            userId: game.user.id,
+            tokenUuid: uuid,
+            itemUuid: item?.uuid ?? null,
+            totalDamage: Math.max(0, Math.min(999, Math.round(Number(totalDamage) || 0)))
+          });
+        } catch (err) {
+          this._pendingAttackOutcomes.delete(requestId);
+          console.error(`${MODULE_ID} | Attack outcome request failed`, err);
+          ui.notifications?.error?.("The GM damage request could not be sent.");
+          return { applied: 0, armor, deferred: false };
+        }
         return { applied, armor, deferred: true };
       }
       return { applied, armor, deferred: false };
@@ -8930,10 +9207,15 @@ class CypherTaskbar {
      item's Active Effects. effectIds = null applies all; an array (even empty)
      applies only the listed effect ids. */
   async _applyDamageAndEffects(target, applied, item, effectIds = null) {
-    if (applied > 0) {
-      const health = foundry.utils.getProperty(target, "system.pools.health") ?? {};
-      const cur = Number(health.value ?? 0);
-      await target.update({ "system.pools.health.value": Math.max(0, cur - applied) });
+    if (!target?.isOwner || !item?.actor || (effectIds !== null && !Array.isArray(effectIds))) {
+      throw new Error("Damage/effect mutation failed ownership or schema validation.");
+    }
+    const damage = Math.max(0, Math.min(999, Math.round(Number(applied) || 0)));
+    if (damage > 0) {
+      const health = foundry.utils.getProperty(target, "system.pools.health");
+      const cur = Number(health?.value);
+      if (!Number.isFinite(cur)) throw new Error("The target has no valid health pool.");
+      await target.update({ "system.pools.health.value": Math.max(0, cur - damage) });
     }
     const effects = (item?.effects?.contents ?? [])
       .filter(e => e && !e.disabled && (effectIds == null || effectIds.includes(e.id)));
@@ -8950,8 +9232,10 @@ class CypherTaskbar {
      armor-reduced damage (editable) and the attack item's Active Effects
      (checked by default); CONFIRM applies with GM permissions, CANCEL drops
      everything, and the requesting player is notified either way. */
-  async _openGMAttackOutcome({ userId, tokenUuid, itemUuid, totalDamage } = {}) {
-    if (!game.user?.isGM) return;
+  async _openGMAttackOutcome({ requestId, userId, tokenUuid, itemUuid, totalDamage } = {}) {
+    if (!this._claimGmRequest({ type: "gmAttackOutcomeRequest", requestId })) return;
+    const requester = game.users?.get(userId);
+    if (!requester || typeof tokenUuid !== "string" || typeof itemUuid !== "string") return;
     let tokenDoc = null;
     try { tokenDoc = await fromUuid(tokenUuid); } catch { /* token gone */ }
     const target = tokenDoc?.actor;
@@ -8960,8 +9244,12 @@ class CypherTaskbar {
       return;
     }
     let item = null;
-    if (itemUuid) { try { item = await fromUuid(itemUuid); } catch { /* item gone */ } }
-    const attackerName = game.users?.get(userId)?.name ?? "Player";
+    try { item = await fromUuid(itemUuid); } catch { /* item gone */ }
+    if (!item?.actor || item.type !== "attack" || !item.actor.testUserPermission(requester, "OWNER")) {
+      ui.notifications?.warn?.("Attack outcome: the attacking item is missing or not owned by the requester.");
+      return;
+    }
+    const attackerName = requester.name;
     // cypher-cool-items Armor Reduction (item card declaration) — same source
     // the GM Taskbar outcome flow uses.
     const cciRed = Math.max(0, Math.min(5, Number(item?.getFlag?.("cypher-cool-items", "data")?.armorReduction) || 0));
@@ -8992,7 +9280,7 @@ class CypherTaskbar {
             <div class="ct-gm-outcome-fx-title">ACTIVE EFFECTS — APPLY TO ${esc(target.name).toUpperCase()}</div>
             ${effects.length ? effects.map(e => `
               <label class="ct-gm-outcome-fx">
-                <input type="checkbox" name="ctGmFx" value="${e.id}" checked>
+                <input type="checkbox" name="ctGmFx" value="${esc(e.id)}" checked>
                 <img src="${esc(e.icon || item?.img || 'icons/svg/aura.svg')}" alt="" draggable="false">
                 <span>${esc(e.name)}</span>
               </label>`).join("") : `<div class="ct-gm-outcome-none">This attack has no active effects.</div>`}
@@ -9003,6 +9291,7 @@ class CypherTaskbar {
     const notifyRequester = approved => {
       game.socket.emit(`module.${MODULE_ID}`, {
         type: "gmAttackOutcomeResolved",
+        requestId,
         userId,
         approved,
         targetName: target.name,
@@ -9010,6 +9299,7 @@ class CypherTaskbar {
       });
     };
 
+    let resolving = false;
     new Dialog({
       title: `Attack Hit — ${target.name}`,
       content,
@@ -9018,17 +9308,27 @@ class CypherTaskbar {
           icon: '<i class="fas fa-check"></i>',
           label: "Confirm",
           callback: async html => {
+            if (resolving) return;
+            resolving = true;
             const root = html?.[0] ?? html;
-            const dmg = Math.max(0, Math.round(Number(root?.querySelector('[name="damage"]')?.value ?? applied) || 0));
+            const dmg = Math.max(0, Math.min(999, Math.round(Number(root?.querySelector('[name="damage"]')?.value ?? applied) || 0)));
             const fxIds = [...(root?.querySelectorAll('[name="ctGmFx"]:checked') ?? [])].map(cb => cb.value);
             try {
-              await this._applyDamageAndEffects(target, dmg, item, fxIds);
-              ui.notifications?.info?.(`Applied ${dmg} damage to ${target.name}${fxIds.length ? ` + ${fxIds.length} effect(s)` : ""}.`);
+              const currentToken = await fromUuid(tokenUuid);
+              const currentTarget = currentToken?.actor;
+              const currentItem = await fromUuid(itemUuid);
+              if (!currentTarget?.isOwner || currentItem?.type !== "attack"
+                || !currentItem?.actor?.testUserPermission(requester, "OWNER")) {
+                throw new Error("The attack request became stale before confirmation.");
+              }
+              await this._applyDamageAndEffects(currentTarget, dmg, currentItem, fxIds);
+              ui.notifications?.info?.(`Applied ${dmg} damage to ${currentTarget.name}${fxIds.length ? ` + ${fxIds.length} effect(s)` : ""}.`);
+              notifyRequester(true);
             } catch (err) {
               console.error(`${MODULE_ID} | GM confirm apply failed`, err);
-              ui.notifications?.error?.("Failed to apply outcome — see console (F12).");
+              ui.notifications?.error?.("Failed to apply outcome — no confirmation was sent.");
+              resolving = false;
             }
-            notifyRequester(true);
           }
         },
         cancel: {
@@ -9046,14 +9346,19 @@ class CypherTaskbar {
      Cypher GM Taskbar module is not active — otherwise that module owns it).
      SPEND expends 1 utility pip on the requesting player's combat bar;
      FREE rules the use costs nothing. */
-  async _openGMSkillUtility({ userId, actorName, skillName, skillImg, rollTotal, achievedDifficulty, finalDifficulty } = {}) {
-    if (!game.user?.isGM) return;
-    const playerName = game.users?.get(userId)?.name ?? "Player";
+  async _openGMSkillUtility({ requestId, userId, actorId, skillName, skillImg, rollTotal, achievedDifficulty, finalDifficulty } = {}) {
+    if (!this._claimGmRequest({ type: "gmSkillUtilityRequest", requestId })) return;
+    const requester = game.users?.get(userId);
+    const actor = game.actors?.get(actorId);
+    if (!requester || !actor || !actor.testUserPermission(requester, "OWNER")) return;
+    const playerName = requester.name;
+    const actorName = actor.name;
     const success = Number(achievedDifficulty) >= Number(finalDifficulty);
     const esc = s => foundry.utils.escapeHTML(String(s ?? ""));
     const notifyRequester = spend => {
       game.socket.emit(`module.${MODULE_ID}`, {
         type: "gmSkillUtilityResolved",
+        requestId,
         userId,
         spend,
         skillName: skillName ?? "Skill"
@@ -9102,13 +9407,19 @@ class CypherTaskbar {
      pips it costs. Multi-select chips (MOVE/ACTION/UTILITY); NONE is exclusive
      and clears the rest. CONFIRM emits gmOtherPipsResolved; an empty selection
      resolves as NONE. Fallback dialog — the GM Taskbar owns the fancy one. */
-  async _openGMOtherPips({ userId, actorName, actorImg } = {}) {
-    if (!game.user?.isGM) return;
-    const playerName = game.users?.get(userId)?.name ?? "Player";
+  async _openGMOtherPips({ requestId, userId, actorId } = {}) {
+    if (!this._claimGmRequest({ type: "gmOtherPipsRequest", requestId })) return;
+    const requester = game.users?.get(userId);
+    const actor = game.actors?.get(actorId);
+    if (!requester || !actor || !actor.testUserPermission(requester, "OWNER")) return;
+    const playerName = requester.name;
+    const actorName = actor.name;
+    const actorImg = actor.img;
     const esc = s => foundry.utils.escapeHTML(String(s ?? ""));
     const notifyRequester = pips => {
       game.socket.emit(`module.${MODULE_ID}`, {
         type: "gmOtherPipsResolved",
+        requestId,
         userId,
         pips
       });
@@ -9300,6 +9611,7 @@ class CypherTaskbar {
             icon: '<i class="fas fa-dice-d20"></i>',
             label: 'Roll',
             callback: async html => {
+              if (rolled) return;
               rolled = true; // sync — runs before the dialog closes
               const root = html?.[0] ?? html;
               const form = root?.querySelector('.ct-native-attribute-roll-form');
@@ -9361,16 +9673,28 @@ class CypherTaskbar {
     const hinderedBy = Math.max(0, Number(data.hinderedBy ?? 0) || 0);
     const edge = this._edgeForPool(actor, pool);
     const poolValue = this._poolValueForName(actor, pool);
-    const finalDifficulty = Math.max(0, Math.min(15, baseDifficulty - assets - effort - easedBy + hinderedBy));
+    const stress = actor.system?.settings?.combat?.stress?.active
+      ? Math.max(0, Number(actor.system?.combat?.stress?.levels ?? 0) || 0) : 0;
+    const finalDifficulty = Math.max(0, Math.min(15, baseDifficulty - assets - effort - easedBy + hinderedBy + stress));
     const target = finalDifficulty * 3;
-    const effortCost = Math.max(0, effort > 0 ? 3 + Math.max(0, effort - 1) * 2 - edge : 0);
-    const remainingPool = Math.max(0, poolValue - effortCost);
-    return { pool, baseDifficulty, assets, effort, easedBy, hinderedBy, edge, poolValue, finalDifficulty, target, effortCost, remainingPool };
+    const firstLOECosts2 = game.settings.get("cyphersystem", "FirstLOECosts2Points") ? 0 : 1;
+    const damageState = String(actor.system?.combat?.damageTrack?.state ?? "").toLowerCase();
+    const damageTrack = actor.system?.combat?.damageTrack ?? {};
+    const impaired = (damageState === "impaired" && damageTrack.applyImpaired)
+      || (damageState === "debilitated" && damageTrack.applyDebilitated);
+    const impairmentCost = impaired ? effort : 0;
+    const armorCost = pool === "Speed"
+      ? effort * Math.max(0, Number(actor.system?.combat?.armor?.costTotal ?? 0) || 0) : 0;
+    const effortCost = Math.max(0, (effort > 0 ? effort * 2 + firstLOECosts2 : 0) + impairmentCost + armorCost - edge);
+    const remainingPool = poolValue - effortCost;
+    const canAfford = remainingPool >= 0;
+    return { pool, baseDifficulty, assets, effort, easedBy, hinderedBy, edge, poolValue, finalDifficulty, target, effortCost, remainingPool, impairmentCost, armorCost, stress, canAfford };
   }
 
   async _performAttributeRoll(actor, statName, options = {}) {
     // Store roll data for potential reroll
     this._lastRollData = {
+      rollType: "attribute",
       statName,
       pool: String(statName || "might").trim().toLowerCase().charAt(0).toUpperCase() + String(statName || "might").trim().toLowerCase().slice(1),
       baseDifficulty: Number(options.baseDifficulty ?? options.difficulty ?? 0),
@@ -9381,13 +9705,20 @@ class CypherTaskbar {
       timestamp: Date.now()
     };
     const summary = this._attributeRollSummary(actor, options);
+    if (!actor?.isOwner || (!options.reroll && !summary.canAfford)) {
+      ui.notifications?.warn?.(`Not enough ${summary.pool} points for this roll.`);
+      return null;
+    }
     const roll = await (new Roll('1d20')).evaluate();
     const total = Number(roll.total ?? 0);
     const specialEvent = this._skillRollSpecialEvent(total);
-    const modifier = (summary.assets + summary.effort + summary.easedBy - summary.hinderedBy) * 3;
-    const achievedDifficulty = Math.max(0, Math.floor((total + modifier) / 3));
+    const outcome = resolveRollOutcome({ natural: total, finalDifficulty: summary.finalDifficulty });
+    const achievedDifficulty = outcome.achievedDifficulty;
     let spent = 0;
-    if (summary.effortCost > 0) spent = await this._spendEffortFromPool(actor, summary.pool, summary.effortCost);
+    if (!options.reroll && summary.effortCost > 0) {
+      spent = await this._spendEffortFromPool(actor, summary.pool, summary.effortCost);
+      if (spent === null) return null;
+    }
     const flavor = `
       <div class="ct-native-skill-roll-flavor">
         <div class="ct-native-skill-roll-flavor-head">
@@ -9405,9 +9736,7 @@ class CypherTaskbar {
       speaker: ChatMessage.getSpeaker({ actor }),
       flavor
     }, { rollMode: game.settings.get('core', 'rollMode') });
-    // Return the achieved total (die + assets/effort/ease modifiers) so
-    // callers can compare it against the target number (difficulty × 3).
-    return total + modifier;
+    return outcome;
   }
 
 
@@ -9417,7 +9746,7 @@ class CypherTaskbar {
       presetDifficulty: difficulty
     });
     if (total == null) return null;
-    const success = Number(total) >= (Number(difficulty) * 3);
+    const success = total.success === true;
     if (mode === "long-move") {
       if (success) await this._fadeCombatActionButton("long-move");
       else await this._fadeCombatActionButtons(["move", "long-move", "attack", "guard", "use-ability", "use-item", "use-cypher", "cast-spell"]);
@@ -9459,9 +9788,9 @@ class CypherTaskbar {
 
     // GM spends directly — no approval needed
     if (game.user?.isGM) {
-      await this._doXpSpend(actor, spendType, label);
+      const spent = await this._doXpSpend(actor, spendType, label);
+      if (!spent) return;
       this.render(); // Refresh XP bar
-      // If this was a reroll, perform it immediately for the GM
       if (spendType === "reroll" && this._lastRollData) {
         await this._performRerollFromData(this._lastRollData);
       }
@@ -9477,7 +9806,14 @@ class CypherTaskbar {
 
     const requestId = foundry.utils.randomID();
     this._pendingXpRequests = this._pendingXpRequests || new Map();
-    this._pendingXpRequests.set(requestId, { spendType, label, actorId: actor.id });
+    this._pendingXpRequests.set(requestId, {
+      spendType,
+      label,
+      actorId: actor.id,
+      createdAt: Date.now(),
+      xpBefore: xp,
+      rollData: spendType === "reroll" ? foundry.utils.duplicate(this._lastRollData) : null
+    });
 
     const payload = {
       type: "gmXpSpendRequest",
@@ -9490,51 +9826,56 @@ class CypherTaskbar {
       label,
       xpCost: 1
     };
-    // Include roll data for reroll so the player can perform it after approval
-    if (spendType === "reroll" && this._lastRollData) {
-      payload.rollData = foundry.utils.duplicate(this._lastRollData);
-      console.log(`[CT] Sending reroll request with rollData:`, payload.rollData);
-    }
     game.socket.emit(`module.${MODULE_ID}`, payload);
-    console.log(`[CT] Socket emitted to module.${MODULE_ID}:`, payload);
     ui.notifications?.info?.(`XP spend request sent to GM: ${label} (1 XP).`);
   }
 
-  /** Actually perform the XP spend via Cypher XP API */
+  /** Actually perform the XP spend via Cypher XP API. Returns true only after success. */
   async _doXpSpend(actor, spendType, label) {
-    let api = this._getXpApi();
-    for (let i = 0; i < 50 && !api; i++) {
-      await new Promise(r => setTimeout(r, 100));
-      api = this._getXpApi();
+    const allowed = new Set(["reroll", "player-intrusion", "insight", "temporary-benefit", "other"]);
+    if (!actor || actor.type !== "pc" || !allowed.has(spendType) || !actor.isOwner) {
+      ui.notifications?.warn?.("The XP spend request is no longer valid.");
+      return false;
     }
-    if (!api) {
+    const xp = Number(actor.system?.basic?.xp ?? actor.system?.advancement?.xp ?? 0);
+    if (!Number.isFinite(xp) || xp < 1) {
+      ui.notifications?.warn?.("The character no longer has enough XP.");
+      return false;
+    }
+    const api = this._getXpApi();
+    if (!api || typeof api.logSpend !== "function") {
       ui.notifications.warn("Cypher XP API is not ready yet. Please try again.");
-      return;
+      return false;
     }
     try {
-      await api.logSpend(actor, {
-        spendType,
-        amount: 1,
-        note: label
-      });
+      await api.logSpend(actor, { spendType, amount: 1, note: label });
       ui.notifications.info(`Spent 1 XP on ${label}.`);
+      return true;
     } catch (err) {
       console.error(`${MODULE_ID} | XP spend failed:`, err);
       ui.notifications.error("Failed to spend XP.");
+      return false;
     }
   }
 
   /** GM receives XP spend approval request from player */
   async _openGMXpSpendRequest(payload) {
-    if (!game.user?.isGM) return;
-
-    // Try to find actor — world actor first, then token actor
-    let actor = game.actors?.get(payload.actorId);
-    if (!actor) {
-      // Search canvas tokens for synthetic actor
-      const token = canvas?.tokens?.placeables?.find(t => t.actor?.id === payload.actorId);
-      actor = token?.actor;
-    }
+    if (!this._claimGmRequest(payload)) return;
+    const allowed = new Set(["reroll", "player-intrusion", "insight", "temporary-benefit", "other"]);
+    const actor = game.actors?.get(payload.actorId);
+    const requester = game.users?.get(payload.userId);
+    if (!actor || actor.type !== "pc" || !requester || !allowed.has(payload.spendType)
+      || !actor.testUserPermission(requester, "OWNER")) return;
+    const labels = {
+      reroll: "Reroll",
+      "player-intrusion": "Player Intrusion",
+      insight: "Insight / Clue",
+      "temporary-benefit": "Temporary Benefit",
+      other: "Other Immediate Spend"
+    };
+    const label = labels[payload.spendType];
+    const userName = requester.name;
+    const actorName = actor.name;
 
     const spendIcons = {
       'reroll': 'fa-dice',
@@ -9551,20 +9892,20 @@ class CypherTaskbar {
       content: `
         <div class="ct-xp-request-body">
           <div class="ct-xp-request-icon"><i class="fas ${iconClass}"></i></div>
-          <div class="ct-xp-request-user">${foundry.utils.escapeHTML(payload.userName)}</div>
+          <div class="ct-xp-request-user">${foundry.utils.escapeHTML(userName)}</div>
           <div class="ct-xp-request-sub">wants to spend XP</div>
           <div class="ct-xp-request-divider"></div>
           <div class="ct-xp-request-detail">
             <span class="ct-xp-request-label">Character</span>
-            <span class="ct-xp-request-value">${foundry.utils.escapeHTML(payload.actorName)}</span>
+            <span class="ct-xp-request-value">${foundry.utils.escapeHTML(actorName)}</span>
           </div>
           <div class="ct-xp-request-detail">
             <span class="ct-xp-request-label">Action</span>
-            <span class="ct-xp-request-value">${foundry.utils.escapeHTML(payload.label)}</span>
+            <span class="ct-xp-request-value">${foundry.utils.escapeHTML(label)}</span>
           </div>
           <div class="ct-xp-request-detail">
             <span class="ct-xp-request-label">Cost</span>
-            <span class="ct-xp-request-value ct-xp-request-cost">${payload.xpCost} XP</span>
+            <span class="ct-xp-request-value ct-xp-request-cost">1 XP</span>
           </div>
           <div class="ct-xp-request-hint">Approve to deduct XP and log the spend.</div>
         </div>`,
@@ -9575,111 +9916,139 @@ class CypherTaskbar {
     });
 
     if (result === "approve") {
-      if (!actor) {
-        ui.notifications?.warn?.(`Cannot approve XP spend: actor "${payload.actorName}" not found on canvas.`);
+      const currentActor = game.actors?.get(payload.actorId);
+      if (!currentActor || !currentActor.testUserPermission(requester, "OWNER")) {
+        ui.notifications?.warn?.("The XP request is stale; no XP was spent.");
         return;
       }
-      await this._doXpSpend(actor, payload.spendType, payload.label);
-      // Notify player
-      const approvalPayload = {
+      const spent = await this._doXpSpend(currentActor, payload.spendType, label);
+      if (!spent) return;
+      game.socket.emit(`module.${MODULE_ID}`, {
         type: "xpSpendApproved",
         requestId: payload.requestId,
         targetUserId: payload.userId,
-        actorName: payload.actorName,
-        label: payload.label,
+        actorId: currentActor.id,
+        actorName: currentActor.name,
+        label,
         spendType: payload.spendType
-      };
-      if (payload.rollData) approvalPayload.rollData = payload.rollData;
-      game.socket.emit(`module.${MODULE_ID}`, approvalPayload);
+      });
     } else {
-      // Notify player of denial
-      const denialPayload = {
+      game.socket.emit(`module.${MODULE_ID}`, {
         type: "xpSpendDenied",
         requestId: payload.requestId,
         targetUserId: payload.userId,
-        actorName: payload.actorName,
-        label: payload.label,
+        actorId: actor.id,
+        actorName: actor.name,
+        label,
         spendType: payload.spendType
-      };
-      game.socket.emit(`module.${MODULE_ID}`, denialPayload);
+      });
     }
   }
 
-  _onXpSpendApproved(payload) {
+  async _onXpSpendApproved(payload) {
     if (game.user.id !== payload.targetUserId) return;
-    console.log(`[CT] XP spend approved:`, payload);
-    ui.notifications?.info?.(`GM approved: Spent 1 XP on ${payload.label} for ${payload.actorName}.`);
-    this._pendingXpRequests?.delete?.(payload.requestId);
-    // Refresh the XP bar to show updated XP count
+    const pending = this._pendingXpRequests?.get(payload.requestId);
+    if (!pending || pending.actorId !== payload.actorId || pending.spendType !== payload.spendType
+      || Date.now() - pending.createdAt > 600000 || this.actor?.id !== pending.actorId) return;
+    if (pending.spendType === "reroll") {
+      // Socket sender identity is not authenticated. Verify the authoritative
+      // actor document changed before granting the free reroll execution.
+      const currentActor = game.actors?.get(pending.actorId);
+      const currentXp = Number(currentActor?.system?.basic?.xp ?? currentActor?.system?.advancement?.xp);
+      if (!currentActor?.isOwner || !Number.isFinite(currentXp) || currentXp !== pending.xpBefore - 1) {
+        ui.notifications?.warn?.("Reroll approval is waiting for the XP deduction to synchronize. No reroll was made.");
+        return;
+      }
+    }
+    this._pendingXpRequests.delete(payload.requestId);
+    ui.notifications?.info?.(`GM approved: Spent 1 XP on ${pending.label} for ${this.actor.name}.`);
     this.render();
-    // If this was a reroll approval, perform the reroll now
-    if (payload.spendType === "reroll" && payload.rollData) {
-      console.log(`[CT] Performing reroll with data:`, payload.rollData);
-      this._performRerollFromData(payload.rollData);
-    } else {
-      console.log(`[CT] Not a reroll or no rollData. spendType=${payload.spendType}, hasRollData=${!!payload.rollData}`);
+    if (pending.spendType === "reroll" && pending.rollData) {
+      await this._performRerollFromData(pending.rollData);
     }
   }
 
   _onXpSpendDenied(payload) {
     if (game.user.id !== payload.targetUserId) return;
-    ui.notifications?.warn?.(`GM denied XP spend: ${payload.label} for ${payload.actorName}.`);
-    this._pendingXpRequests?.delete?.(payload.requestId);
+    const pending = this._pendingXpRequests?.get(payload.requestId);
+    if (!pending || pending.actorId !== payload.actorId || pending.spendType !== payload.spendType) return;
+    this._pendingXpRequests.delete(payload.requestId);
+    ui.notifications?.warn?.(`GM denied XP spend: ${pending.label}.`);
   }
 
-  /** Perform reroll from saved roll data (GM approval path — no additional XP spend) */
+  /** Perform a reroll without repeating the original pool, ammunition, or action cost. */
   async _performRerollFromData(rollData) {
-    console.log(`[CT] _performRerollFromData called with:`, rollData);
-    const actor = this.actor;
-    if (!actor) return ui.notifications.warn("Select a character first.");
-    if (!rollData) return ui.notifications.warn("No roll data available for reroll.");
-
-    // If this was a skill/attack roll, reroll with the same skill item
-    if (rollData.skillItemId) {
-      const skillItem = actor.items.get(rollData.skillItemId);
-      if (skillItem) {
-        console.log(`[CT] Rerolling skill: ${skillItem.name}`);
-        await this._performNativeSkillRoll(actor, skillItem, {
-          pool: rollData.pool,
-          baseDifficulty: rollData.baseDifficulty,
-          assets: rollData.assets,
-          effort: rollData.effort,
-          effortDamage: rollData.effortDamage,
-          effortOther: rollData.effortOther,
-          additionalCost: rollData.additionalCost,
-          freeEffort: rollData.freeEffort,
-          bonus: rollData.bonus,
-          easedBy: rollData.easedBy,
-          hinderedBy: rollData.hinderedBy
-        });
-        ui.notifications.info(`Rerolled ${skillItem.name} (XP already spent).`);
-        return;
-      } else {
-        ui.notifications.warn(`Skill "${rollData.skillName ?? 'Unknown'}" no longer exists. Falling back to attribute roll.`);
-      }
+    const actor = game.actors?.get(this.actor?.id);
+    if (!actor?.isOwner || actor.type !== "pc") return ui.notifications.warn("Select an owned character first.");
+    const timestamp = Number(rollData?.timestamp);
+    if (!rollData || typeof rollData !== "object" || !Number.isFinite(timestamp)
+      || timestamp < 0 || Date.now() - timestamp > 600000) {
+      return ui.notifications.warn("No recent roll is available for reroll.");
     }
 
-    const { pool, baseDifficulty, assets, effort, easedBy, hinderedBy } = rollData;
-    console.log(`[CT] Rerolling ${pool} with difficulty ${baseDifficulty}`);
-    await this._performAttributeRoll(actor, pool, {
-      baseDifficulty,
-      assets,
-      effort,
-      easedBy,
-      hinderedBy
-    });
-    ui.notifications.info(`Rerolled ${pool} (XP already spent).`);
+    if (["skill", "attack"].includes(rollData.rollType)) {
+      const item = actor.items.get(rollData.skillItemId);
+      if (!item) return ui.notifications.warn(`"${rollData.skillName ?? "The original item"}" no longer exists; reroll cancelled.`);
+      const options = {
+        reroll: true,
+        pool: rollData.pool,
+        baseDifficulty: rollData.baseDifficulty,
+        assets: rollData.assets,
+        effort: rollData.effort,
+        effortDamage: rollData.effortDamage,
+        effortOther: rollData.effortOther,
+        additionalCost: rollData.additionalCost,
+        freeEffort: rollData.freeEffort,
+        bonus: rollData.bonus,
+        bonusDamage: rollData.bonusDamage,
+        baseDamage: rollData.baseDamage,
+        damagePerLOE: rollData.damagePerLOE,
+        easedBy: rollData.easedBy,
+        hinderedBy: rollData.hinderedBy
+      };
+      const result = rollData.rollType === "attack"
+        ? await this._performNativeAttackRoll(actor, item, options)
+        : await this._performNativeSkillRoll(actor, item, options);
+      if (result !== null) ui.notifications.info(`Rerolled ${item.name} (XP already spent).`);
+      return result;
+    }
+
+    if (rollData.rollType === "attribute") {
+      const result = await this._performAttributeRoll(actor, rollData.statName ?? rollData.pool, {
+        reroll: true,
+        baseDifficulty: rollData.baseDifficulty,
+        assets: rollData.assets,
+        effort: rollData.effort,
+        easedBy: rollData.easedBy,
+        hinderedBy: rollData.hinderedBy
+      });
+      if (result !== null) ui.notifications.info(`Rerolled ${rollData.pool} (XP already spent).`);
+      return result;
+    }
+    ui.notifications.warn("The saved roll type is not supported; reroll cancelled.");
+    return null;
   }
 
   async _adjustPool(poolKey, delta) {
-    const actor = this.actor;
-    if (!actor || actor.type !== "pc") return;
-    const pool = foundry.utils.getProperty(actor, `system.pools.${poolKey}`) ?? {};
-    const current = Number(pool.value ?? pool.current ?? 0);
-    const max = Number(pool.max ?? current);
-    const next = Math.max(0, Math.min(max, current + delta));
-    if (next === current) return;
-    await actor.update({ [`system.pools.${poolKey}.value`]: next });
+    const actor = game.actors.get(this.actor?.id);
+    const amount = Number(delta);
+    const allowedPools = new Set(["might", "speed", "intellect", "additional"]);
+    if (!actor?.isOwner || actor.type !== "pc" || !allowedPools.has(poolKey)
+      || !Number.isSafeInteger(amount) || Math.abs(amount) > 100) return false;
+    const pool = foundry.utils.getProperty(actor, `system.pools.${poolKey}`);
+    const current = Number(pool?.value);
+    const max = Number(pool?.max);
+    if (!Number.isSafeInteger(current) || !Number.isSafeInteger(max) || current < 0 || max < 0) return false;
+    const next = Math.max(0, Math.min(max, current + amount));
+    if (next === current) return true;
+    try {
+      await actor.update({ [`system.pools.${poolKey}.value`]: next });
+      return true;
+    } catch (err) {
+      console.error(`${MODULE_ID} | Pool adjustment failed for ${actor.id}:${poolKey}`, err);
+      ui.notifications.error("The pool could not be updated. Refresh the character and try again.");
+      return false;
+    }
   }
 
   _rgbaToHex(rgba, fallback = "#000000") {
@@ -9824,9 +10193,11 @@ class CypherTaskbar {
     this._injectHandIcon(app, element);
     const header = element.querySelector(".window-header") ?? element.querySelector("header");
     if (!header || header.querySelector(".ct-minimize-btn")) return;
-    const btn = document.createElement("a");
+    const btn = document.createElement("button");
+    btn.type = "button";
     btn.className = "header-button ct-minimize-btn";
     btn.title = "Minimize";
+    btn.setAttribute("aria-label", "Minimize window");
     btn.innerHTML = '<i class="fas fa-minus"></i>';
     btn.onclick = (e) => {
       e.preventDefault();
@@ -9888,9 +10259,11 @@ class CypherTaskbar {
     this._injectHandIcon(null, element);
     const header = element.querySelector('.window-header') ?? element.querySelector('header');
     if (!header || header.querySelector('.ct-minimize-btn')) return;
-    const btn = document.createElement('a');
+    const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'header-button ct-minimize-btn';
     btn.title = 'Minimize';
+    btn.setAttribute('aria-label', 'Minimize window');
     btn.innerHTML = '<i class="fas fa-minus"></i>';
     btn.onclick = (e) => {
       e.preventDefault();
@@ -10083,29 +10456,23 @@ class CypherTaskbar {
       }
     }
 
+    if (stored.length >= 500) {
+      ui.notifications.warn("This container is full. Remove an entry before adding another.");
+      return;
+    }
     stored.push({ uuid: data.uuid || null, name, img, icon: itemIcon, color });
-    this._ss(`mini${key}`, JSON.stringify(stored));
+    try {
+      await this._ss(`mini${key}`, JSON.stringify(stored));
+    } catch (error) {
+      console.error(`${MODULE_ID} | Failed to add mini-menu entry`, error);
+      ui.notifications.error("The entry could not be saved.");
+      return;
+    }
     ui.notifications?.info?.(`"${name}" added to ${title}.`);
 
-    // If popup is open for this container, refresh it
-    const popup = document.querySelector("#ct-mini-popup");
-    if (popup) {
-      const itemsEl = popup.querySelector("#ct-mini-items");
-      if (itemsEl) {
-        const esc = foundry.utils.escapeHTML;
-        const showT = this._gs("miniMenuShowTitle") !== false;
-        const titleAttr = showT ? '' : ' style="display:none;"';
-        itemsEl.innerHTML = stored.map((it, idx) => {
-          const hasImg = it.img && it.img !== "icons/svg/book.svg";
-          const iconHtml = hasImg
-            ? `<img src="${it.img}" alt="" draggable="false" onerror="this.src='icons/svg/book.svg'">`
-            : it.icon
-              ? `<i class="${it.icon} ct-book-fa-icon" style="color:${it.color || color}"></i>`
-              : `<img src="icons/svg/book.svg" alt="" draggable="false">`;
-          return `<div class="ct-mini-item" data-mini-idx="${idx}">${iconHtml}<span class="ct-book-entry-name"${titleAttr}>${esc(it.name || 'Unknown')}</span><span class="ct-item-hand" data-mini-drag="${idx}" data-doc-info="${JSON.stringify({ uuid: it.uuid || null, name: it.name || 'Unknown', img: it.img || '' }).replace(/"/g, '&quot;')}" title="Drag: ${esc(it.name || 'Unknown')}"><i class="fas fa-hand-paper"></i></span><button class="ct-mini-remove" data-mini-rm="${idx}" title="Remove"><i class="fas fa-times"></i></button></div>`;
-        }).join('');
-      }
-    }
+    // Ask the open menu to re-read settings and rebuild its handlers. Replacing
+    // only its HTML here would leave the new row without click/drag behavior.
+    document.querySelector("#ct-mini-popup")?.dispatchEvent(new CustomEvent("ct-mini-refresh"));
   }
 
   _minimizeWindow(app) {
@@ -10281,13 +10648,17 @@ class CypherTaskbar {
 
   /** Get GM tasks from actor flags */
   _getGMTasks() {
-    return this.actor?.getFlag(MODULE_ID, "gmTasks") ?? [];
+    const tasks = this.actor?.getFlag(MODULE_ID, "gmTasks");
+    return Array.isArray(tasks) ? tasks.filter(task => task && typeof task === "object" && !Array.isArray(task)) : [];
   }
 
   /** Save GM tasks to actor flags */
   async _setGMTasks(tasks) {
-    if (!this.actor) return;
-    await this.actor.setFlag(MODULE_ID, "gmTasks", tasks);
+    const actor = this.actor ? game.actors?.get(this.actor.id) : null;
+    if (!actor?.isOwner || !Array.isArray(tasks) || tasks.length > 500) {
+      throw new Error("You do not have permission to update tasks for this character, or the task list is invalid.");
+    }
+    await actor.setFlag(MODULE_ID, "gmTasks", tasks);
   }
 
   /** Update portrait menu button flash state based on unacknowledged GM task notes/resolutions */
@@ -10403,7 +10774,7 @@ class CypherTaskbar {
         ? `<span class="ct-gm-task-resolved-label"><i class="fas fa-check-circle"></i> RESOLVED</span>`
         : "";
       return `
-        <div class="${rowClasses}" data-task-idx="${idx}" data-task-id="${task.id}">
+        <div class="${rowClasses}" data-task-idx="${idx}" data-task-id="${esc(String(task.id ?? ""))}">
           <div class="ct-gm-task-priority" style="--ct-priority-color:${p.color}" title="${p.label}">
             <i class="fas ${p.icon}"></i>
           </div>
@@ -10484,12 +10855,35 @@ class CypherTaskbar {
     container.querySelectorAll("[data-delete-idx]").forEach(btn => {
       btn.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const idx = parseInt(btn.dataset.deleteIdx);
+        if (btn.disabled) return;
+        const idx = Number.parseInt(btn.dataset.deleteIdx, 10);
         const tasks = this._getGMTasks();
-        tasks.splice(idx, 1);
-        await this._setGMTasks(tasks);
-        this._renderGMTasksList(container);
-        this._updatePortraitTaskFlash();
+        const task = tasks[idx];
+        if (!task) return;
+        btn.disabled = true;
+        try {
+          const confirmed = await Dialog.confirm({
+            title: "Delete GM Task",
+            content: `<p>Delete "<strong>${esc(task.title || "Untitled")}</strong>"?</p>`,
+            options: { classes: ["ct-dialog"] }
+          });
+          if (!confirmed) return;
+          const latest = this._getGMTasks();
+          const currentIdx = task.id ? latest.findIndex(entry => entry.id === task.id) : idx;
+          if (currentIdx < 0 || !latest[currentIdx]) {
+            ui.notifications.warn("This task has already been removed or changed. Refresh the task list.");
+            return;
+          }
+          latest.splice(currentIdx, 1);
+          await this._setGMTasks(latest);
+          this._renderGMTasksList(container);
+          this._updatePortraitTaskFlash();
+        } catch (error) {
+          console.error(`${MODULE_ID} | Failed to delete GM task`, error);
+          ui.notifications.error("The task could not be deleted. Refresh the list and try again.");
+        } finally {
+          if (btn.isConnected) btn.disabled = false;
+        }
       });
     });
   }
@@ -10645,39 +11039,55 @@ class CypherTaskbar {
 
     form.querySelector("#ct-gm-task-save")?.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const title = form.querySelector("#ct-gm-task-title").value.trim();
+      const saveButton = e.currentTarget;
+      if (saveButton.disabled) return;
+      const title = form.querySelector("#ct-gm-task-title").value.trim().slice(0, 80);
       const type = form.querySelector("#ct-gm-task-type").value;
-      const description = form.querySelector("#ct-gm-task-desc").value.trim();
+      const description = form.querySelector("#ct-gm-task-desc").value.trim().slice(0, 500);
 
       if (!title) {
         ui.notifications.warn("Please enter a task title.");
         return;
       }
 
-      const tasks = this._getGMTasks();
-      const taskData = {
-        id: task?.id || foundry.utils.randomID(),
-        title,
-        priority: selectedPriority,
-        type,
-        description,
-        createdAt: task?.createdAt || Date.now()
-      };
+      saveButton.disabled = true;
+      saveButton.setAttribute("aria-busy", "true");
+      try {
+        const tasks = this._getGMTasks();
+        const currentIdx = editIdx === null ? -1
+          : (task?.id ? tasks.findIndex(entry => entry.id === task.id) : editIdx);
+        if (editIdx !== null && (currentIdx < 0 || !tasks[currentIdx])) {
+          throw new Error("The task changed or was removed while the editor was open.");
+        }
+        const taskData = {
+          id: task?.id || foundry.utils.randomID(),
+          title,
+          priority: priorities.some(entry => entry.key === selectedPriority) ? selectedPriority : "medium",
+          type: types.includes(type) ? type : "other",
+          description,
+          createdAt: task?.createdAt || Date.now()
+        };
 
-      if (editIdx !== null) {
-        tasks[editIdx] = taskData;
-      } else {
-        tasks.push(taskData);
+        if (currentIdx >= 0) tasks[currentIdx] = taskData;
+        else tasks.push(taskData);
+
+        await this._setGMTasks(tasks);
+        _closeForm();
+
+        const list = document.querySelector("#ct-gm-tasks-list");
+        if (list) this._renderGMTasksList(list);
+        this._updatePortraitTaskFlash();
+
+        ui.notifications.info(`Task "${title}" ${editIdx !== null ? 'updated' : 'created'}.`);
+      } catch (error) {
+        console.error(`${MODULE_ID} | Failed to save GM task`, error);
+        ui.notifications.error("The task could not be saved. Your changes are still in the editor.");
+      } finally {
+        if (saveButton.isConnected) {
+          saveButton.disabled = false;
+          saveButton.removeAttribute("aria-busy");
+        }
       }
-
-      await this._setGMTasks(tasks);
-      _closeForm();
-
-      const list = document.querySelector("#ct-gm-tasks-list");
-      if (list) this._renderGMTasksList(list);
-      this._updatePortraitTaskFlash();
-
-      ui.notifications.info(`Task "${title}" ${editIdx !== null ? 'updated' : 'created'}.`);
     });
   }
 
@@ -10742,14 +11152,17 @@ class CypherTaskbar {
 
   /** Get My Tasks from actor flags */
   _getMyTasks() {
-    const v = this.actor?.getFlag?.(MODULE_ID, "myTasks");
-    return Array.isArray(v) ? v : [];
+    const tasks = this.actor?.getFlag?.(MODULE_ID, "myTasks");
+    return Array.isArray(tasks) ? tasks.filter(task => task && typeof task === "object" && !Array.isArray(task)) : [];
   }
 
   /** Save My Tasks to actor flags */
   async _setMyTasks(tasks) {
-    if (!this.actor) return;
-    await this.actor.setFlag(MODULE_ID, "myTasks", tasks);
+    const actor = this.actor ? game.actors?.get(this.actor.id) : null;
+    if (!actor?.isOwner || !Array.isArray(tasks) || tasks.length > 500) {
+      throw new Error("You do not have permission to update tasks for this character, or the task list is invalid.");
+    }
+    await actor.setFlag(MODULE_ID, "myTasks", tasks);
   }
 
   /** Toggle the My Tasks panel open/closed */
@@ -10877,7 +11290,7 @@ class CypherTaskbar {
       const isGMTask = task.createdBy === "gm";
       // Strip HTML from description for preview
       const tmp = document.createElement("div");
-      tmp.innerHTML = task.description || "";
+      tmp.innerHTML = sanitizeHTML(task.description || "");
       const plainDesc = (tmp.textContent || "").trim();
       const rowClasses = [
         "ct-my-task-item",
@@ -10905,7 +11318,7 @@ class CypherTaskbar {
       }
 
       return `
-        <div class="${rowClasses}" data-task-idx="${task._idx}" data-task-id="${task.id}">
+        <div class="${rowClasses}" data-task-idx="${task._idx}" data-task-id="${esc(String(task.id ?? ""))}">
           <div class="ct-gm-task-priority" style="--ct-priority-color:${p.color}" title="${p.label}">
             <i class="fas ${p.icon}"></i>
           </div>
@@ -10990,19 +11403,36 @@ class CypherTaskbar {
     container.querySelectorAll("[data-delete-idx]").forEach(btn => {
       btn.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const idx = parseInt(btn.dataset.deleteIdx);
+        if (btn.disabled) return;
+        const idx = Number.parseInt(btn.dataset.deleteIdx, 10);
         const tasks = this._getMyTasks();
-        const taskName = tasks[idx]?.name || "Task";
-        const confirmed = await Dialog.confirm({
-          title: "Delete Task",
-          content: `<p>Delete "<strong>${esc(taskName)}</strong>"?</p>`,
-          options: { classes: ["ct-dialog"] }
-        });
-        if (!confirmed) return;
-        tasks.splice(idx, 1);
-        await this._setMyTasks(tasks);
-        this._renderMyTasksList(container, tab);
-        ui.notifications.info(`"${taskName}" deleted.`);
+        const task = tasks[idx];
+        if (!task) return;
+        const taskName = task.name || "Task";
+        btn.disabled = true;
+        try {
+          const confirmed = await Dialog.confirm({
+            title: "Delete Task",
+            content: `<p>Delete "<strong>${esc(taskName)}</strong>"?</p>`,
+            options: { classes: ["ct-dialog"] }
+          });
+          if (!confirmed) return;
+          const latest = this._getMyTasks();
+          const currentIdx = task.id ? latest.findIndex(entry => entry.id === task.id) : idx;
+          if (currentIdx < 0 || !latest[currentIdx]) {
+            ui.notifications.warn("This task has already been removed or changed. Refresh the task list.");
+            return;
+          }
+          latest.splice(currentIdx, 1);
+          await this._setMyTasks(latest);
+          this._renderMyTasksList(container, tab);
+          ui.notifications.info(`"${taskName}" deleted.`);
+        } catch (error) {
+          console.error(`${MODULE_ID} | Failed to delete task`, error);
+          ui.notifications.error("The task could not be deleted. Refresh the list and try again.");
+        } finally {
+          if (btn.isConnected) btn.disabled = false;
+        }
       });
     });
   }
@@ -11081,7 +11511,7 @@ class CypherTaskbar {
             <button type="button" data-cmd="h3" title="Heading"><i class="fas fa-heading"></i></button>
             <button type="button" data-cmd="removeFormat" title="Clear formatting"><i class="fas fa-eraser"></i></button>
           </div>
-          <div class="ct-my-task-wysiwyg-editor" id="ct-my-task-desc" contenteditable="true" data-placeholder="Describe the task...">${task?.description || ""}</div>
+          <div class="ct-my-task-wysiwyg-editor" id="ct-my-task-desc" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Task details" data-placeholder="Describe the task...">${sanitizeHTML(task?.description || "")}</div>
         </label>
       </div>
       <div class="ct-popup-actions-row">
@@ -11155,41 +11585,60 @@ class CypherTaskbar {
 
     form.querySelector("#ct-my-task-save")?.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const name = form.querySelector("#ct-my-task-name").value.trim();
-      const description = editor.innerHTML.trim();
+      const saveButton = e.currentTarget;
+      if (saveButton.disabled) return;
+      const name = form.querySelector("#ct-my-task-name").value.trim().slice(0, 100);
+      const rawDescription = editor.innerHTML.trim();
+      if (rawDescription.length > 50000) {
+        ui.notifications.warn("Task details are too long. Keep them under 50,000 characters.");
+        return;
+      }
+      const description = sanitizeHTML(rawDescription);
 
       if (!name) {
         ui.notifications.warn("Please enter a task name.");
         return;
       }
 
-      const tasks = this._getMyTasks();
-      const taskData = {
-        id: task?.id || foundry.utils.randomID(),
-        name,
-        priority: selectedPriority,
-        description,
-        solved: task?.solved ?? false,
-        approvalPending: task?.approvalPending ?? false,
-        createdAt: task?.createdAt || Date.now(),
-        createdBy: task?.createdBy || (game.user.isGM ? "gm" : "player"),
-        delegatedBy: task?.delegatedBy,
-        delegatedTo: task?.delegatedTo
-      };
+      saveButton.disabled = true;
+      saveButton.setAttribute("aria-busy", "true");
+      try {
+        const tasks = this._getMyTasks();
+        const currentIdx = editIdx === null ? -1
+          : (task?.id ? tasks.findIndex(entry => entry.id === task.id) : editIdx);
+        if (editIdx !== null && (currentIdx < 0 || !tasks[currentIdx])) {
+          throw new Error("The task changed or was removed while the editor was open.");
+        }
+        const taskData = {
+          id: task?.id || foundry.utils.randomID(),
+          name,
+          priority: Object.hasOwn(priorities, selectedPriority) ? selectedPriority : "soon",
+          description,
+          solved: task?.solved ?? false,
+          approvalPending: task?.approvalPending ?? false,
+          createdAt: task?.createdAt || Date.now(),
+          createdBy: task?.createdBy || (game.user.isGM ? "gm" : "player"),
+          delegatedBy: task?.delegatedBy,
+          delegatedTo: task?.delegatedTo
+        };
 
-      if (editIdx !== null && tasks[editIdx]) {
-        tasks[editIdx] = taskData;
-      } else {
-        tasks.push(taskData);
+        if (currentIdx >= 0) tasks[currentIdx] = taskData;
+        else tasks.push(taskData);
+
+        await this._setMyTasks(tasks);
+        _closeForm();
+        const list = document.querySelector("#ct-my-tasks-list");
+        if (list) this._renderMyTasksList(list);
+        ui.notifications.info(`Task "${name}" ${editIdx !== null ? "updated" : "created"}.`);
+      } catch (error) {
+        console.error(`${MODULE_ID} | Failed to save task`, error);
+        ui.notifications.error("The task could not be saved. Your changes are still in the editor.");
+      } finally {
+        if (saveButton.isConnected) {
+          saveButton.disabled = false;
+          saveButton.removeAttribute("aria-busy");
+        }
       }
-
-      await this._setMyTasks(tasks);
-      _closeForm();
-
-      const list = document.querySelector("#ct-my-tasks-list");
-      if (list) this._renderMyTasksList(list);
-
-      ui.notifications.info(`Task "${name}" ${editIdx !== null ? 'updated' : 'created'}.`);
     });
   }
 
@@ -11287,7 +11736,7 @@ class CypherTaskbar {
           ${isGMTask ? '<span class="ct-my-task-detail-badge ct-my-task-detail-gm-badge"><i class="fas fa-user-shield"></i> GM</span>' : ''}
           <span class="ct-my-task-detail-date">${dateStr}</span>
         </div>
-        <div class="ct-my-task-detail-desc">${task.description || '<em style="opacity:0.4">No description</em>'}</div>
+        <div class="ct-my-task-detail-desc">${sanitizeHTML(task.description || "") || '<em style="opacity:0.4">No description</em>'}</div>
       </div>`;
 
     wrapper.appendChild(panel);
@@ -11378,23 +11827,41 @@ class CypherTaskbar {
 
     panel.querySelector(".ct-my-task-detail-delete")?.addEventListener("click", async (e) => {
       e.stopPropagation();
+      const button = e.currentTarget;
+      if (button.disabled) return;
       const tasks = this._getMyTasks();
-      const taskName = tasks[idx]?.name || "Task";
-      const confirmed = await Dialog.confirm({
-        title: "Delete Task",
-        content: `<p>Delete "<strong>${esc(taskName)}</strong>"?</p>`,
-        options: { classes: ["ct-dialog"] }
-      });
-      if (!confirmed) return;
-      tasks.splice(idx, 1);
-      await this._setMyTasks(tasks);
-      _close();
-      const list = document.querySelector("#ct-my-tasks-list");
-      if (list) {
-        const activeTab = document.querySelector(".ct-my-tasks-tab.is-active")?.dataset.tab || "active";
-        this._renderMyTasksList(list, activeTab);
+      const original = tasks[idx];
+      if (!original) return;
+      const taskName = original.name || "Task";
+      button.disabled = true;
+      try {
+        const confirmed = await Dialog.confirm({
+          title: "Delete Task",
+          content: `<p>Delete "<strong>${esc(taskName)}</strong>"?</p>`,
+          options: { classes: ["ct-dialog"] }
+        });
+        if (!confirmed) return;
+        const latest = this._getMyTasks();
+        const currentIdx = original.id ? latest.findIndex(entry => entry.id === original.id) : idx;
+        if (currentIdx < 0 || !latest[currentIdx]) {
+          ui.notifications.warn("This task has already been removed or changed. Refresh the task list.");
+          return;
+        }
+        latest.splice(currentIdx, 1);
+        await this._setMyTasks(latest);
+        _close();
+        const list = document.querySelector("#ct-my-tasks-list");
+        if (list) {
+          const activeTab = document.querySelector(".ct-my-tasks-tab.is-active")?.dataset.tab || "active";
+          this._renderMyTasksList(list, activeTab);
+        }
+        ui.notifications.info(`"${taskName}" deleted.`);
+      } catch (error) {
+        console.error(`${MODULE_ID} | Failed to delete task detail`, error);
+        ui.notifications.error("The task could not be deleted. Refresh the list and try again.");
+      } finally {
+        if (button.isConnected) button.disabled = false;
       }
-      ui.notifications.info(`"${taskName}" deleted.`);
     });
   }
 
@@ -11483,7 +11950,9 @@ applyCombatBar(CypherTaskbar);
    the two portraits don't compete. Purely DOM-based: a body class is
    toggled whenever `#cypher-pc-combat-bar` enters/leaves the DOM, so
    there is no dependency on that module being installed.            */
+let _ctCombatFadeObserver = null;
 function _initCombatBarFadeSync() {
+  _ctCombatFadeObserver?.disconnect();
   const SELECTOR = "#cypher-pc-combat-bar";
   const CLASS = "ct-combat-bar-active";
   let active = null;
@@ -11494,7 +11963,8 @@ function _initCombatBarFadeSync() {
     document.body.classList.toggle(CLASS, now);
   };
   apply();
-  new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+  _ctCombatFadeObserver = new MutationObserver(apply);
+  _ctCombatFadeObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 // ── Foundry V14+/15 timing guard ──
@@ -11513,37 +11983,11 @@ function _whenHooks(cb, tries = 400) {
 _whenHooks(() => Hooks.once("init", () => {
   registerSettings();
   
-  // Only register menu if FormApplication exists (Foundry VTT v13 and earlier)
-  // In v14+, FormApplication was removed; we'll handle backgrounds via the taskbar UI directly
-  if (typeof FormApplication !== "undefined") {
-    game.settings.registerMenu(MODULE_ID, "menuBackgroundsMenu", {
-      name: "Menu BACKGROUNDS",
-      label: "Menu BACKGROUNDS",
-      hint: "Customize background images for all taskbar menus.",
-      icon: "fas fa-image",
-      type: class MenuBackgroundsDialog extends FormApplication {
-        static get defaultOptions() {
-          return foundry.utils.mergeObject(super.defaultOptions, {
-            title: "Menu BACKGROUNDS",
-            template: undefined,
-            width: 520,
-            classes: ["dialog", "cypher-taskbar-dialog"]
-          });
-        }
-        async _renderInner() { return $("<div></div>"); }
-        render() {
-          CypherTaskbar.instance?._openMenuBackgroundsDialog();
-          return this;
-        }
-      },
-      restricted: true
-    });
-  } else {
-    if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | FormApplication not available (Foundry v14+) — settings menu skipped, backgrounds accessible from taskbar UI`);
-  }
+  // Backgrounds are configured from the taskbar UI. The legacy
+  // FormApplication menu was removed for the Foundry v14+ release.
 }));
 
-_whenHooks(() => Hooks.once("ready", () => {
+_whenHooks(() => Hooks.once("ready", async () => {
   try {
     // Register the class so companion files (gallery-tabs.js) can reach the
     // live instance without a circular import
@@ -11553,13 +11997,16 @@ _whenHooks(() => Hooks.once("ready", () => {
       console.warn(`${MODULE_ID} | Requires the Cypher System.`);
       return;
     }
+    // END TURN must still reach a GM whose visual taskbar is disabled.
+    registerCombatBarSocket(CypherTaskbar);
     if (game.user?.isGM && game.settings.get(MODULE_ID, "loadOnlyForPlayers")) {
       if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Load Only For Players is enabled — GM taskbar disabled.`);
       return;
     }
 
-    // Migrate old client-scoped actorPreferences to actor flags (one-time)
-    migrateActorPreferences();
+    // Complete migration before rendering controls which read actor flags.
+    await migrateActorPreferences();
+    document.body.classList.add("ct-taskbar-active");
 
     // Fade the taskbar portrait while the Cypher PC Combat bar is on screen.
     // DOM-watched and decoupled — safe when the other module isn't installed.
@@ -11595,11 +12042,13 @@ _whenHooks(() => Hooks.once("ready", () => {
   game.socket.on(`module.${MODULE_ID}`, async (payload) => {
     if (!payload) return;
     if (payload.type === "gmCombatRequest" && game.user?.isGM) {
-      CypherTaskbar.instance?._openGMCombatRequest(payload);
+      const handler = CypherTaskbar.instance;
+      if (handler?._claimGmRequest(payload)) await handler._openGMCombatRequest(payload);
       return;
     }
     if (payload.type === "gmLeaveCombatRequest" && game.user?.isGM) {
-      CypherTaskbar.instance?._openGMLeaveCombatRequest(payload);
+      const handler = CypherTaskbar.instance;
+      if (handler?._claimGmRequest(payload)) await handler._openGMLeaveCombatRequest(payload);
       return;
     }
     if (payload.type === "gmRestRequest" && game.user?.isGM) {
@@ -11626,9 +12075,12 @@ _whenHooks(() => Hooks.once("ready", () => {
     }
     /* ── GM decided a player's attack outcome — notify the requesting player ── */
     if (payload.type === "gmAttackOutcomeResolved") {
-      if (payload.userId && payload.userId !== game.user?.id) return;
+      if (payload.userId !== game.user?.id) return;
+      const pending = CypherTaskbar.instance?._pendingAttackOutcomes?.get(payload.requestId);
+      if (!pending || Date.now() - pending.createdAt > 600000) return;
+      CypherTaskbar.instance._pendingAttackOutcomes.delete(payload.requestId);
       if (payload.approved) {
-        ui.notifications?.info?.(`GM confirmed: ${payload.damage} damage to ${payload.targetName}.`);
+        ui.notifications?.info?.(`GM confirmed: ${Number(payload.damage) || 0} damage to ${payload.targetName}.`);
       } else {
         ui.notifications?.warn?.(`GM cancelled the damage on ${payload.targetName}.`);
       }
@@ -11654,14 +12106,18 @@ _whenHooks(() => Hooks.once("ready", () => {
     /* ── GM decided a player's skill roll cost — spend the utility pip on the
        requesting player's combat bar (no-op when the bar is gone). ── */
     if (payload.type === "gmSkillUtilityResolved") {
-      if (payload.userId && payload.userId !== game.user?.id) return;
-      if (payload.spend) {
-        const spent = CypherTaskbar.instance?._cbExpendResource?.("utility") ?? false;
+      if (payload.userId !== game.user?.id) return;
+      const instance = CypherTaskbar.instance;
+      const pending = instance?._pendingUtilityRequests?.get(payload.requestId);
+      if (!pending || pending.actorId !== instance.actor?.id || Date.now() - pending.createdAt > 600000) return;
+      instance._pendingUtilityRequests.delete(payload.requestId);
+      if (payload.spend === true) {
+        const spent = instance._cbExpendResource?.("utility") ?? false;
         ui.notifications?.info?.(spent
-          ? `GM spent 1 utility pip on ${payload.skillName}.`
-          : `GM ruled ${payload.skillName} costs a utility pip, but no pip is available.`);
-      } else {
-        ui.notifications?.info?.(`GM ruled ${payload.skillName} free — no utility pip spent.`);
+          ? `GM spent 1 utility pip on ${pending.skillName}.`
+          : `GM ruled ${pending.skillName} costs a utility pip, but no pip is available.`);
+      } else if (payload.spend === false) {
+        ui.notifications?.info?.(`GM ruled ${pending.skillName} free — no utility pip spent.`);
       }
       return;
     }
@@ -11686,35 +12142,23 @@ _whenHooks(() => Hooks.once("ready", () => {
        pips on the requesting player's combat bar (no-op when the bar is
        gone). An empty pips list means NONE — no cost. ── */
     if (payload.type === "gmOtherPipsResolved") {
-      if (payload.userId && payload.userId !== game.user?.id) return;
-      const kinds = Array.isArray(payload.pips) ? payload.pips : [];
+      if (payload.userId !== game.user?.id) return;
+      const instance = CypherTaskbar.instance;
+      const pending = instance?._pendingOtherPipRequests?.get(payload.requestId);
+      if (!pending || pending.actorId !== instance.actor?.id || Date.now() - pending.createdAt > 600000) return;
+      instance._pendingOtherPipRequests.delete(payload.requestId);
+      const kinds = [...new Set(Array.isArray(payload.pips) ? payload.pips : [])]
+        .filter(k => ["move", "action", "utility"].includes(k));
       if (!kinds.length) {
         ui.notifications?.info?.("GM ruled the other action free — no pips spent.");
         return;
       }
       const results = [];
       for (const k of kinds) {
-        const spent = CypherTaskbar.instance?._cbExpendResource?.(k) ?? false;
+        const spent = instance._cbExpendResource?.(k) ?? false;
         results.push(spent ? k.toUpperCase() : `${k.toUpperCase()} (none left)`);
       }
       ui.notifications?.info?.(`GM spent: ${results.join(", ")}.`);
-      return;
-    }
-    /* ── Combat Bar: player asks the GM to end the tracked PC's turn ── */
-    if (payload.type === "gmEndTurnRequest" && game.user?.isGM) {
-      try {
-        const combat = game.combat;
-        const requester = game.users.get(payload.userId);
-        if (combat && combat.id === payload.combatId && combat.started) {
-          const combatant = combat.combatant ?? null;
-          const ownedByRequester = combatant?.actor
-            ? (combatant.actor.testUserPermission?.(requester, "OWNER") ?? false)
-            : false;
-          if (ownedByRequester) await combat.nextTurn();
-        }
-      } catch (err) {
-        console.warn(`${MODULE_ID} | gmEndTurnRequest failed:`, err);
-      }
       return;
     }
     if (payload.type === "restApproved") {
@@ -11726,8 +12170,7 @@ _whenHooks(() => Hooks.once("ready", () => {
       return;
     }
     if (payload.type === "xpSpendApproved") {
-      console.log(`[CT] Received xpSpendApproved:`, payload);
-      CypherTaskbar.instance?._onXpSpendApproved(payload);
+      await CypherTaskbar.instance?._onXpSpendApproved(payload);
       return;
     }
     if (payload.type === "xpSpendDenied") {
@@ -11845,14 +12288,10 @@ _whenHooks(() => Hooks.once("ready", () => {
   // Sole taskbar listener — initGallerySocket() no longer registers one.
   // When the cypher-gallery-tabs module is active it owns share handling
   // end to end, so we stay out of the way to avoid duplicate lightboxes.
-  game.socket.on("module.cypher-gallery-tabs", async (data) => {
+  game.socket.on("module.cypher-gallery-tabs", async (rawData) => {
     if (game.modules?.get("cypher-gallery-tabs")?.active) return;
-    if (!data || data.type !== "showImage") return;
-    if (typeof data.src !== "string" || typeof data.title !== "string") return;
-    if (!Array.isArray(data.userIds)) return;
-    if (typeof data.senderId !== "string") return;
-    if (typeof data.sendToGM !== "boolean") return;
-    if (!["all", "selected", "gm"].includes(data.shareMode)) return;
+    const data = normalizeGallerySharePayload(rawData);
+    if (!data) return;
 
     const sender = game.users?.get(data.senderId);
     if (!sender?.active) return;
@@ -11869,7 +12308,13 @@ _whenHooks(() => Hooks.once("ready", () => {
           targets = names.length ? names.join(", ") : "selected players";
         }
         const esc = foundry.utils.escapeHTML;
-        await ChatMessage.create({
+        const confirmed = await foundry.applications.api.DialogV2.confirm({
+          window: { title: "Record Gallery Share" },
+          content: `<p>Create a GM chat record for ${esc(sender.name)} sharing <strong>${esc(data.title)}</strong>?</p>`,
+          rejectClose: false,
+          modal: true
+        });
+        if (confirmed) await ChatMessage.create({
           user: game.user.id,
           speaker: { alias: "Cypher Gallery Tabs" },
           whisper: gmIds,
@@ -11913,22 +12358,28 @@ _whenHooks(() => Hooks.once("ready", () => {
   // Remove old global UI styles if they exist (prevent accumulation on re-init)
   document.getElementById("ct-global-ui")?.remove();
   style.textContent = `
-    #hotbar { transition: display 0.2s; }
-    #sidebar,
-    .app#sidebar,
-    aside#sidebar,
-    #ui-right,
-    #ui-right #sidebar,
-    #ui-right .sidebar {
+    body.ct-taskbar-active #hotbar { transition: display 0.2s; }
+    body.ct-taskbar-active #sidebar,
+    body.ct-taskbar-active .app#sidebar,
+    body.ct-taskbar-active aside#sidebar,
+    body.ct-taskbar-active #ui-right,
+    body.ct-taskbar-active #ui-right #sidebar,
+    body.ct-taskbar-active #ui-right .sidebar {
       bottom: var(--ct-sidebar-offset, 0px) !important;
       height: calc(100vh - var(--ct-sidebar-offset, 0px)) !important;
       max-height: calc(100vh - var(--ct-sidebar-offset, 0px)) !important;
       transition: bottom 0.2s ease, height 0.2s ease, max-height 0.2s ease;
     }
-    #sidebar-tabs,
-    .sidebar-tabs {
+    body.ct-taskbar-active #sidebar-tabs,
+    body.ct-taskbar-active .sidebar-tabs {
       max-height: calc(100vh - var(--ct-sidebar-offset, 0px)) !important;
       transition: max-height 0.2s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      body.ct-taskbar-active #hotbar,
+      body.ct-taskbar-active #sidebar,
+      body.ct-taskbar-active #ui-right,
+      body.ct-taskbar-active #sidebar-tabs { transition: none !important; }
     }
   `;
   document.head.appendChild(style);
@@ -11948,10 +12399,26 @@ Hooks.on("disableModule", (module) => {
     clearInterval(CypherTaskbar.instance._trayInterval);
     clearTimeout(CypherTaskbar.instance._skillTooltipTimer);
     clearTimeout(CypherTaskbar.instance._hideTimeout);
+    CypherTaskbar.instance._windowObserver?.disconnect();
+    CypherTaskbar.instance._windowObserver = null;
   }
+  _ctCombatFadeObserver?.disconnect();
+  _ctCombatFadeObserver = null;
+  document.body.classList.remove("ct-combat-bar-active");
   document.querySelector(`#${MODULE_ID}-bar`)?.remove();
   document.querySelectorAll(".ct-popup").forEach(p => p.remove());
+  document.body.classList.remove("ct-taskbar-active");
+  document.getElementById("ct-global-ui")?.remove();
+  const hotbar = document.getElementById("hotbar");
+  if (hotbar) hotbar.style.removeProperty("display");
   CypherTaskbar.instance = null;
+});
+
+// Reconcile the requester's local combat resource only from the authoritative
+// review message update. A denial in a later turn never refunds the new turn.
+Hooks.on("updateChatMessage", (message, changes) => {
+  if (changes?.flags?.[MODULE_ID]?.cashResolved === undefined) return;
+  CypherTaskbar.instance?._resolveEquipmentReviewMessage?.(message);
 });
 
 // Actor/Item/Combat hooks — debounced to prevent refresh storms
@@ -12142,10 +12609,8 @@ Hooks.on("renderRollEngineDialogSheet", (app, html, data) => {
   app._ctAppliedActor = actor.id;
   app._ctAppliedDifficulty = difficulty;
 
-  // Apply to backing data
-  app.object.baseDifficulty = difficulty;
-
-  // Apply to DOM
+  // Use the native form control and its change handler. Directly mutating the
+  // roll object's backing data bypassed the system sheet and broke on updates.
   if (select) {
     const strVal = String(difficulty);
     if (select.value !== strVal) {
@@ -12183,48 +12648,202 @@ Hooks.on("deleteCombat", () => { CypherTaskbar.instance?.refresh(); CypherTaskba
 Hooks.on("combatStart", () => CypherTaskbar.instance?._updateCombatBar?.());
 
 // ── Cash & Values: GM interaction with USE chat cards ──
-Hooks.on("renderChatMessage", (message, html) => {
-  html.find("[data-cash-action]").on("click", async (ev) => {
+Hooks.on("renderChatMessageHTML", (message, html) => {
+  const root = html instanceof HTMLElement ? html : html?.[0];
+  if (!root) return;
+  const buttons = root.querySelectorAll("[data-cash-action]");
+  if (!buttons.length) return;
+  const cashSpend = message.getFlag(MODULE_ID, "cashSpend");
+  const valuableRequest = message.getFlag(MODULE_ID, "cashValuableExpend");
+  const equipmentRequest = message.getFlag(MODULE_ID, "equipmentRequest");
+  const isEquipment = message.getFlag(MODULE_ID, "equipmentExpend") === true;
+  // Never turn arbitrary chat markup into a document-mutation control.
+  if (!cashSpend && !valuableRequest && !isEquipment) return;
+
+  const showResolved = (btn, text) => {
+    const card = btn.closest(".ct-cash-use-card");
+    if (!card) return;
+    card.querySelectorAll(".ct-cash-use-btn").forEach(button => {
+      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
+    });
+    const status = document.createElement("div");
+    status.className = "ct-cash-use-status";
+    status.setAttribute("role", "status");
+    status.textContent = text;
+    card.appendChild(status);
+  };
+
+  if (message.getFlag(MODULE_ID, "cashResolved")) {
+    buttons.forEach(button => { button.disabled = true; });
+    return;
+  }
+
+  buttons.forEach(button => button.addEventListener("click", async ev => {
     ev.preventDefault();
+    if (!game.user?.isGM) {
+      ui.notifications.warn("A GM must resolve this item-use request.");
+      return;
+    }
+    if (message.getFlag(MODULE_ID, "cashResolved")) return;
     const btn = ev.currentTarget;
     const action = btn.dataset.cashAction;
-    const actorId = btn.dataset.actorId;
-    const itemId = btn.dataset.itemId;
-    if (!actorId || !itemId) return;
-
-    const actor = game.actors.get(actorId);
-    if (!actor) { ui.notifications.warn("Actor not found."); return; }
-    const item = actor.items.get(itemId);
-    if (!item) { ui.notifications.info("Item already deleted."); return; }
-
-    if (action === "expend") {
-      // Remove from cashValuables flag
-      const valuables = actor.getFlag(MODULE_ID, "cashValuables") ?? [];
-      const filtered = valuables.filter(id => id !== itemId);
-      await actor.setFlag(MODULE_ID, "cashValuables", filtered);
-      // Delete item from actor
-      await actor.deleteEmbeddedDocuments("Item", [itemId]);
-      ui.notifications.info(`"${item.name}" expended and removed from ${actor.name}.`);
-      // Disable buttons in this message
-      const card = btn.closest(".ct-cash-use-card");
-      if (card) {
-        card.querySelectorAll(".ct-cash-use-btn").forEach(b => {
-          b.disabled = true;
-          b.style.opacity = "0.5";
-        });
-        card.insertAdjacentHTML("beforeend", `<div style="margin-top:6px;color:#c8a96e;font-weight:700;"><i class="fas fa-check-circle"></i> Item expended.</div>`);
-      }
-    } else if (action === "keep") {
-      // Just acknowledge — item stays
-      const card = btn.closest(".ct-cash-use-card");
-      if (card) {
-        card.querySelectorAll(".ct-cash-use-btn").forEach(b => {
-          b.disabled = true;
-          b.style.opacity = "0.5";
-        });
-        card.insertAdjacentHTML("beforeend", `<div style="margin-top:6px;color:#7ecf7e;font-weight:700;"><i class="fas fa-check-circle"></i> Item kept.</div>`);
+    if (!["expend", "spend", "keep"].includes(action)) return;
+    if ((action === "spend" && !cashSpend) || (action === "expend" && cashSpend)) return;
+    const request = cashSpend || valuableRequest || equipmentRequest || {
+      // Compatibility for pre-5.0 equipment cards, which had a module marker
+      // but stored identifiers only in their review buttons.
+      actorId: btn.dataset.actorId,
+      itemId: btn.dataset.itemId
+    };
+    const reviewerId = request.reviewerId;
+    if (reviewerId && reviewerId !== game.user.id) {
+      const designated = game.users.get(reviewerId);
+      const fallbackReviewer = game.users.filter(user => user.active && user.isGM).sort((a, b) => a.id.localeCompare(b.id))[0];
+      if (designated?.active || fallbackReviewer?.id !== game.user.id) {
+        ui.notifications.warn(designated?.active
+          ? "Another active GM was designated to review this request."
+          : "The designated GM is unavailable; the lowest-ID active GM should review this request.");
+        return;
       }
     }
-  });
+    const actorId = typeof request.actorId === "string"
+      ? request.actorId
+      : ((cashSpend || isEquipment) ? btn.dataset.actorId ?? "" : "");
+    const itemId = typeof request.itemId === "string"
+      ? request.itemId
+      : (isEquipment ? btn.dataset.itemId ?? "" : "");
+    if (!actorId || (!itemId && !cashSpend)) return;
+
+    const actor = game.actors.get(actorId);
+    const item = itemId ? actor?.items.get(itemId) : null;
+    if (!actor || (itemId && !item)) {
+      ui.notifications.info("This request is no longer valid because the actor or item was removed.");
+      try {
+        await message.setFlag(MODULE_ID, "cashResolved", action === "spend" ? "spent" : action);
+        showResolved(btn, "Request no longer valid.");
+      } catch (err) {
+        console.error(`${MODULE_ID} | Could not close a stale review request`, err);
+        ui.notifications.error("The stale request could not be marked as resolved.");
+      }
+      return;
+    }
+    const requesterOwnsActor = candidate => {
+      if (!request.requesterId) return true;
+      const requester = game.users.get(request.requesterId);
+      return Boolean(requester && candidate?.testUserPermission(requester, "OWNER"));
+    };
+    if (!requesterOwnsActor(actor)) {
+      ui.notifications.warn("This request is stale because its requester no longer owns the character.");
+      return;
+    }
+
+    buttons.forEach(control => { control.disabled = true; });
+    let mutationStarted = false;
+    try {
+      // Claim the card before mutation so repeated clicks and multiple GM
+      // clients cannot expend the same item twice.
+      await message.setFlag(MODULE_ID, "cashResolved", "processing");
+      if (action === "keep") {
+        await message.setFlag(MODULE_ID, "cashResolved", "kept");
+        showResolved(btn, cashSpend ? "Purchase denied; no cash deducted." : "Request denied; item kept.");
+        return;
+      }
+
+      if (cashSpend) {
+        const costCp = Number(cashSpend.costCp);
+        if (!Number.isSafeInteger(costCp) || costCp <= 0) throw new Error("Invalid cash request.");
+        const confirmed = await foundry.applications.api.DialogV2.confirm({
+          window: { title: "Approve Purchase" },
+          content: `<p>Deduct the requested purchase from <strong>${foundry.utils.escapeHTML(actor.name)}</strong>? Current funds will be rechecked before mutation.</p>`,
+          rejectClose: false,
+          modal: true
+        });
+        if (!confirmed) {
+          await message.unsetFlag(MODULE_ID, "cashResolved");
+          buttons.forEach(control => { control.disabled = false; });
+          return;
+        }
+        const currentActor = game.actors.get(actorId);
+        if (!currentActor?.isOwner || !requesterOwnsActor(currentActor)) throw new Error("The actor or requester ownership changed before approval.");
+        const money = CypherTaskbar.instance?._readSheetMoney(currentActor);
+        if (!money) throw new Error("Cash controls are unavailable.");
+        const rates = { cp: 1, sp: 10, gp: 100, pp: 1000 };
+        const currentCp = Object.entries(rates).reduce((sum, [key, rate]) => sum + money[key] * rate, 0);
+        if (!Number.isSafeInteger(currentCp) || currentCp < costCp) {
+          throw new Error("The character no longer has enough cash for this purchase.");
+        }
+        let remaining = currentCp - costCp;
+        const after = {};
+        for (const key of ["pp", "gp", "sp", "cp"]) {
+          after[key] = Math.floor(remaining / rates[key]);
+          remaining -= after[key] * rates[key];
+        }
+        mutationStarted = true;
+        await CypherTaskbar.instance._writeSheetMoney(currentActor, after);
+        await message.setFlag(MODULE_ID, "cashResolved", "spent");
+        ui.notifications.info(`Purchase approved for ${currentActor.name}.`);
+        showResolved(btn, "Purchase approved; cash deducted.");
+        return;
+      }
+
+      const isRemoval = isEquipment && message.getFlag(MODULE_ID, "equipmentRemove") === true;
+      const confirmed = await foundry.applications.api.DialogV2.confirm({
+        window: { title: isRemoval ? "Remove Equipment" : (isEquipment ? "Expend Equipment" : "Expend Valuable") },
+        content: `<p>Permanently ${isRemoval ? "remove" : "expend"} <strong>${foundry.utils.escapeHTML(item.name)}</strong> from ${foundry.utils.escapeHTML(actor.name)}?</p>`,
+        rejectClose: false,
+        modal: true
+      });
+      if (!confirmed) {
+        await message.unsetFlag(MODULE_ID, "cashResolved");
+        buttons.forEach(control => { control.disabled = false; });
+        return;
+      }
+
+      // Re-fetch after the asynchronous decision.
+      const currentActor = game.actors.get(actorId);
+      const currentItem = currentActor?.items.get(itemId);
+      if (!currentActor || !currentItem || !currentActor.isOwner || !requesterOwnsActor(currentActor)) {
+        throw new Error("The actor, item, or requester ownership changed before approval.");
+      }
+      if (isEquipment) {
+        mutationStarted = true;
+        await resolveEquipmentExpenditure(currentActor, currentItem, { remove: isRemoval });
+        await message.setFlag(MODULE_ID, "cashResolved", "expended");
+        ui.notifications.info(`"${currentItem.name}" ${isRemoval ? "removal" : "expenditure"} approved for ${currentActor.name}.`);
+        showResolved(btn, isRemoval ? "Item removal approved." : "Item expenditure approved.");
+        return;
+      }
+      const valuables = currentActor.getFlag(MODULE_ID, "cashValuables") ?? [];
+      const previous = foundry.utils.deepClone(valuables);
+      mutationStarted = true;
+      await currentActor.setFlag(MODULE_ID, "cashValuables", previous.filter(id => id !== itemId));
+      try {
+        await currentActor.deleteEmbeddedDocuments("Item", [itemId]);
+      } catch (err) {
+        await currentActor.setFlag(MODULE_ID, "cashValuables", previous);
+        mutationStarted = false;
+        throw err;
+      }
+      await message.setFlag(MODULE_ID, "cashResolved", "expended");
+      ui.notifications.info(`"${currentItem.name}" expended and removed from ${currentActor.name}.`);
+      showResolved(btn, "Item expended.");
+    } catch (err) {
+      console.error(`${MODULE_ID} | GM review chat action failed`, err);
+      ui.notifications.error(mutationStarted
+        ? "The request did not finish cleanly. Check the actor state before retrying; this card remains locked to prevent a duplicate mutation."
+        : cashSpend
+          ? "The purchase could not be completed; no cash mutation was started."
+          : "The item request could not be completed; no item mutation was started.");
+      if (!mutationStarted && message.getFlag(MODULE_ID, "cashResolved") === "processing") {
+        try {
+          await message.unsetFlag(MODULE_ID, "cashResolved");
+        } catch (unlockError) {
+          console.error(`${MODULE_ID} | Failed to unlock an unprocessed review card`, unlockError);
+        }
+      }
+      buttons.forEach(control => { control.disabled = mutationStarted || Boolean(message.getFlag(MODULE_ID, "cashResolved")); });
+    }
+  }));
 });
 }); // _whenHooks — runtime hook registrations

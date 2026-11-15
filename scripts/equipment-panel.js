@@ -1,7 +1,7 @@
-import { MODULE_ID, hexToRGBA, bgFitMap, getActorPref, setActorPref } from "./utils.js";
+import { MODULE_ID, hexToRGBA, bgFitMap, getActorPref, setActorPref, sanitizeHTML, normalizeColumnCount } from "./utils.js";
 
 function buildEquipmentMasonryColumns(sections, count = 1) {
-  const total = Math.max(1, Number(count ?? 1));
+  const total = normalizeColumnCount(count, 1);
   const cols = Array.from({ length: total }, () => ({ height: 0, sections: [] }));
   sections.forEach(section => {
     const targetIndex = cols.reduce((best, col, index, arr) => col.height < arr[best].height ? index : best, 0);
@@ -38,6 +38,30 @@ function escapeEquipmentText(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** Apply a GM-approved expenditure to the current embedded item document. */
+export async function resolveEquipmentExpenditure(actor, item, { remove = false } = {}) {
+  const currentActor = game.actors.get(actor?.id);
+  const currentItem = currentActor?.items.get(item?.id);
+  if (!currentActor?.isOwner || !currentItem || typeof currentItem.type !== "string") {
+    throw new Error("The equipment expenditure is no longer owned or valid.");
+  }
+  actor = currentActor;
+  item = currentItem;
+  const { quantity, hasQuantity } = equipmentQuantityInfo(item);
+  const isLast = remove || !hasQuantity || quantity <= 1;
+  const remaining = remove ? 0 : (hasQuantity ? Math.max(0, quantity - 1) : 0);
+  if (!remove && hasQuantity && remaining > 0) {
+    const update = {};
+    if (Object.hasOwn(item.system?.basic ?? {}, "quantity")) update["system.basic.quantity"] = remaining;
+    if (Object.hasOwn(item.system?.basic ?? {}, "amount")) update["system.basic.amount"] = remaining;
+    if (!Object.keys(update).length) update["system.basic.quantity"] = remaining;
+    await item.update(update);
+  } else {
+    await actor.deleteEmbeddedDocuments("Item", [item.id]);
+  }
+  return { isLast, remaining };
 }
 
 const equipmentCategoryIconChoices = [
@@ -165,7 +189,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
     },
 
     _equipmentCategoryHeaderIconHtml(style = {}) {
-      return style?.icon ? `<i class="ct-equipment-category-icon ${style.icon}"></i>` : "";
+      return style?.icon ? `<i class="ct-equipment-category-icon ${escapeEquipmentText(style.icon)}"></i>` : "";
     },
 
     _equipmentPositionPopupAboveEvent(popup, event, options = {}) {
@@ -206,21 +230,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
     },
 
     _equipmentSanitizeTooltipHtml(html) {
-      if (!html) return "";
-      const tpl = document.createElement("template");
-      tpl.innerHTML = String(html);
-      tpl.content.querySelectorAll("script, iframe, object, embed, video, audio, form, input, select, textarea, button, link, meta").forEach(el => el.remove());
-      const walk = (node) => {
-        if (node.nodeType !== Node.ELEMENT_NODE) return;
-        for (const attr of Array.from(node.attributes)) {
-          const name = attr.name.toLowerCase();
-          if (name.startsWith("on")) node.removeAttribute(attr.name);
-          else if ((name === "href" || name === "src" || name === "xlink:href") && String(attr.value).trim().toLowerCase().startsWith("javascript:")) node.removeAttribute(attr.name);
-        }
-        node.childNodes.forEach(walk);
-      };
-      walk(tpl.content);
-      return tpl.innerHTML;
+      return sanitizeHTML(html);
     },
 
     _equipmentShowTooltip(anchor, item) {
@@ -232,7 +242,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
       const tip = document.createElement("div");
       tip.className = "ct-equipment-hover-tooltip";
       tip.innerHTML = `
-        ${img ? `<div class="ct-eq-tip-cover"><img src="${img}" alt="" draggable="false"></div>` : ""}
+        ${img ? `<div class="ct-eq-tip-cover"><img src="${escapeEquipmentText(img)}" alt="" draggable="false"></div>` : ""}
         <div class="ct-eq-tip-body">
           <div class="ct-eq-tip-name">${escapeEquipmentText(item.name)}</div>
           ${description
@@ -441,36 +451,47 @@ export function applyEquipmentPanel(CypherTaskbar) {
     // Unlink an ammo item from a weapon via the Cypher Cool Items flag — clearing
     // the exact keys its panels read (ammoEnabled/ammoItem, attackAmmo/attackAmmoItem).
     async _unlinkAmmoFromWeapon(weapon) {
-      if (!weapon) return;
+      const actor = game.actors.get(weapon?.actor?.id);
+      const currentWeapon = actor?.items.get(weapon?.id);
+      if (!actor?.isOwner || !currentWeapon) return false;
       try {
-        const cci = weapon.getFlag?.("cypher-cool-items", "data") ?? {};
-        const next = weapon.type === "ability"
+        const stored = currentWeapon.getFlag?.("cypher-cool-items", "data");
+        const cci = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+        const next = currentWeapon.type === "ability"
           ? { ...cci, attackAmmo: false, attackAmmoItem: null }
           : { ...cci, ammoEnabled: false, ammoItem: null };
-        await weapon.setFlag("cypher-cool-items", "data", next);
-        ui.notifications.info(`Ammo unloaded from ${weapon.name}.`);
+        await currentWeapon.setFlag("cypher-cool-items", "data", next);
+        ui.notifications.info(`Ammo unloaded from ${currentWeapon.name}.`);
         this._refreshActivePanel();
+        return true;
       } catch (err) {
         console.error(`${MODULE_ID} | ammo unlink failed`, err);
-        ui.notifications.error(`Failed to unload ammo from ${weapon.name}.`);
+        ui.notifications.error(`Failed to unload ammo from ${currentWeapon.name}.`);
+        return false;
       }
     },
 
     // Link an ammo item to a weapon via the Cypher Cool Items flag — writing the exact
     // keys its panels read: attack panel (ammoEnabled/ammoItem), ability panel (attackAmmo/attackAmmoItem).
     async _linkAmmoToWeapon(weapon, ammo) {
-      if (!weapon || !ammo) return;
+      const actor = game.actors.get(weapon?.actor?.id);
+      const currentWeapon = actor?.items.get(weapon?.id);
+      const currentAmmo = actor?.items.get(ammo?.id);
+      if (!actor?.isOwner || !currentWeapon || !currentAmmo || currentWeapon.id === currentAmmo.id) return false;
       try {
-        const cci = weapon.getFlag?.("cypher-cool-items", "data") ?? {};
-        const snapshot = { id: ammo.id, name: ammo.name, img: ammo.img, uuid: ammo.uuid };
-        const next = weapon.type === "ability"
+        const stored = currentWeapon.getFlag?.("cypher-cool-items", "data");
+        const cci = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+        const snapshot = { id: currentAmmo.id, name: currentAmmo.name, img: currentAmmo.img, uuid: currentAmmo.uuid };
+        const next = currentWeapon.type === "ability"
           ? { ...cci, attackAmmo: true, attackAmmoItem: snapshot }
           : { ...cci, ammoEnabled: true, ammoItem: snapshot };
-        await weapon.setFlag("cypher-cool-items", "data", next);
-        ui.notifications.info(`${ammo.name} linked to ${weapon.name}.`);
+        await currentWeapon.setFlag("cypher-cool-items", "data", next);
+        ui.notifications.info(`${currentAmmo.name} linked to ${currentWeapon.name}.`);
+        return true;
       } catch (err) {
         console.error(`${MODULE_ID} | ammo link failed`, err);
-        ui.notifications.error(`Failed to link ${ammo.name}.`);
+        ui.notifications.error(`Failed to link ${currentAmmo.name}.`);
+        return false;
       }
     },
 
@@ -1438,14 +1459,14 @@ export function applyEquipmentPanel(CypherTaskbar) {
         const rows = entries.length ? entries.map(({ item }) => {
           const { quantity: qty } = equipmentQuantityInfo(item);
           const level = equipmentLevelValue(item);
-          return `<div class="ct-item-row ct-equipment-action-row ct-equipment-draggable" draggable="true" data-equipment-id="${item.id}"><img class="ct-item-img" src="${item.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false"><span class="ct-item-name">${item.name}</span><span class="ct-equipment-row-meta"><span class="ct-equipment-level-pill" title="Item level">${level}</span><span class="ct-item-qty ct-equipment-qty" title="Amount ${qty}">${qty}</span></span><button type="button" class="ct-equipment-use-btn" data-use-equipment="${item.id}" title="Use item" aria-label="Use item ${escapeEquipmentText(item.name)}"><i class="fas fa-hand-sparkles"></i></button></div>`;
+          return `<div class="ct-item-row ct-equipment-action-row ct-equipment-draggable" draggable="true" data-equipment-id="${escapeEquipmentText(item.id)}"><img class="ct-item-img" src="${escapeEquipmentText(item.img || 'icons/svg/item-bag.svg')}" alt="" draggable="false"><span class="ct-item-name">${escapeEquipmentText(item.name)}</span><span class="ct-equipment-row-meta"><span class="ct-equipment-level-pill" title="Item level">${escapeEquipmentText(level)}</span><span class="ct-item-qty ct-equipment-qty" title="Amount ${qty}">${qty}</span></span><button type="button" class="ct-equipment-use-btn" data-use-equipment="${escapeEquipmentText(item.id)}" title="Use item" aria-label="Use item ${escapeEquipmentText(item.name)}"><i class="fas fa-hand-sparkles"></i></button></div>`;
         }).join("") : `<div class="ct-equipment-empty-drop">Drop equipment here</div>`;
         const bodyClass = entries.length ? "ct-equipment-category-body" : "ct-equipment-category-body ct-equipment-category-body-empty";
         const categoryStyle = this._getEquipmentCategoryStyle(category.id);
-        const html = `<section class="ct-equipment-category-section" data-equipment-category-section="${category.id}" style="--ct-equipment-count:${Math.max(entries.length, 1)}"><div class="ct-equipment-category-header" data-equipment-category-header="${category.id}" style="${this._equipmentCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-equipment-category-icon-wrap">${this._equipmentCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-equipment-category-title">${category.name}</span></div><div class="${bodyClass}" data-equipment-category="${category.id}">${rows}</div></section>`;
+        const html = `<section class="ct-equipment-category-section" data-equipment-category-section="${escapeEquipmentText(category.id)}" style="--ct-equipment-count:${Math.max(entries.length, 1)}"><div class="ct-equipment-category-header" data-equipment-category-header="${escapeEquipmentText(category.id)}" style="${this._equipmentCategoryHeaderStyle(categoryStyle)}" title="Right-click to edit category header"><span class="ct-equipment-category-icon-wrap">${this._equipmentCategoryHeaderIconHtml(categoryStyle)}</span><span class="ct-equipment-category-title">${escapeEquipmentText(category.name)}</span></div><div class="${bodyClass}" data-equipment-category="${escapeEquipmentText(category.id)}">${rows}</div></section>`;
         return { html, weight: Math.max(entries.length, 1) };
       });
-      const sections = buildEquipmentMasonryColumns(sectionData, Math.max(1, Math.min(3, Number(this._gs("equipmentMenuColumns") ?? 1))));
+      const sections = buildEquipmentMasonryColumns(sectionData, normalizeColumnCount(this._gs("equipmentMenuColumns") ?? 1, 1));
 
       // Panel title and icon based on sub-tab
       const tabMeta = {
@@ -1473,9 +1494,9 @@ export function applyEquipmentPanel(CypherTaskbar) {
           const { quantity: qty } = equipmentQuantityInfo(item);
           const linkedAmmo = this._getLinkedAmmoRef(item);
           const noAmmo = this._weaponAmmoMissing(item);
-          return `<div class="ct-weapon-card${item.type === "ammo" ? " ct-ammo-card" : ""}${noAmmo ? " ct-no-ammo" : ""}" data-weapon-id="${item.id}" draggable="true" title="${escapeEquipmentText(item.name)}">
+          return `<div class="ct-weapon-card${item.type === "ammo" ? " ct-ammo-card" : ""}${noAmmo ? " ct-no-ammo" : ""}" data-weapon-id="${escapeEquipmentText(item.id)}" draggable="true" title="${escapeEquipmentText(item.name)}">
               <div class="ct-weapon-card-icon-wrap">
-                <img class="ct-weapon-card-icon" src="${item.img || 'icons/svg/item-bag.svg'}" alt="" draggable="false">
+                <img class="ct-weapon-card-icon" src="${escapeEquipmentText(item.img || 'icons/svg/item-bag.svg')}" alt="" draggable="false">
                 ${qty > 1 ? `<span class="ct-weapon-card-qty">${qty}</span>` : ""}
               </div>
               <div class="ct-weapon-card-info">
@@ -1486,8 +1507,8 @@ export function applyEquipmentPanel(CypherTaskbar) {
                   <span class="ct-weapon-stat"><i class="fas fa-box-open"></i> ${escapeEquipmentText(String(stats.ammo))}</span>
                 </div>
               </div>
-              <button type="button" class="ct-weapon-use-btn" data-use-weapon="${item.id}" title="Use weapon"><i class="fas fa-hand-sparkles"></i></button>
-              ${linkedAmmo?.name ? `<button type="button" class="ct-weapon-unload-btn" data-unload-ammo="${item.id}" title="Unload ammo: ${escapeEquipmentText(linkedAmmo.name)}"><i class="fas fa-link-slash"></i></button>` : ""}
+              <button type="button" class="ct-weapon-use-btn" data-use-weapon="${escapeEquipmentText(item.id)}" title="Use weapon" aria-label="Use ${escapeEquipmentText(item.name)}"><i class="fas fa-hand-sparkles"></i></button>
+              ${linkedAmmo?.name ? `<button type="button" class="ct-weapon-unload-btn" data-unload-ammo="${escapeEquipmentText(item.id)}" title="Unload ammo: ${escapeEquipmentText(linkedAmmo.name)}" aria-label="Unload ${escapeEquipmentText(linkedAmmo.name)} from ${escapeEquipmentText(item.name)}"><i class="fas fa-link-slash"></i></button>` : ""}
               ${noAmmo ? `<div class="ct-weapon-noammo-bar" aria-hidden="true"><span>No Ammo</span></div>` : ""}
             </div>`;
         };
@@ -1661,22 +1682,26 @@ export function applyEquipmentPanel(CypherTaskbar) {
           return;
         }
 
-        // Check if already on actor
-        let actorItem = actor.items.find(i => i.name === item.name && i.type === item.type);
-        if (!actorItem && item.uuid && !item.actor) {
-          // Item from sidebar - add to actor
+        const currentActor = game.actors.get(actor.id);
+        if (!currentActor?.isOwner) {
+          ui.notifications.warn("You no longer have permission to add weapons to this character.");
+          return;
+        }
+        let actorItem = currentActor.items.find(i => i.name === item.name && i.type === item.type);
+        if (!actorItem && item.actor?.id !== currentActor.id) {
           try {
             const itemData = item.toObject ? item.toObject() : foundry.utils.duplicate(item);
             delete itemData._id;
-            const created = await actor.createEmbeddedDocuments("Item", [itemData]);
-            if (created && created.length) actorItem = created[0];
+            const created = await currentActor.createEmbeddedDocuments("Item", [itemData]);
+            if (created?.length) actorItem = created[0];
           } catch (err) {
+            console.error(`${MODULE_ID} | Failed to add weapon`, err);
             ui.notifications.error("Failed to add weapon to actor.");
             return;
           }
         }
 
-        if (actorItem) {
+        if (actorItem && currentActor.items.has(actorItem.id)) {
           ui.notifications.info(`"${actorItem.name}" added to weapons.`);
           this._refreshActivePanel();
         }
@@ -1708,12 +1733,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
           e.preventDefault();
           e.stopPropagation();
           this._equipmentDraggedItem = null;
-          try {
-            await item.delete();
-            ui.notifications.info(`"${item.name}" removed from ${actor.name}.`);
-          } catch {
-            ui.notifications.error(`Failed to remove "${item.name}".`);
-          }
+          await this.expendEquipmentItem(actor, item, { remove: true });
         });
       }
     },
@@ -1808,16 +1828,24 @@ export function applyEquipmentPanel(CypherTaskbar) {
             icon: '<i class="fas fa-hand-sparkles"></i>',
             label: 'Use Item',
             callback: async () => {
+              const turnKey = this._equipmentUseTurnKey ?? null;
               if (!this._cbSpendUtilityForItem(item)) return;
-              await this.sendEquipmentUseToChat(actor, item);
+              try {
+                await this.sendEquipmentUseToChat(actor, item);
+              } catch (error) {
+                if (turnKey === (this._equipmentUseTurnKey ?? null)) this._cbRestoreResource?.("utility");
+                this._syncEquipmentUseButtons?.();
+                console.error(`${MODULE_ID} | Equipment use notification failed`, error);
+                ui.notifications.error("The item use could not be recorded. No utility pip was spent.");
+              }
             }
           },
           expend: {
             icon: '<i class="fas fa-burst"></i>',
             label: 'Expend Item',
             callback: async () => {
-              if (!this._cbSpendUtilityForItem(item)) return;
-              await this.expendEquipmentItem(actor, item);
+              const requested = await this.expendEquipmentItem(actor, item);
+              if (requested) this._cbSpendUtilityForItem(item);
             }
           },
           cancel: {
@@ -1860,46 +1888,71 @@ export function applyEquipmentPanel(CypherTaskbar) {
       await ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker({ actor }), content: playerContent, whisper: [game.user.id] });
     },
 
-    async expendEquipmentItem(actor, item) {
-      const { quantity, hasQuantity } = equipmentQuantityInfo(item);
-      const itemName = escapeEquipmentText(item?.name || 'Item');
-      const actorName = escapeEquipmentText(actor?.name || game.user?.name || 'Player');
-      const gmIds = game.users.filter((u) => u.isGM).map((u) => u.id);
-      const isLast = !hasQuantity || quantity <= 1;
-      const remaining = hasQuantity ? Math.max(0, quantity - 1) : 0;
-
-      // Perform the expend operation
-      if (hasQuantity) {
-        const next = Math.max(0, quantity - 1);
-        if (next <= 0) {
-          await item.delete();
-        } else {
-          const update = {};
-          if (Object.prototype.hasOwnProperty.call(item.system?.basic ?? {}, 'quantity')) update['system.basic.quantity'] = next;
-          if (Object.prototype.hasOwnProperty.call(item.system?.basic ?? {}, 'amount')) update['system.basic.amount'] = next;
-          if (!Object.keys(update).length) update['system.basic.quantity'] = next;
-          await item.update(update);
+    async expendEquipmentItem(actor, item, { remove = false } = {}) {
+      if (!actor?.isOwner || item?.actor?.id !== actor.id) {
+        ui.notifications.warn("Select the character who owns this item first.");
+        return false;
+      }
+      this._equipmentExpendPending ??= new Set();
+      if (this._equipmentExpendPending.has(item.id)) return false;
+      this._equipmentExpendPending.add(item.id);
+      try {
+        const gmUsers = game.users.filter(user => user.isGM && user.active).sort((a, b) => a.id.localeCompare(b.id));
+        if (!gmUsers.length) {
+          ui.notifications.warn("No GM is currently online to approve this expenditure.");
+          return false;
         }
-      } else {
-        await item.delete();
+        const itemName = escapeEquipmentText(item.name || "Item");
+        const actorName = escapeEquipmentText(actor.name || game.user?.name || "Player");
+        const utilitySpent = Boolean(this._cbState?.());
+        const turnKey = this._equipmentUseTurnKey ?? null;
+        const message = await ChatMessage.create({
+          user: game.user.id,
+          speaker: ChatMessage.getSpeaker({ actor }),
+          whisper: [...new Set([...gmUsers.map(user => user.id), game.user.id])],
+          flags: {
+            [MODULE_ID]: {
+              equipmentExpend: true,
+              equipmentRemove: remove,
+              equipmentUtilitySpent: utilitySpent,
+              equipmentTurnKey: turnKey,
+              equipmentRequest: {
+                actorId: actor.id,
+                itemId: item.id,
+                requesterId: game.user.id,
+                reviewerId: gmUsers[0].id
+              }
+            }
+          },
+          content: `<div class="ct-cash-use-card"><p><strong>${actorName}</strong> requests ${remove ? "removal" : "expenditure"} of <strong>${itemName}</strong>.</p><div class="ct-cash-use-actions"><button type="button" class="ct-cash-use-btn expend" data-cash-action="expend" data-actor-id="${escapeEquipmentText(actor.id)}" data-item-id="${escapeEquipmentText(item.id)}"><i class="fas fa-fire"></i> REVIEW</button><button type="button" class="ct-cash-use-btn keep" data-cash-action="keep" data-actor-id="${escapeEquipmentText(actor.id)}" data-item-id="${escapeEquipmentText(item.id)}"><i class="fas fa-check"></i> DENY</button></div></div>`
+        });
+        this._equipmentReviewRequests ??= new Map();
+        this._equipmentReviewRequests.set(message.id, { utilitySpent, turnKey });
+        while (this._equipmentReviewRequests.size > 100) {
+          this._equipmentReviewRequests.delete(this._equipmentReviewRequests.keys().next().value);
+        }
+        ui.notifications.info(`${remove ? "Removal" : "Expenditure"} sent to the GM for review.`);
+        return true;
+      } catch (error) {
+        console.error(`${MODULE_ID} | Equipment expenditure request failed:`, error);
+        ui.notifications.error("The GM expenditure request could not be created.");
+        return false;
+      } finally {
+        this._equipmentExpendPending.delete(item.id);
       }
+    },
 
-      // Send stylish chat messages
-      const playerMsg = isLast
-        ? `<div class="ct-equipment-chat-card ct-equipment-chat-card-player"><div class="ct-equipment-chat-kicker">Item Expended</div><div class="ct-equipment-chat-body"><i class="fas fa-burst"></i><span>You have spent your last <strong>${itemName}</strong>!</span></div></div>`
-        : `<div class="ct-equipment-chat-card ct-equipment-chat-card-player"><div class="ct-equipment-chat-kicker">Item Expended</div><div class="ct-equipment-chat-body"><i class="fas fa-burst"></i><span>You have spent 1 <strong>${itemName}</strong> and you have <strong>${remaining}</strong> more.</span></div></div>`;
-
-      const gmMsg = isLast
-        ? `<div class="ct-equipment-chat-card ct-equipment-chat-card-gm"><div class="ct-equipment-chat-kicker">GM Notice</div><div class="ct-equipment-chat-body"><i class="fas fa-eye"></i><span><strong>${actorName}</strong> has spent their last <strong>${itemName}</strong>.</span></div></div>`
-        : `<div class="ct-equipment-chat-card ct-equipment-chat-card-gm"><div class="ct-equipment-chat-kicker">GM Notice</div><div class="ct-equipment-chat-body"><i class="fas fa-eye"></i><span><strong>${actorName}</strong> has spent one <strong>${itemName}</strong> and has <strong>${remaining}</strong> more.</span></div></div>`;
-
-      if (gmIds.length) {
-        await ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker({ actor }), content: gmMsg, whisper: gmIds });
-      }
-      await ChatMessage.create({ user: game.user.id, speaker: ChatMessage.getSpeaker({ actor }), content: playerMsg, whisper: [game.user.id] });
-
-      this._refreshActivePanel();
-      this.refresh?.();
+    _resolveEquipmentReviewMessage(message) {
+      const request = this._equipmentReviewRequests?.get(message?.id);
+      if (!request) return;
+      const resolution = message.getFlag(MODULE_ID, "cashResolved");
+      if (!["kept", "expended"].includes(resolution)) return;
+      this._equipmentReviewRequests.delete(message.id);
+      if (resolution !== "kept" || !request.utilitySpent) return;
+      if (request.turnKey !== (this._equipmentUseTurnKey ?? null)) return;
+      this._cbRestoreResource?.("utility");
+      this._syncEquipmentUseButtons?.();
+      ui.notifications.info("Equipment expenditure was denied; the utility pip was restored.");
     },
 
     applyLiveEquipmentPanelSettings(preview = null) {
@@ -2157,7 +2210,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
         const list = popup.querySelector('#ct-equipment-category-list');
         const categories = this._getEquipmentCategories();
         list.innerHTML = categories.length
-          ? categories.map(cat => `<div class="ct-skill-category-entry"><span>${cat.name}</span><button type="button" class="ct-skill-category-delete" data-delete-equipment-category="${cat.id}" title="Delete ${cat.name}"><i class="fas fa-trash"></i></button></div>`).join('')
+          ? categories.map(cat => `<div class="ct-skill-category-entry"><span>${escapeEquipmentText(cat.name)}</span><button type="button" class="ct-skill-category-delete" data-delete-equipment-category="${escapeEquipmentText(cat.id)}" title="Delete ${escapeEquipmentText(cat.name)}" aria-label="Delete ${escapeEquipmentText(cat.name)}"><i class="fas fa-trash"></i></button></div>`).join('')
           : `<div class="ct-empty-msg">No custom categories yet.</div>`;
         list.querySelectorAll('[data-delete-equipment-category]').forEach(btn => btn.onclick = async () => {
           const deleteId = btn.dataset.deleteEquipmentCategory;
@@ -2222,7 +2275,9 @@ export function applyEquipmentPanel(CypherTaskbar) {
       const categories = [{ id: "menu", name: "UNCATEGORIZED" }, ...this._getEquipmentCategories()];
       const category = categories.find(cat => cat.id === categoryId) ?? { id: categoryId, name: categoryId };
       const state = { ...this._getEquipmentCategoryStyle(categoryId) };
-      const anchorHeader = options?.anchor ?? this.element?.querySelector(`[data-equipment-category-header="${categoryId}"]`);
+      const findCategoryHeader = () => [...(this.element?.querySelectorAll("[data-equipment-category-header]") ?? [])]
+        .find(header => header.dataset.equipmentCategoryHeader === categoryId) ?? null;
+      const anchorHeader = options?.anchor ?? findCategoryHeader();
       const preserveMenu = () => {
         if (this.activePanel !== "equipment") this.activePanel = "equipment";
         if (!this.element?.querySelector(".ct-panel-equipment-custom")) this._refreshActivePanel?.();
@@ -2239,11 +2294,11 @@ export function applyEquipmentPanel(CypherTaskbar) {
       popup.classList.add("ct-popup");
       popup.style.transform = "none";
       popup.innerHTML = `
-        <div class="ct-popup-header"><i class="fas fa-palette"></i> ${category.name} Header <button class="ct-popup-close"><i class="fas fa-times"></i></button></div>
+        <div class="ct-popup-header"><i class="fas fa-palette"></i> ${escapeEquipmentText(category.name)} Header <button class="ct-popup-close" aria-label="Close category appearance"><i class="fas fa-times"></i></button></div>
         <div class="ct-popup-body ct-popup-body-compact">
           <label class="ct-popup-wide">Icon</label>
           <div class="ct-popup-wide ct-category-icon-grid" id="ct-category-header-icon-grid">${iconOptions}</div>
-          <input type="hidden" id="ct-category-header-icon" value="${state.icon}">
+          <input type="hidden" id="ct-category-header-icon" value="${escapeEquipmentText(state.icon)}">
           <div class="ct-popup-wide ct-category-icon-preview" id="ct-category-icon-preview"></div>
           <label>Icon Size <span class="ct-val-label" id="ct-category-icon-size-val">${state.iconSize}px</span><input type="range" id="ct-category-icon-size" min="12" max="40" step="1" value="${state.iconSize}"></label>
           <label>Header Title Size <span class="ct-val-label" id="ct-category-title-size-val">${state.titleSize}%</span><input type="range" id="ct-category-title-size" min="70" max="180" step="5" value="${state.titleSize}"></label>
@@ -2257,7 +2312,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
       document.body.appendChild(popup);
       this._equipmentPositionPopupAboveEvent(popup, event);
 
-      const previewTarget = () => this.element?.querySelector(`[data-equipment-category-header="${categoryId}"]`) ?? anchorHeader;
+      const previewTarget = () => findCategoryHeader() ?? anchorHeader;
       const syncVal = (id, fmt = v => v) => {
         const input = popup.querySelector(`#${id}`);
         const output = popup.querySelector(`#${id}-val`);
@@ -2275,7 +2330,7 @@ export function applyEquipmentPanel(CypherTaskbar) {
         const icon = popup.querySelector("#ct-category-header-icon").value;
         popup.querySelectorAll("[data-category-icon]").forEach(btn => btn.classList.toggle("is-selected", btn.dataset.categoryIcon === icon));
         preview.innerHTML = icon
-          ? `<span class="ct-category-icon-preview-chip"><i class="${icon}"></i></span>`
+          ? `<span class="ct-category-icon-preview-chip"><i class="${escapeEquipmentText(icon)}"></i></span>`
           : `<span class="ct-category-icon-preview-empty">No icon selected</span>`;
       };
 

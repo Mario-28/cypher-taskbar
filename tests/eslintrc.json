@@ -1,0 +1,42 @@
+{
+  "root": true,
+  "env": { "browser": true, "es2022": true },
+  "parserOptions": { "ecmaVersion": 2022, "sourceType": "module" },
+  "globals": {
+    "foundry": "readonly",
+    "game": "readonly",
+    "ui": "readonly",
+    "Hooks": "readonly",
+    "CONFIG": "readonly",
+    "Actors": "readonly",
+    "Items": "readonly",
+    "ChatMessage": "readonly",
+    "Roll": "readonly",
+    "FormDataExtended": "readonly",
+    "fromUuid": "readonly",
+    "fromUuidSync": "readonly",
+    "canvas": "readonly",
+    "PIXI": "readonly",
+    "Combat": "readonly",
+    "Dialog": "readonly",
+    "ImagePopout": "readonly",
+    "TextEditor": "readonly",
+    "Actor": "readonly",
+    "Item": "readonly",
+    "JournalEntry": "readonly",
+    "Scene": "readonly",
+    "Macro": "readonly",
+    "RollTable": "readonly",
+    "FilePicker": "readonly",
+    "FormApplication": "readonly",
+    "Application": "readonly",
+    "socketlib": "readonly"
+  },
+  "rules": {
+    "no-undef": "error",
+    "no-unreachable": "error",
+    "no-dupe-keys": "error",
+    "no-dupe-class-members": "error",
+    "no-constant-condition": "error"
+  }
+}

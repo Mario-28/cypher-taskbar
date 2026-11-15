@@ -1,13 +1,40 @@
 import { MODULE_ID } from "./utils.js";
 
+async function removePersonaFlag(actor, key) {
+  try {
+    const currentActor = game.actors.get(actor?.id);
+    if (!currentActor?.isOwner || typeof key !== "string" || !key) return null;
+    await currentActor.unsetFlag(MODULE_ID, key);
+    return currentActor;
+  } catch (err) {
+    console.error(`${MODULE_ID} | Persona flag removal failed for ${key}`, err);
+    ui.notifications.error("The persona change could not be saved.");
+    return null;
+  }
+}
+
+async function writePersonaFlag(actor, key, value) {
+  try {
+    const currentActor = game.actors.get(actor?.id);
+    if (!currentActor?.isOwner || typeof key !== "string" || !key) {
+      throw new Error("The actor is no longer owned or the persona field is invalid.");
+    }
+    await currentActor.setFlag(MODULE_ID, key, value);
+    return currentActor;
+  } catch (err) {
+    console.error(`${MODULE_ID} | Persona update failed for ${key}`, err);
+    ui.notifications.error("The persona change could not be saved. Refresh the character and try again.");
+    return null;
+  }
+}
+
 /* ═══════════════════════════════════════════
    Fancy Dialog Helper — V2 when available,
    V1 fallback with suppressed warning
    ═══════════════════════════════════════════ */
 function _silenceV1Warn(fn) {
-  const orig = foundry.utils?.logCompatibilityWarning;
-  if (orig) foundry.utils.logCompatibilityWarning = () => {};
-  try { return fn(); } finally { if (orig) foundry.utils.logCompatibilityWarning = orig; }
+  // Retain the legacy fallback without monkey-patching Foundry's logger.
+  return fn();
 }
 
 function _openFancyDialog({ title, content, classes = [], buttons = {}, defaultButton = null, render = null, close = null }) {
@@ -257,11 +284,11 @@ export function applyPersonaPanel(CypherTaskbar) {
           root.querySelector('[name="traitName"]')?.focus?.();
           return false;
         }
-        const next = this._getPersonaTraits(actor);
+        const next = this._getPersonaTraits(game.actors.get(actor.id) ?? actor);
         const entry = { name, description, level, imageUrl, imageOpacity, imagePosition, imageFit };
         if (editing) next[index] = entry;
         else next.push(entry);
-        await actor.setFlag(MODULE_ID, 'personaTraits', next.slice(0, 6));
+        if (!await writePersonaFlag(actor, 'personaTraits', next.slice(0, 6))) return false;
         this.render();
         return true;
       };
@@ -321,8 +348,11 @@ export function applyPersonaPanel(CypherTaskbar) {
       });
 
       if (!confirmed) return;
-      traits.splice(index, 1);
-      await actor.setFlag(MODULE_ID, 'personaTraits', traits);
+      const currentActor = game.actors.get(actor.id);
+      const currentTraits = this._getPersonaTraits(currentActor);
+      if (!currentActor?.isOwner || !currentTraits[index]) return;
+      currentTraits.splice(index, 1);
+      if (!await writePersonaFlag(currentActor, 'personaTraits', currentTraits)) return;
       this.render();
     },
 
@@ -481,9 +511,12 @@ export function applyPersonaPanel(CypherTaskbar) {
                 imageFit: String(form.querySelector('[name="imageFit"]')?.value ?? 'cover').trim().slice(0, 20) || 'cover'
               };
               if (!nextArc.title && !nextArc.opening && !nextArc.steps.length && !nextArc.climax && !nextArc.resolution && !nextArc.imageUrl) return;
-              if (editing) arcs[index] = nextArc;
-              else arcs.push(nextArc);
-              await actor.setFlag(MODULE_ID, 'personaArcs', arcs);
+              const latestArcs = this._getPersonaArcs(game.actors.get(actor.id) ?? actor);
+              if (editing) {
+                if (!latestArcs[index]) return;
+                latestArcs[index] = nextArc;
+              } else latestArcs.push(nextArc);
+              if (!await writePersonaFlag(actor, 'personaArcs', latestArcs)) return;
               this.render();
             }
           },
@@ -658,8 +691,11 @@ export function applyPersonaPanel(CypherTaskbar) {
         }).render(true);
       });
       if (!confirmed) return;
-      arcs.splice(index, 1);
-      await actor.setFlag(MODULE_ID, 'personaArcs', arcs);
+      const currentActor = game.actors.get(actor.id);
+      const currentArcs = this._getPersonaArcs(currentActor);
+      if (!currentActor?.isOwner || !currentArcs[index]) return;
+      currentArcs.splice(index, 1);
+      if (!await writePersonaFlag(currentActor, 'personaArcs', currentArcs)) return;
       this.render();
     },
 
@@ -1088,12 +1124,14 @@ export function applyPersonaPanel(CypherTaskbar) {
         button.addEventListener('click', async (e) => {
           e.preventDefault();
           e.stopPropagation();
-          if (!this.actor) return;
+          const actor = game.actors.get(this.actor?.id);
           const index = Number(button.dataset.personaArcFocus);
-          const current = this._getFocusedPersonaArcIndex(this.actor);
-          if (current === index) await this.actor.unsetFlag(MODULE_ID, 'personaFocusedArc');
-          else await this.actor.setFlag(MODULE_ID, 'personaFocusedArc', index);
-          this.render();
+          if (!actor?.isOwner || !Number.isInteger(index) || index < 0 || !this._getPersonaArcs(actor)[index]) return;
+          const current = this._getFocusedPersonaArcIndex(actor);
+          const saved = current === index
+            ? await removePersonaFlag(actor, 'personaFocusedArc')
+            : await writePersonaFlag(actor, 'personaFocusedArc', index);
+          if (saved) this.render();
         });
       });
 
@@ -1116,14 +1154,13 @@ export function applyPersonaPanel(CypherTaskbar) {
       panel.querySelectorAll('[data-persona-arc-step-toggle]').forEach((input) => {
         input.addEventListener('change', async (e) => {
           e.stopPropagation();
-          if (!this.actor) return;
+          const actor = game.actors.get(this.actor?.id);
           const arcIndex = Number(input.dataset.personaArcStepToggle);
           const stepIndex = Number(input.dataset.personaArcStepIndex);
-          const arcs = this._getPersonaArcs(this.actor);
-          if (!arcs[arcIndex]?.steps?.[stepIndex]) return;
+          const arcs = this._getPersonaArcs(actor);
+          if (!actor?.isOwner || !Number.isInteger(arcIndex) || !Number.isInteger(stepIndex) || !arcs[arcIndex]?.steps?.[stepIndex]) return;
           arcs[arcIndex].steps[stepIndex].done = !!input.checked;
-          await this.actor.setFlag(MODULE_ID, 'personaArcs', arcs);
-          this.render();
+          if (await writePersonaFlag(actor, 'personaArcs', arcs)) this.render();
         });
       });
 
@@ -1145,6 +1182,7 @@ export function applyPersonaPanel(CypherTaskbar) {
           box.classList.remove('ct-drop-active');
           if (!this.actor) return;
           const boxKey = box.dataset.extraBox || 'type';
+          if (!['type', 'foci', 'description', 'ancestry'].includes(boxKey)) return;
 
           const dataText = e.dataTransfer.getData('text/plain');
           let droppedUuid = null;
@@ -1180,14 +1218,7 @@ export function applyPersonaPanel(CypherTaskbar) {
           const current = this._getPersonaExtraUuids(this.actor, boxKey);
           const newIdx = current.length;
           current.push(droppedUuid);
-          try {
-            await this.actor.setFlag(MODULE_ID, `personaExtra_${boxKey}`, current);
-            console.log(`[${MODULE_ID}] Saved journal to personaExtra_${boxKey}:`, current);
-          } catch (err) {
-            console.error(`[${MODULE_ID}] Failed to save journal flag:`, err);
-            ui.notifications?.error?.('Failed to save journal. Check console.');
-            return;
-          }
+          if (!await writePersonaFlag(this.actor, `personaExtra_${boxKey}`, current)) return;
 
           // Manually add to DOM
           const list = box.querySelector('.ct-persona-extra-list');
@@ -1213,10 +1244,8 @@ export function applyPersonaPanel(CypherTaskbar) {
                 ev.preventDefault();
                 ev.stopPropagation();
                 if (!this.actor) return;
-                const arr2 = this._getPersonaExtraUuids(this.actor, boxKey);
-                if (newIdx >= 0 && newIdx < arr2.length) {
-                  arr2.splice(newIdx, 1);
-                  await this.actor.setFlag(MODULE_ID, `personaExtra_${boxKey}`, arr2);
+                const arr2 = this._getPersonaExtraUuids(this.actor, boxKey).filter(uuid => uuid !== droppedUuid);
+                if (await writePersonaFlag(this.actor, `personaExtra_${boxKey}`, arr2)) {
                   item.remove();
                   if (list.children.length === 0) {
                     list.innerHTML = '<div class="ct-persona-extra-empty">Drop journals here</div>';
@@ -1244,13 +1273,12 @@ export function applyPersonaPanel(CypherTaskbar) {
           e.preventDefault();
           e.stopPropagation();
           if (!this.actor) return;
-          const idx = Number(btn.dataset.extraRemove);
           const boxKey = btn.dataset.extraBox;
-          const arr = this._getPersonaExtraUuids(this.actor, boxKey);
-          if (idx >= 0 && idx < arr.length) {
-            arr.splice(idx, 1);
-            await this.actor.setFlag(MODULE_ID, `personaExtra_${boxKey}`, arr);
-            const item = btn.closest('.ct-persona-extra-item');
+          const item = btn.closest('.ct-persona-extra-item');
+          const uuid = item?.dataset.extraUuid;
+          if (!['type', 'foci', 'description', 'ancestry'].includes(boxKey) || !uuid) return;
+          const arr = this._getPersonaExtraUuids(this.actor, boxKey).filter(entry => entry !== uuid);
+          if (await writePersonaFlag(this.actor, `personaExtra_${boxKey}`, arr)) {
             const list = item?.closest('.ct-persona-extra-list');
             if (item) item.remove();
             if (list && list.children.length === 0) {
@@ -1354,6 +1382,7 @@ export function applyPersonaPanel(CypherTaskbar) {
         natureSecrets: "fa-mask",
         kinksQuirks: "fa-star"
       };
+      if (!Object.hasOwn(sectionLabels, key)) return;
       const data = this._getPersonaAboutData(actor);
       const current = data[key] || { text: "", imageUrl: "" };
       const label = sectionLabels[key] || key;
@@ -1397,7 +1426,7 @@ export function applyPersonaPanel(CypherTaskbar) {
       const saveCallback = async (root) => {
         const text = String(root.querySelector('[name="aboutText"]')?.value ?? "").trim().slice(0, 4000);
         const imageUrl = String(root.querySelector('[name="aboutImageUrl"]')?.value ?? "").trim().slice(0, 2048);
-        const next = this._getPersonaAboutData(actor);
+        const next = this._getPersonaAboutData(game.actors.get(actor.id) ?? actor);
         next[key] = { text, imageUrl };
         if (key === "appearance") {
           next[key].age = String(root.querySelector('[name="aboutAge"]')?.value ?? "").trim().slice(0, 50);
@@ -1410,8 +1439,9 @@ export function applyPersonaPanel(CypherTaskbar) {
           next[key].eyes = String(root.querySelector('[name="aboutEyes"]')?.value ?? "").trim().slice(0, 50);
           next[key].body = String(root.querySelector('[name="aboutBody"]')?.value ?? "").trim().slice(0, 50);
         }
-        await actor.setFlag(MODULE_ID, 'personaAbout', next);
+        if (!await writePersonaFlag(actor, 'personaAbout', next)) return false;
         this.render();
+        return true;
       };
 
       _openFancyDialog({
@@ -1491,8 +1521,9 @@ export function applyPersonaPanel(CypherTaskbar) {
       const saveCallback = async (root) => {
         const text = String(root.querySelector('[name="backstoryText"]')?.value ?? "").trim().slice(0, 12000);
         const imageUrl = String(root.querySelector('[name="backstoryImageUrl"]')?.value ?? "").trim().slice(0, 2048);
-        await actor.setFlag(MODULE_ID, 'personaBackstory', { text, imageUrl });
+        if (!await writePersonaFlag(actor, 'personaBackstory', { text, imageUrl })) return false;
         this.render();
+        return true;
       };
 
       _openFancyDialog({

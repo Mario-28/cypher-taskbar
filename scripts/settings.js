@@ -5,23 +5,25 @@
 import { MODULE_ID } from "./utils.js";
 import { GlobalTaskbarDefaultsConfig } from "./global-defaults-config.js";
 
+const getTaskbar = () => globalThis.CypherTaskbar?.instance ?? globalThis.cypherTaskbar?.instance;
+
 export function registerSettings() {
   // ── Core Settings ──
   game.settings.register(MODULE_ID, "autoHide", {
     name: "CYPHER_TASKBAR.Settings.AutoHide.Name",
     hint: "CYPHER_TASKBAR.Settings.AutoHide.Hint",
     scope: "client", config: true, type: Boolean, default: true,
-    onChange: () => CypherTaskbar.instance?.updateAutoHide()
+    onChange: () => getTaskbar()?.updateAutoHide()
   });
   game.settings.register(MODULE_ID, "taskbarHeight", {
     name: "CYPHER_TASKBAR.Settings.Height.Name",
     scope: "client", config: true, type: Number,
     range: { min: 50, max: 110, step: 5 }, default: 60,
-    onChange: () => CypherTaskbar.instance?.applySettings()
+    onChange: () => getTaskbar()?.applySettings()
   });
-  game.settings.register(MODULE_ID, "bgColor", { scope: "client", config: true, type: String, default: "#0f0c16", onChange: () => CypherTaskbar.instance?.applySettings() });
-  game.settings.register(MODULE_ID, "bgOpacity", { scope: "client", config: true, type: Number, range: { min: 0.3, max: 1, step: 0.05 }, default: 0.95, onChange: () => CypherTaskbar.instance?.applySettings() });
-  game.settings.register(MODULE_ID, "accentColor", { scope: "client", config: true, type: String, default: "#c8a96e", onChange: () => CypherTaskbar.instance?.applySettings() });
+  game.settings.register(MODULE_ID, "bgColor", { scope: "client", config: true, type: String, default: "#0f0c16", onChange: () => getTaskbar()?.applySettings() });
+  game.settings.register(MODULE_ID, "bgOpacity", { scope: "client", config: true, type: Number, range: { min: 0.3, max: 1, step: 0.05 }, default: 0.95, onChange: () => getTaskbar()?.applySettings() });
+  game.settings.register(MODULE_ID, "accentColor", { scope: "client", config: true, type: String, default: "#c8a96e", onChange: () => getTaskbar()?.applySettings() });
   game.settings.register(MODULE_ID, "loadOnlyForPlayers", {
     name: "CYPHER_TASKBAR.Settings.LoadOnlyForPlayers.Name",
     hint: "CYPHER_TASKBAR.Settings.LoadOnlyForPlayers.Hint",
@@ -30,13 +32,22 @@ export function registerSettings() {
   game.settings.register(MODULE_ID, "actorPreferences", {
     scope: "client", config: false, type: String, default: "{}"
   });
+  game.settings.register(MODULE_ID, "combatBarPreset", {
+    scope: "client", config: false, type: String,
+    choices: {
+      default: "Classic Gold", aurora: "Aurora Glass", ember: "Ember Edge",
+      nebula: "Nebula Pulse", verdant: "Verdant Circuit", monochrome: "Mono Carbon"
+    },
+    default: "default",
+    onChange: () => getTaskbar()?._updateCombatBar()
+  });
 
   // ── Gallery Tabs Settings ──
   game.settings.register(MODULE_ID, "galleryTabsEnabled", {
     name: "CYPHER_TASKBAR.Settings.GalleryTabsEnabled.Name",
     hint: "CYPHER_TASKBAR.Settings.GalleryTabsEnabled.Hint",
     scope: "client", config: false, type: Boolean, default: true,
-    onChange: () => CypherTaskbar.instance?.render()
+    onChange: () => getTaskbar()?.render()
   });
   game.settings.register(MODULE_ID, "galleryTabsOffsetX", {
     name: "CYPHER_TASKBAR.Settings.GalleryTabsOffsetX.Name",
@@ -242,7 +253,7 @@ export function registerSettings() {
     onChange: () => { /* live update */ }
   });
 
-  console.log(`${MODULE_ID} | Settings registered`);
+  if (CONFIG.debug?.cypherTaskbar) console.log(`${MODULE_ID} | Settings registered`);
 
   // ── Mini Menu Settings ──
   game.settings.register(MODULE_ID, "miniMenuDisplayMode", {
@@ -310,7 +321,7 @@ export function registerSettings() {
     hint: "Raise the Foundry sidebar so it sits above the taskbar instead of behind it.",
     scope: "client", config: true, type: Boolean, default: true,
     onChange: () => {
-      const tb = CypherTaskbar.instance;
+      const tb = getTaskbar();
       if (tb) tb._adjustCanvasPadding(tb._gs("locked") || !tb._gs("autoHide"));
     }
   });
