@@ -2,7 +2,7 @@
   "id": "cypher-taskbar",
   "title": "Cypher Taskbar",
   "description": "Adds a sleek, automated, and highly customizable bar to the Foundry VTT HUD for tracking Character Pools, Experience, and more in the Cypher System. Supports automated character sheet integration, pop-out widgets, and GM tools for approval workflows.",
-  "version": "5.1.1",
+  "version": "5.0.1",
   "type": "module",
   "compatibility": {
     "minimum": "14",
@@ -41,7 +41,7 @@
     ]
   },
   "manifest": "https://github.com/Mario-28/cypher-taskbar/releases/latest/download/module.json",
-  "download": "https://github.com/Mario-28/cypher-taskbar/releases/download/v5.1.1/cypher-taskbar-5.1.1.zip",
+  "download": "https://github.com/Mario-28/cypher-taskbar/releases/download/v5.0.1/cypher-taskbar-5.0.1.zip",
   "readme": "https://github.com/Mario-28/cypher-taskbar/blob/main/README.md",
   "changelog": "https://github.com/Mario-28/cypher-taskbar/blob/main/CHANGELOG.md",
   "bugs": "https://github.com/Mario-28/cypher-taskbar/issues",

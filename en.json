@@ -1,0 +1,201 @@
+{
+  "CYPHER_TASKBAR": {
+    "Name": "Cypher Taskbar",
+    "Settings": {
+      "AutoHide": {
+        "Name": "Auto Hide",
+        "Hint": "Automatically hide the taskbar when not hovered."
+      },
+      "SelectedActor": {
+        "Name": "Selected Character",
+        "Hint": "Choose which owned character the taskbar displays."
+      },
+      "Height": {
+        "Name": "Taskbar Height"
+      },
+      "PortraitAnimation": {
+        "Name": "Portrait Animation",
+        "Hint": "Choose a hover animation for the portrait."
+      },
+      "LoadOnlyForPlayers": {
+        "Name": "Load Only For Players",
+        "Hint": "When enabled, the taskbar will not load for the GM. Only players will see it. Requires a page refresh to take effect."
+      },
+      "GlobalDefaultsActive": {
+        "Name": "Use Global Defaults",
+        "Hint": "When enabled, all actors use the GM-imported global defaults unless they override a specific setting."
+      },
+      "GlobalDefaultsMenu": {
+        "Name": "Global Taskbar Defaults",
+        "Label": "Configure Defaults"
+      }
+    },
+    "NoActor": "No Character",
+    "NoCharacterAssigned": "No character assigned.",
+    "Panels": {
+      "Persona": "Persona",
+      "Skills": "Skills",
+      "Abilities": "Abilities",
+      "Spells": "Spells",
+      "Combat": "Combat",
+      "Equipment": "Equipment",
+      "Close": "Close",
+      "Settings": "Settings",
+      "Categories": "Categories"
+    },
+    "Persona": {
+      "Personality": "Personality",
+      "Arc": "Arc",
+      "AddTrait": "Add personality trait",
+      "MaxTraits": "Maximum of 6 traits reached",
+      "TraitNameRequired": "Trait name is required.",
+      "DeleteTrait": "Delete Personality Trait",
+      "AddArc": "Add Arc",
+      "EditArc": "Edit ARC",
+      "CreateArc": "Create New ARC",
+      "DeleteArc": "Delete ARC",
+      "FocusedArc": "Focused ARC",
+      "NoFocusedArc": "None selected",
+      "OpenDetails": "Open details",
+      "StoryArcEditor": "Story Arc Editor",
+      "Opening": "Opening",
+      "Steps": "Steps",
+      "Climax": "Climax",
+      "Resolution": "Resolution",
+      "AddStep": "Add step",
+      "RemoveStep": "Remove step",
+      "XPPerStep": "2 XP / step",
+      "OpeningXP": "0 XP",
+      "ClimaxXP": "{xp} XP",
+      "ResolutionXP": "1 XP"
+    },
+    "Combat": {
+      "EnterCombat": "Enter Combat",
+      "RollInitiative": "Roll Initiative",
+      "RerollInitiative": "Reroll Initiative",
+      "InCombat": "In Combat",
+      "NotInCombat": "Not In Combat",
+      "Initiative": "Initiative",
+      "StartCombatTitle": "Start Combat",
+      "StartCombatConfirm": "Are you sure you want to start a combat?",
+      "CombatRequestSent": "Combat request sent to the GM.",
+      "CombatRequestDenied": "Combat request denied.",
+      "JoinedCombat": "{name} joined combat.",
+      "AlreadyInCombat": "{name} is already in combat.",
+      "NoActiveCombat": "No active combat encounter.",
+      "NotInCombatWarn": "{name} is not in combat.",
+      "InitiativeRerollTitle": "Initiative Reroll",
+      "InitiativeRerollConfirm": "Are you sure - ask GM for permission to roll again.",
+      "PermissionDeclined": "Declined",
+      "PermissionGranted": "Permission Granted",
+      "CombatPlaceholder": {
+        "Active": "Combat Active",
+        "Ready": "Ready",
+        "Note": "Initiative rolled - awaiting your turn"
+      }
+    },
+    "Skills": {
+      "NoSkills": "No skills found.",
+      "Uncategorized": "Uncategorized",
+      "DropHere": "Drop skills here",
+      "Roll": "Roll {name}",
+      "Specialized": "Specialized",
+      "Trained": "Trained",
+      "Practiced": "Practiced",
+      "Inability": "Inability"
+    },
+    "Abilities": {
+      "NoAbilities": "No abilities found.",
+      "Use": "Use",
+      "DropHere": "Drop abilities here"
+    },
+    "Spells": {
+      "NoSpells": "No spells found. Add abilities/skills to a category named Spell, Spells or Magic.",
+      "Ready": "READY",
+      "Memorize": "Memorize spell",
+      "RemoveReady": "Remove from Ready",
+      "Cast": "Cast {name}",
+      "DropHere": "Drop spells here",
+      "MemorizedEmpty": "Memorized spells appear here."
+    },
+    "Equipment": {
+      "NoEquipment": "No equipment found."
+    },
+    "Notifications": {
+      "CypherAPIUnavailable": "Cypher System API not available.",
+      "RollDialogUnavailable": "All-in-one roll dialog is not available.",
+      "RollFailed": "Could not open {stat} roll dialog.",
+      "RequiresCypherSystem": "Requires the Cypher System."
+    },
+    "PortraitSettings": {
+      "Title": "Portrait Space Settings",
+      "Layout": "Layout",
+      "UpperPanel": "Upper Name Panel",
+      "XP": "XP Circle",
+      "Titles": "Attribute Titles",
+      "Shadow": "Shadow"
+    },
+    "TaskbarSettings": {
+      "Title": "Taskbar Settings"
+    },
+    "GlobalDefaults": {
+      "Activate": "Activate Global Defaults",
+      "ActivateHint": "When checked, all actors use these imported defaults unless they override a specific setting.",
+      "Import": "Import Settings",
+      "ChooseFile": "Choose File…",
+      "ImportHint": "Select a Cypher Taskbar settings JSON file exported from any actor. Files are limited to 1 MB.",
+      "ApplyToAll": "Apply to All Actors",
+      "ApplyToAllHint": "When checked, imported settings will be applied to every actor's taskbar after confirmation.",
+      "Current": "Current Defaults",
+      "SaveApply": "Save & Apply to All Actors",
+      "Clear": "Clear Global Defaults",
+      "Empty": "No global defaults loaded yet.",
+      "HowItWorks": "Imported settings become the default for all actors. Actor-specific changes override only the changed setting."
+    },
+    "Review": {
+      "ApprovePurchase": "Approve Purchase",
+      "RemoveEquipment": "Remove Equipment",
+      "ExpendEquipment": "Expend Equipment",
+      "ExpendValuable": "Expend Valuable",
+      "DesignatedReviewer": "Another active GM was designated to review this request.",
+      "FallbackReviewer": "The designated GM is unavailable; the lowest-ID active GM should review this request.",
+      "Stale": "This request is stale. No changes were made.",
+      "UncertainFailure": "The request did not finish cleanly. Check the actor state before retrying; this card remains locked to prevent a duplicate mutation."
+    },
+    "Cash": {
+      "NoGM": "No GM is currently online to approve this purchase.",
+      "RequestSent": "Purchase sent to the GM for review. No cash has been deducted yet.",
+      "RequestFailed": "The purchase request could not be created. No cash was deducted.",
+      "InsufficientFunds": "The character no longer has enough cash for this purchase."
+    },
+    "Tasks": {
+      "Delete": "Delete Task",
+      "DeleteGM": "Delete GM Task",
+      "DeleteConfirm": "Delete \"{name}\"?",
+      "Changed": "This task has already been removed or changed. Refresh the task list.",
+      "SaveFailed": "The task could not be saved. Your changes are still in the editor.",
+      "DeleteFailed": "The task could not be deleted. Refresh the list and try again."
+    },
+    "Mini": {
+      "Empty": "Empty — drag items here",
+      "Full": "This container is full (100 entries). Remove an entry before adding another.",
+      "Duplicate": "Already in this container.",
+      "ActorChanged": "The selected character changed; the dropped entry was not saved.",
+      "SaveFailed": "The container could not be saved. Your previous entries were preserved.",
+      "OverrideFailed": "The display override could not be saved."
+    },
+    "Errors": {
+      "Permission": "You do not have permission to change this character.",
+      "StaleDocument": "The character or item changed before the action completed. Refresh and try again.",
+      "SaveFailed": "The change could not be saved. Refresh the character and try again."
+    },
+    "General": {
+      "Save": "Save",
+      "Cancel": "Cancel",
+      "Delete": "Delete",
+      "Close": "Close",
+      "Add": "Add",
+      "Edit": "Edit"
+    }
+  }
+}

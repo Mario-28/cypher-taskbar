@@ -1,54 +1,5 @@
 # Changelog
 
-## 5.1.1 — 2026-11-15
-
-### END TURN availability repair
-
-- Fixed player END TURN doing nothing when **Load Only For Players** disabled the GM client's visual taskbar. The GM-only early return previously occurred before the socket listener was registered, leaving player instructions unhandled.
-- Registered the combat-turn socket independently of taskbar rendering so a headless GM client can validate and advance the encounter while its taskbar remains disabled.
-- Removed the duplicate END TURN branch from the general UI socket handler; only the dedicated listener processes these instructions.
-- Cached the headless GM handler so replay history survives between socket messages. Ownership, current-combatant, stale-turn, designated-GM, and duplicate-click checks are unchanged.
-- Added regression coverage for the END button's dispatch, headless-GM socket advancement, next-combatant updates, stale-turn rejection, replay protection, and registration order before the GM-only rendering return.
-
-### Verification boundary
-
-All 47 automated regression tests and ESLint checks pass. No live Foundry VTT world was available; actual player-to-GM socket delivery and visible tracker advancement still require live verification.
-
-## 5.1.0 — 2026-11-15
-
-### Combat bar appearance presets
-
-- Added **Taskbar Settings → Combat Bar** with six presets: Classic Gold, Aurora Glass, Ember Edge, Nebula Pulse, Verdant Circuit, and Mono Carbon.
-- Classic Gold preserves the existing appearance. The five additional presets provide distinct modern action/resource icons, icon colors, tile and bar backgrounds, borders, separators, and resource pips.
-- Presets are fixed allowlisted presentation definitions; they do not accept arbitrary icon classes or CSS and do not change combat rules, costs, permissions, movement, targeting, or END TURN behavior.
-- The selected preset persists per character through `flags.cypher-taskbar.taskbarPrefs.combatBarPreset`, participates in settings export/import, and falls back safely to Classic Gold when invalid.
-- Appearance changes rebuild the combat bar immediately through its render key without advancing or otherwise changing combat state.
-- Added selected/unselected text, `aria-pressed`, visible keyboard focus, reduced-motion support, narrow-window card layout, duplicate-click protection, and failed-save rollback with a player-safe error notification.
-- Preserved depleted, disabled, movement-dimmed, spell-dimmed, and ability-warning functional states in every theme.
-
-### END TURN tracker verification
-
-- Retained automatic END TURN through Foundry's `Combat#nextTurn()` with no GM approval dialog.
-- Added explicit mocked verification that a valid GM action advances the current tracker combatant exactly once; existing player ownership, stale-turn, replay, and duplicate-click checks remain unchanged.
-
-### Verification boundary
-
-All 44 automated regression tests, ESLint, script syntax checks, and JSON checks pass. No live Foundry VTT world was available; actual preset rendering, settings persistence, multiplayer socket delivery, and combat-tracker advancement still require live verification.
-
-## 5.0.2 — 2026-11-15
-
-### Automatic END TURN
-
-- Removed the GM approval dialog from the combat bar's END TURN action.
-- GM users advance the encounter directly. Player clicks send an automatic instruction to the designated active GM client because players normally cannot update the Combat document themselves.
-- The GM handler revalidates the current encounter, current combatant, and requester's OWNER permission before calling `nextTurn()`; stale, unowned, and replayed instructions do not advance the turn.
-- Only the designated active GM processes the instruction, with deterministic lowest-ID active-GM fallback. Immediate duplicate player clicks are suppressed.
-- Legacy `gmEndTurnRequest` socket messages use the same automatic behavior during mixed-version transitions.
-
-### Verification boundary
-
-All 40 automated lint/test checks pass, including no-modal player/GM end-turn behavior, ownership, stale-turn, replay, and duplicate-click coverage. No live Foundry VTT world was available; actual multiplayer socket delivery and turn advancement still require live verification.
-
 ## 5.0.1 — 2026-11-15
 
 ### Combat movement repair

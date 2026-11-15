@@ -13,7 +13,7 @@ Cypher Taskbar adds a configurable character HUD for the Cypher System in Foundr
 1. In Foundry, open **Add-on Modules** → **Install Module**.
 2. Use the release manifest:
    `https://github.com/Mario-28/cypher-taskbar/releases/latest/download/module.json`
-3. Alternatively, unzip `cypher-taskbar-5.1.1.zip` into Foundry's `Data/modules` directory. The archive must produce `Data/modules/cypher-taskbar/module.json`.
+3. Alternatively, unzip `cypher-taskbar-5.0.1.zip` into Foundry's `Data/modules` directory. The archive must produce `Data/modules/cypher-taskbar/module.json`.
 4. Enable **Cypher Taskbar** in a Cypher System world and refresh the clients.
 
 Back up the world before upgrading. See [MIGRATION.md](MIGRATION.md) for persistence and upgrade notes.
@@ -28,22 +28,7 @@ New chat review cards carry request metadata in `flags.cypher-taskbar`; their vi
 
 A request's designated GM should resolve its review card. If that GM is unavailable, the lowest-ID active GM is the deterministic fallback. This coordination reduces duplicate resolution, but it is not an atomic cross-client transaction. Legacy unflagged cards have weaker coordination than current cards.
 
-Raw Foundry socket payloads do not authenticate their sender. Socket messages are treated as requests or notifications, not authority. Request IDs provide replay/idempotency checks, while local GM confirmation and current document state authorize reviewed shared-world mutations. Gallery sharing accepts bounded, suitably shaped share notifications for local lightboxes; GM chat creation still requires confirmation.
-
-The combat bar's **END TURN** is intentionally automatic rather than a GM-reviewed action. A GM advances directly; a player instruction is executed only by the designated active GM after checking that the claimed requester still owns the current combatant's PC. Stale turns, unowned actors, duplicate request IDs, and immediate repeated clicks do not advance additional turns. The GM socket listener remains active when **Load Only For Players** disables the GM's visual taskbar.
-
-## Combat bar appearance
-
-Open **Taskbar Settings → Combat Bar** to choose one of six complete appearance presets:
-
-- **Classic Gold** — the original dark-glass and gold appearance.
-- **Aurora Glass** — cyan glass, crisp lines, and luminous blue accents.
-- **Ember Edge** — sharp graphite tiles with orange and crimson energy.
-- **Nebula Pulse** — violet depth, orchid highlights, and cosmic iconography.
-- **Verdant Circuit** — emerald glass, botanical accents, and clean geometry.
-- **Mono Carbon** — minimal carbon panels with silver and white details.
-
-Each preset changes the action and resource icons, icon colors, tile and bar backgrounds, borders, separators, and resource pips. Combat costs, permissions, movement, targeting, and END TURN behavior are unchanged. The selection is stored per character in `flags.cypher-taskbar.taskbarPrefs.combatBarPreset`, is included in settings exports, and rebuilds the visible bar immediately. Invalid or unavailable values fall back to Classic Gold. Preset cards support keyboard use, visible focus, text selection state, `aria-pressed`, in-flight save protection, failed-save rollback, and reduced motion.
+Raw Foundry socket payloads do not authenticate their sender. Socket messages are treated as requests or notifications, not authority. Request IDs provide replay/idempotency checks, while local GM confirmation and current document state authorize shared-world mutations. Gallery sharing accepts bounded, suitably shaped share notifications for local lightboxes; GM chat creation still requires confirmation.
 
 ## Data and companion compatibility
 
@@ -72,6 +57,6 @@ Install development dependencies with `npm install`, then run:
 npm run check
 ```
 
-The suite covers the compatibility adapter, recovery and roll rules, Effort, GM request replay checks, preference migration and permissions, settings normalization, sanitization, gallery payload bounds, equipment expenditure, mini-container validation, reroll behavior, current-state document checks, MOVE-mode coordinate conversion/token dragging, automatic END TURN advancement, and combat-bar preset rendering/persistence/rollback.
+The suite covers the compatibility adapter, recovery and roll rules, Effort, GM request replay checks, preference migration and permissions, settings normalization, sanitization, gallery payload bounds, equipment expenditure, mini-container validation, reroll behavior, current-state document checks, and MOVE-mode coordinate conversion/token dragging.
 
 Static and mocked regression verification is not a substitute for a live Foundry world. See [VERIFICATION.md](VERIFICATION.md) for the exact release verification boundary and the remaining live test checklist.

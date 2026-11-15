@@ -1,22 +1,8 @@
-# Upgrading to 5.x
-
-## 5.1.1 patch
-
-This patch repairs END TURN processing when **Load Only For Players** is enabled. The GM client now registers the combat-turn socket even though its visual taskbar is disabled. Refresh all player and GM clients after upgrading. No data-format or settings migration is required.
-
-## 5.1.0 feature release
-
-This release adds six combat-bar appearance presets and a dedicated Combat Bar settings tab. It introduces no data-format migration. The new optional `combatBarPreset` leaf is stored beneath the existing `flags.cypher-taskbar.taskbarPrefs` object; missing or invalid values automatically use Classic Gold. Existing actor preferences are preserved, and the new leaf is included in taskbar settings exports.
-
-No combat state is changed when selecting an appearance. The 5.0.0 upgrade notes below still apply.
-
-## 5.0.2 patch
-
-This patch makes END TURN automatic without a GM approval dialog. It introduces no data-format or settings migration; the 5.0.0 upgrade notes below still apply.
+# Upgrading to 5.0.x
 
 ## 5.0.1 patch
 
-This patch repairs MOVE-mode pointer acquisition and coordinate conversion. It introduces no data-format or settings migration.
+This patch repairs MOVE-mode pointer acquisition and coordinate conversion. It introduces no data-format or settings migration; the 5.0.0 upgrade notes below still apply.
 
 ## Before upgrading
 
